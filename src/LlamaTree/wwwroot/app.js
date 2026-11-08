@@ -38,6 +38,7 @@ const PATHS = {
   list: 'M5.8 4h7.7M5.8 8h7.7M5.8 12h7.7M2.6 4h.1M2.6 8h.1M2.6 12h.1',
   plug: 'M6 1.5v3M10 1.5v3M4 4.5h8v2.5a4 4 0 0 1-8 0zM8 11v3.5',   // a plugin's tab   // the Project view: a list of the project's worktrees
   shield: 'M8 1.5l5.5 2v4.2c0 3.2-2.3 5.6-5.5 6.8-3.2-1.2-5.5-3.6-5.5-6.8V3.5z',   // the Permissions view
+  bag: 'M3 5.5h10l-.8 8.5H3.8zM5.5 7V4a2.5 2.5 0 0 1 5 0v3',   // Get plugins and Get themes
   link: 'M6.8 9.2l2.4-2.4M7.3 4.7l1-1a2.6 2.6 0 0 1 3.7 3.7l-1 1M8.7 11.3l-1 1a2.6 2.6 0 0 1-3.7-3.7l1-1',   // a session that may message others
   server: 'M2.5 2.5h11v4.5h-11zM2.5 9h11v4.5h-11zM5 4.75h.01M5 11.25h.01',   // a server: a session that runs on one
   mail: 'M2 4h12v8.5H2zM2 4.5l6 4.5 6-4.5',   // unread messages
@@ -61,7 +62,7 @@ const PATHS = {
   more: 'M3.5 8h.01M8 8h.01M12.5 8h.01',
   collapse: 'M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4',
   sideBySide: 'M2 3h12v10H2zM8 3v10',
-  panel: 'M2 3h12v10H2zM10 3v10',   // the side panel, with the Git tabs off
+  panel: 'M2 3h12v10H2zM10 3v10M10 6.5h4',   // the side panel, a small panel over a big one: its title bar button and Show/Hide the side panel
   inline: 'M2 3h12v10H2zM2 8h12',
   whitespace: 'M3 12h10M3 9v3M13 9v3M6 4h4M8 4v5',
   openFile: 'M9 2H4v12h8V5zM9 2v3h3',
@@ -76,6 +77,7 @@ const PATHS = {
   pr: 'M4 4.5a1.5 1.5 0 1 0 0-.01M4 6v4.5M4 13a1.5 1.5 0 1 0 0-.01M12 13a1.5 1.5 0 1 0 0-.01M12 11.5V6.5A2 2 0 0 0 10 4.5H7M8.5 3 7 4.5 8.5 6',
   checkOn: 'M2.5 2.5h11v11h-11zM5 8.2l2 2 4-4.4',
   checkOff: 'M2.5 2.5h11v11h-11z',
+  pin: 'M5.5 2h5M6.5 2v4.2L4.5 9h7l-2-2.8V2M8 9v5',   // a pushpin: a project tab kept on the row
   chat: 'M2.5 3h11v7.5H7.5l-3 2.5v-2.5h-2z',
   bulb: 'M6 12.5h4M6.5 14.5h3M8 1.5a4.5 4.5 0 0 0-2.6 8.2c.4.3.6.7.6 1.2v.6h4v-.6c0-.5.2-.9.6-1.2A4.5 4.5 0 0 0 8 1.5z',
   gift: 'M2.5 6h11v2.5h-11zM3.5 8.5h9v6h-9zM8 6v8.5M8 6C6.5 3 4 3.5 4.5 5c.3.8 2 1 3.5 1zM8 6c1.5-3 4-2.5 3.5-1-.3.8-2 1-3.5 1z',
@@ -117,10 +119,10 @@ function relTime(iso) {
   return d.toLocaleDateString();
 }
 
-function toast(message, isError = false) {
+function toast(message, isError = false, ms = isError ? 7000 : 3500) {
   const el = h('div', { class: 'toast' + (isError ? ' error' : '') }, message);
   $('#toastHost').append(el);
-  setTimeout(() => el.remove(), isError ? 7000 : 3500);
+  setTimeout(() => el.remove(), ms);
 }
 
 // ------------------------------------------------------------------ host bridge
@@ -139,8 +141,6 @@ function photinoBridge() {
     const data = JSON.parse(text);
     for (const fn of listeners) fn({ data });
   });
-  // A file dropped on the window would otherwise replace the page; the page's own drop targets still get theirs.
-  for (const type of ['dragover', 'drop']) window.addEventListener(type, (e) => e.preventDefault());
   return {
     postMessage: (m) => window.external.sendMessage(JSON.stringify({ ...m, bridgeToken: token })),
     addEventListener: (type, fn) => { if (type === 'message') listeners.push(fn); },
@@ -186,10 +186,34 @@ const post = (msg) => host.postMessage(msg);
 function request(type, payload = {}) {
   const reqId = ++reqSeq;
   return new Promise((resolve, reject) => {
-    pending.set(reqId, { resolve, reject });
+    pending.set(reqId, { resolve, reject, session: payload.id });
     post({ type, reqId, ...payload });
   });
 }
+
+/** As request, with files sent along: WebView2 hands the host their paths (see MainForm's DroppedFiles). */
+function requestWithFiles(type, files) {
+  const reqId = ++reqSeq;
+  return new Promise((resolve, reject) => {
+    pending.set(reqId, { resolve, reject });
+    try {
+      host.postMessageWithAdditionalObjects({ type, reqId }, files);
+    } catch (err) {
+      pending.delete(reqId);
+      reject(err);
+    }
+  });
+}
+
+// A file dropped anywhere but a terminal (see dropOnTerminal) would otherwise replace the page: refused. Text dragged
+// into a text box still goes in as usual.
+const refuseDrop = (e) => e.dataTransfer?.types.includes('Files') || !e.target.closest?.('input, textarea, [contenteditable]');
+window.addEventListener('dragover', (e) => {
+  if (e.defaultPrevented || !refuseDrop(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'none';
+});
+window.addEventListener('drop', (e) => { if (!e.defaultPrevented && refuseDrop(e)) e.preventDefault(); });
 
 /** The clipboard's text. On macOS and Linux the app reads it: WebKit asks first (macOS) or refuses (Linux) when a page does. */
 function readClipboardText() {
@@ -210,7 +234,10 @@ host.addEventListener('message', (e) => {
       const p = pending.get(m.reqId);
       if (!p) return;
       pending.delete(m.reqId);
-      m.ok ? p.resolve(m.result) : p.reject(new Error(m.error));
+      if (m.ok) { p.resolve(m.result); break; }
+      // Refused until the person trusts the repository's own settings: the question shows again above Git Changes.
+      if (m.code === 'needsTrust') askRepoTrust(state.byId.get(p.session));
+      p.reject(Object.assign(new Error(m.error), { code: m.code }));
       break;
     }
     case 'sessions': state.agents = m.agents || state.agents; setServers(m.servers); syncSessions(m.sessions, m.projects || []); break;
@@ -221,8 +248,10 @@ host.addEventListener('message', (e) => {
     case 'host.failed': onHostFailed(m); break;
     case 'host.reconnecting': onReconnecting(m); break;
     case 'machine': onMachine(m); break;
+    case 'servers.tooMany': toast(`${m.server} has more than ${m.shown} sessions (${m.listed}). Only ${m.shown} of them are shown here.`, true); break;
     case 'files.opened': toast(`Opened a read-only copy of ${m.name} from ${m.server}. Changes to it aren’t saved on the server: edit the file there, through the session.`); break;
     case 'files.browse': browseServerFolder(m.path, m.select, m.server); break;
+    case 'fileProblem': toast(m.text, true, 20000); break;   // a damaged file of the app's, set aside (JsonFile)
     case 'exited': onExited(m.id, m.code); break;
     case 'git.status': onGitStatus(m); break;
     case 'panels': onPanels(m); break;
@@ -278,6 +307,10 @@ const state = {
   navLayout: ['hybrid', 'left'].includes(store.get('navLayout')) ? store.get('navLayout') : 'top',
   navWidth: store.get('navWidth', 230),
   navBranches: store.get('navBranches', true),   // each session's branch beneath its name, down the left
+  // In the Top layout, projects as tabs (a click shows only that project) rather than as filters to tick.
+  projectTabs: store.get('projectTabs', false),
+  // Projects (and Unknown) taken off the tab row into its ▾ list. Unpinned rather than pinned, so new projects start pinned.
+  unpinnedProjects: new Set(store.get('unpinnedProjects', [])),
 };
 
 // ------------------------------------------------------------------ projects: which sessions are visible
@@ -311,8 +344,20 @@ function autoProjectColor(id) {
   return PROJECT_COLORS[hash % PROJECT_COLORS.length];
 }
 
+/**
+ * A colour from the host as it may go into a style: a #rgb, #rgba, #rrggbb or #rrggbbaa, or null for anything else. A
+ * server's host (in a --remote window) sends what it likes, and these go into style text, where more would be more CSS.
+ */
+const cssColor = (c) => typeof c === 'string' && /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(c) ? c : null;
+
 /** The project's chosen colour (the host only ever sends #rrggbb), or its automatic one. */
-const projectColor = (p) => p.color || autoProjectColor(p.id);
+const projectColor = (p) => cssColor(p.color) || autoProjectColor(p.id);
+
+/** An agent's colours (AgentProfile.Color) as a style, or null when it has none (or they aren't colours). */
+const agentStyle = (a) => {
+  const dark = cssColor(a?.color?.dark), light = cssColor(a?.color?.light);
+  return dark && light ? `--agent-dark: ${dark}; --agent-light: ${light}` : null;
+};
 
 /** A coloured tag naming the session's project; sessions in Unknown have none. */
 function projectTag(s) {
@@ -349,8 +394,9 @@ function applyProjectFilter(instant = false) {
   $('#empty').hidden = shown.length > 0;
   $('#empty .empty-title').textContent = anySessions ? 'No sessions in the selected projects' : 'No sessions yet';
   $('#empty .empty-sub').textContent = anySessions
-    ? `Tick a project ${state.navLayout === 'top' ? 'above' : 'on the left'} (Unknown holds sessions with no project), or choose All.`
+    ? `${tabbedProjects() ? 'Pick' : 'Tick'} a project ${state.navLayout === 'top' ? 'above' : 'on the left'} (Unknown holds sessions with no project), or choose All.`
     : 'Add a session for each worktree you want Claude to work in.';
+  renderWelcome(!anySessions);
   layout(instant);
   for (const s of state.sessions) renderTileHeader(s);
   renderProjectBar();
@@ -392,16 +438,151 @@ function hideAllProjects() {
  */
 function renderProjectBar() {
   const bar = $('#projectTabs');   // the grid button sits before it in the same row and is left alone
+  $('#projectBar').classList.toggle('tabbed', tabbedProjects());   // tabs sit on the row's bottom edge (see app.css)
   if (state.navLayout !== 'top') { bar.replaceChildren(); renderNav(); return; }   // the projects are on the left
   const groups = projectGroups();
   fill(bar,
     h('span', { class: 'project-bar-label' }, 'Projects'),
-    groups.map((p) => projectTab(p)),
-    projectAllButtons(groups),
+    tabbedProjects() ? projectTabRow(groups) : [...groups.map((p) => projectTab(p)), ...projectAllButtons(groups)],
     projectAddButton(),
   );
   syncStatus(bar);
 }
+
+// ------------------------------------------------------------------ projects as tabs (Top layout)
+
+/** Projects shown as tabs rather than filters: an option of the Top layout only, and only once there are projects. */
+const tabbedProjects = () => state.projectTabs && state.navLayout === 'top' && state.projects.length > 0;
+const isPinned = (id) => !state.unpinnedProjects.has(id);
+const groupMembers = (id) => state.sessions.filter((s) => groupOf(s) === id);
+const allProjectsShown = () => allGroups().every((g) => !state.hiddenProjects.has(g));
+/** The one project shown on its own, or null when several (or none, or all) are. */
+function onlyShownProject() {
+  const shown = allGroups().filter((g) => !state.hiddenProjects.has(g));
+  return shown.length === 1 ? shown[0] : null;
+}
+
+/**
+ * The project row as tabs: All, then the pinned projects, then any unpinned project that's being shown (a preview tab
+ * with its pin showing, as Visual Studio's), then a ▾ listing the projects that aren't pinned.
+ */
+function projectTabRow(groups) {
+  const unpinned = groups.filter((g) => !isPinned(g.id));
+  return [
+    h('button', { class: 'project-all' + (allProjectsShown() ? ' active' : ''), title: 'Show every project, Unknown included', onclick: showAllProjects }, 'All'),
+    ...groups.filter((g) => isPinned(g.id) || (!state.hiddenProjects.has(g.id) && !allProjectsShown())).map((g) => projectTabbed(g)),
+    unpinned.length ? projectMoreButton(unpinned) : null,
+  ];
+}
+
+/**
+ * A project as a tab: a click shows only it (again, all of them), Ctrl+click shows or hides it alongside the others.
+ * It's active while shown, unless every project is (then All is). Its pin takes it off the row, or puts it back.
+ */
+function projectTabbed(p) {
+  const members = groupMembers(p.id);
+  const waiting = members.filter(waitingForYou).length;
+  const active = !state.hiddenProjects.has(p.id) && !allProjectsShown();
+  const only = onlyShownProject() === p.id;
+  const pinned = isPinned(p.id);
+  const what = p.unknown ? 'sessions with no project' : p.name;
+  return h('div', {
+    class: 'project-tab tabbed' + (active ? ' shown' : '') + (p.unknown ? ' unknown' : '') + (pinned ? '' : ' preview'),
+    style: p.unknown ? null : `--proj:${projectColor(p)}`,
+    'data-id': p.id,
+    oncontextmenu: (e) => { e.preventDefault(); projectMenu(p, e.clientX, e.clientY); },
+  },
+  h('button', {
+    class: 'project-name',
+    title: `${only ? 'Back to every project' : `Show only ${what}`} · Ctrl+click to ${active ? 'hide it, keeping' : 'show it alongside'} the others\n` +
+      `${members.length} session${members.length === 1 ? '' : 's'} · right-click for options`,
+    onclick: (e) => (e.ctrlKey ? toggleProject(p.id) : only ? showAllProjects() : showOnlyProject(p.id)),
+  }, h('span', { class: 'project-label' }, p.name),
+  projectDot(members),
+  waiting ? h('span', { class: 'badge', title: `${waiting} session${waiting === 1 ? '' : 's'} waiting for you` }, String(waiting)) : null),
+  h('button', {
+    class: 'project-pin' + (pinned ? '' : ' unpinned'),
+    title: pinned ? 'Unpin: move it to the ▾ list after the tabs' : 'Pin: keep this tab on the row',
+    onclick: () => setPinned(p.id, !pinned),
+  }, iconEl('pin')));
+}
+
+/** The ▾ after the tabs: the projects that aren't pinned, with a dot and a count if any of their sessions want you. */
+function projectMoreButton(unpinned) {
+  return h('button', {
+    class: 'project-more', 'aria-haspopup': 'menu',
+    title: `${unpinned.length} more project${unpinned.length === 1 ? '' : 's'}, not pinned`,
+    onclick: (e) => { const r = e.currentTarget.getBoundingClientRect(); projectMoreMenu(r.left, r.bottom + 2); },
+  }, iconEl('chevD'), projectMoreIndicators(unpinned));
+}
+
+function projectMoreIndicators(unpinned) {
+  const members = unpinned.flatMap((g) => groupMembers(g.id));
+  const waiting = members.filter(waitingForYou).length;
+  return [projectDot(members), waiting ? h('span', { class: 'badge', title: `${waiting} session${waiting === 1 ? '' : 's'} waiting for you` }, String(waiting)) : null];
+}
+
+/** Refreshes the ▾'s dot and count in place, as updateProjectIndicators does a tab's. */
+function updateProjectMoreIndicators() {
+  const more = document.querySelector('#projectTabs .project-more');
+  if (!more) return;
+  const want = projectMoreIndicators(projectGroups().filter((g) => !isPinned(g.id)));
+  // A dot in the same state stays, so its animation isn't restarted on every update.
+  const dot = more.querySelector('.dot');
+  if (!want[0]) dot?.remove();
+  else if (dot?.className !== want[0].className) { dot?.remove(); more.append(want[0]); syncStatus(more); }
+  more.querySelector('.badge')?.remove();
+  if (want[1]) more.append(want[1]);
+}
+
+function projectMoreMenu(x, y) {
+  const groups = projectGroups(), only = onlyShownProject();
+  const onlyGroup = only && !isPinned(only) ? groups.find((g) => g.id === only) : null;
+  showMenu(x, y, [
+    { header: 'Not pinned' },
+    ...groups.filter((g) => !isPinned(g.id)).map((g) => {
+      const waiting = groupMembers(g.id).filter(waitingForYou).length;
+      return {
+        icon: h('span', { class: 'accent-dot', style: `background:${g.unknown ? 'var(--text-faint)' : projectColor(g)}` }),
+        checked: only === g.id || undefined,
+        label: g.name,
+        kbd: waiting ? `${waiting} waiting` : '',
+        action: () => showOnlyProject(g.id),
+      };
+    }),
+    '-',
+    onlyGroup && { icon: 'pin', label: `Pin ${onlyGroup.name}`, action: () => setPinned(onlyGroup.id, true) },
+    { icon: 'pin', label: 'Pin them all', action: pinAllProjects },
+  ]);
+}
+
+function saveUnpinnedProjects() {
+  store.set('unpinnedProjects', [...state.unpinnedProjects]);
+}
+
+function setPinned(id, pinned) {
+  if (pinned) state.unpinnedProjects.delete(id);
+  else state.unpinnedProjects.add(id);
+  saveUnpinnedProjects();
+  renderProjectBar();
+}
+
+function pinAllProjects() {
+  state.unpinnedProjects.clear();
+  saveUnpinnedProjects();
+  renderProjectBar();
+}
+
+function setProjectTabs(on) {
+  state.projectTabs = on;
+  store.set('projectTabs', on);
+  applyProjectFilter();   // the bar, and the empty grid's hint
+}
+
+/** Pin or Unpin, for a project's right-click menu while projects are tabs. */
+const pinMenuItems = (id) => (!tabbedProjects() ? [] : [isPinned(id)
+  ? { label: 'Unpin (move to the ▾ list)', action: () => setPinned(id, false) }
+  : { label: 'Pin (keep it on the tab row)', action: () => setPinned(id, true) }]);
 
 /** The groups the projects bar lists: the projects, then Unknown. With no projects there is nothing to toggle, so none. */
 const projectGroups = () => (state.projects.length ? [...state.projects, { id: UNKNOWN, name: UNKNOWN_NAME, unknown: true }] : []);
@@ -446,7 +627,7 @@ function projectAllButtons(groups) {
 }
 
 const projectAddButton = () => h('button', { class: 'tb-btn text project-add', title: 'New project', onclick: showNewProjectDialog }, iconEl('plus'),
-  state.projects.length ? 'Project' : 'New project (group sessions)');
+  state.projects.length ? 'Project' : 'New project');
 
 /**
  * The bar down the left in the Hybrid and Left layouts: a row per project, as its tab in the Top layout's projects bar,
@@ -490,6 +671,7 @@ function projectMenu(p, x, y) {
       '-',
       { label: 'Show only sessions with no project', action: () => showOnlyProject(UNKNOWN) },
       { label: state.hiddenProjects.has(UNKNOWN) ? 'Show alongside the others' : 'Hide', action: () => toggleProject(UNKNOWN) },
+      ...pinMenuItems(UNKNOWN),
       ...pluginMenuItems('project', { project: null }, NO_PROJECT),
     ]);
     return;
@@ -501,6 +683,7 @@ function projectMenu(p, x, y) {
     '-',
     { label: 'Show only this project', action: () => showOnlyProject(p.id) },
     { label: state.hiddenProjects.has(p.id) ? 'Show alongside the others' : 'Hide', action: () => toggleProject(p.id) },
+    ...pinMenuItems(p.id),
     '-',
     { label: 'Edit project (name, colour)…', action: () => showEditProjectDialog(p) },
     i > 0 && { label: across ? 'Move left' : 'Move up', action: () => moveProject(p, -1) },
@@ -598,9 +781,11 @@ const theme = { pref: store.get('theme', 'system'), windowsLight: null };
 // on the next start rather than once the host has listed the themes.
 const themes = { list: [], problems: [], folder: null, names: null, last: store.get('themeLook', null) };
 const BUILT_IN_THEMES = ['system', 'light', 'dark'];
-/** The theme file in use, or null for System, Light and Dark. */
-const currentTheme = () => BUILT_IN_THEMES.includes(theme.pref) ? null
-  : themes.list.find((t) => t.id === theme.pref) ?? (themes.last?.id === theme.pref ? themes.last : null);
+/** A theme being tried on in Get themes, shown in place of the one picked until it's installed or put away (see previewTheme). */
+let themePreview = null;
+/** The theme file in use (or being tried on), or null for System, Light and Dark. */
+const currentTheme = () => themePreview ?? (BUILT_IN_THEMES.includes(theme.pref) ? null
+  : themes.list.find((t) => t.id === theme.pref) ?? (themes.last?.id === theme.pref ? themes.last : null));
 const isLight = () => {
   const t = currentTheme();
   if (t) return t.base === 'light';
@@ -616,10 +801,10 @@ const themeName = () => (isLight() ? 'light' : 'dark');
 function themeLook() {
   const t = currentTheme();
   if (!t) return null;
-  if (!themes.list.includes(t)) return t;   // the kept look
+  if (!themes.list.includes(t) && t !== themePreview) return t;   // the kept look
   const made = t.monochrome ? monochromeLook(accentColour(), t.base === 'light') : {};
   return {
-    id: t.id, name: t.name, base: t.base, font: t.font, glow: t.glow, grid: !!t.grid, rain: !!t.rain, monochrome: t.monochrome, cursor: t.cursor ?? null,
+    id: t.id, name: t.name, base: t.base, font: t.font, glow: t.glow, grid: !!t.grid, rain: !!t.rain, monochrome: t.monochrome, cursor: t.cursor ?? null, terminalBackground: t.terminalBackground ?? null, floor: t.floor ?? null, cycle: t.cycle ?? null, dots: t.dots ?? null,
     colors: { ...made.colors, ...t.colors }, terminal: { ...made.terminal, ...t.terminal }, diff: { ...made.diff, ...t.diff },
     accent: t.accent ?? made.accent ?? null,
   };
@@ -696,6 +881,294 @@ function rainFrame() {
 }
 addEventListener('resize', () => rainSize());
 
+// ---- A theme's own floor ---------------------------------------------------------------------------------------------
+// A theme can bring a floor of its own: a script ("floor" in its file) that draws the window's floor, as the rain does.
+// That's someone else's code, so it never runs on this page. It runs in a worker inside a frame that's sandboxed with
+// nothing but scripts (no same origin, so no storage, cookies or this page; no forms, popups or navigating the window),
+// and the frame's page, written here, allows no network at all: no fetch, sockets, images, fonts, frames or scripts
+// from anywhere. A worker has no page, so nothing in it can navigate or reach the frame's document either. And the
+// floor is told nothing worth taking: the window's size, the theme's colours, whether to keep still, and how many
+// sessions are in each state; never their names, folders or anything they show. It can't take the pointer or the
+// keyboard (inert, and under everything), and what it sends back is only how it's doing.
+// The app keeps it in check from out here: paused while the window's hidden, stopped and taken away if it stops
+// answering (a script that never lets go), or if it fails, and gone altogether with Show the theme's own floor off.
+const floor = { on: store.get('themeFloors', true), frame: null, script: null, failed: null, ping: 0, lastPong: 0, timer: null, paused: false, sessions: '' };
+const FLOOR_COLOURS = ['accent', 'accent-strong', 'chrome', 'chrome-2', 'chrome-3', 'panel', 'panel-2', 'border', 'border-soft', 'border-strong',
+  'text', 'text-dim', 'text-faint', 'text-strong', 'ok', 'working', 'attention', 'asking', 'danger', 'terminal-bg', 'link'];
+const FLOOR_PING_MS = 2000, FLOOR_DEAD_MS = 7000;
+/** Whether the theme's own floor is on the window: it has one, it's wanted, and it hasn't failed. */
+const floorShown = (look = themeLook()) => !!(floor.on && typeof look?.floor === 'string' && look.floor && look.floor !== floor.failed);
+
+/**
+ * What runs in the floor's worker, around the theme's script: floor({ layout(ctx, info), draw(ctx, now, info), fps })
+ * registers the floor; this draws it at up to its fps (30 if it doesn't say, 60 at most), lays it out again when the
+ * window's size changes, draws once and stops when it's to keep still, and answers the frame's pings. Written as text:
+ * it's put in the worker with the theme's script, and never runs here.
+ */
+const FLOOR_WORKER = `(() => {
+  let handlers = null, canvas = null, ctx = null, info = null, paused = false, timer = 0, last = -1e9;
+  const later = self.requestAnimationFrame ? (f) => requestAnimationFrame(f) : (f) => setTimeout(() => f(performance.now()), 16);
+  const cancel = self.cancelAnimationFrame ? (t) => cancelAnimationFrame(t) : (t) => clearTimeout(t);
+  self.floor = (h) => { if (!handlers && h && typeof h.draw === 'function') handlers = h; };
+  const fps = () => Math.min(60, Math.max(1, Number(handlers && handlers.fps) || 30));
+  const call = (name, ...args) => {
+    const f = handlers && handlers[name];
+    if (typeof f !== 'function') return;
+    try { f.call(handlers, ctx, ...args); } catch (e) { handlers = null; postMessage({ problem: name + ': ' + (e && e.message || e) }); }
+  };
+  const size = () => {
+    canvas.width = Math.max(1, Math.round(info.width * info.dpr));
+    canvas.height = Math.max(1, Math.round(info.height * info.dpr));
+    ctx.setTransform(info.dpr, 0, 0, info.dpr, 0, 0);
+    call('layout', info);
+  };
+  const tick = (now) => {
+    timer = 0;
+    if (paused || !handlers) return;
+    if (now - last >= 1000 / fps() - 2) { last = now; call('draw', now, info); }
+    if (!info.still) timer = later(tick);
+  };
+  const run = () => { if (!timer && !paused) timer = later(tick); };
+  addEventListener('message', (e) => {
+    const m = e.data;
+    if (m === 'ping') { postMessage('pong'); return; }
+    if (!m || typeof m !== 'object') return;
+    if (m.type === 'start' && !canvas) {
+      canvas = m.canvas; ctx = canvas.getContext('2d'); info = m.info;
+      if (!handlers) { postMessage({ problem: 'the script never called floor({ draw })' }); return; }
+      size(); run();
+    } else if (m.type === 'info' && canvas) {
+      const resized = m.info.width !== info.width || m.info.height !== info.height || m.info.dpr !== info.dpr;
+      info = m.info;
+      if (resized) size();
+      if (info.still) { last = -1e9; run(); }
+    } else if (m.type === 'pause') { paused = true; if (timer) cancel(timer); timer = 0; }
+    else if (m.type === 'resume') { paused = false; run(); }
+  });
+})();
+`;
+
+/**
+ * The frame's own script (this page's code, not the theme's), run in the frame as text: it starts the worker with the
+ * floor's code, hands it the canvas, passes on only start, info, pause, resume and ping, and stops the worker if it
+ * fails or stops answering.
+ */
+function floorFrameScript(code) {
+  const canvas = document.querySelector('canvas');
+  let worker = null, lastPong = Date.now();
+  const tell = (m) => parent.postMessage(m, '*');
+  const stop = (why, detail) => { if (worker) worker.terminate(); worker = null; tell({ floor: 'stopped', why, detail: String(detail ?? '').slice(0, 300) }); };
+  addEventListener('message', (e) => {
+    if (e.source !== parent) return;
+    const m = e.data;
+    if (!m || typeof m !== 'object') return;
+    if (m.type === 'start' && !worker) {
+      if (typeof canvas.transferControlToOffscreen !== 'function' || typeof Worker !== 'function') { tell({ floor: 'stopped', why: 'unsupported' }); return; }
+      const offscreen = canvas.transferControlToOffscreen();
+      worker = new Worker(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
+      worker.onmessage = (w) => { if (w.data === 'pong') lastPong = Date.now(); else if (w.data && w.data.problem) stop('error', w.data.problem); };
+      worker.onerror = (w) => { w.preventDefault(); stop('error', w.message); };
+      lastPong = Date.now();
+      worker.postMessage({ type: 'start', canvas: offscreen, info: m.info }, [offscreen]);
+    } else if (!worker) {
+      // nothing running: nothing to pass on
+    } else if (m.type === 'ping') {
+      if (Date.now() - lastPong > 5000) { stop('busy'); return; }
+      worker.postMessage('ping');
+      tell({ floor: 'pong' });
+    } else if (m.type === 'info') worker.postMessage({ type: 'info', info: m.info });
+    else if (m.type === 'pause' || m.type === 'resume') worker.postMessage({ type: m.type });
+  });
+  tell({ floor: 'ready' });
+}
+
+/**
+ * The floor frame's page: a canvas, and the frame's script with the worker's code, under a policy that allows that one
+ * script (by a nonce made for it), workers made from it, its one style, and nothing else from anywhere.
+ */
+function floorPage(script) {
+  const nonce = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  // As JSON in the script, with every < escaped, so nothing in the theme's code can end the script element.
+  const code = JSON.stringify(FLOOR_WORKER + '\n' + script + '\n').replace(/</g, '\\u003c');
+  return '<!doctype html><html><head><meta charset="utf-8">'
+    + `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; worker-src blob:">`
+    + `<style nonce="${nonce}">html,body{margin:0;height:100%;overflow:hidden;background:transparent}canvas{display:block;width:100%;height:100%}</style>`
+    + `</head><body><canvas></canvas><script nonce="${nonce}">(${floorFrameScript.toString()})(${code});<\/script></body></html>`;
+}
+
+/** What the floor is told: the window's size, whether to keep still, the theme's colours, and how many sessions are in each state. */
+function floorInfo() {
+  const css = getComputedStyle(document.documentElement);
+  return {
+    width: innerWidth, height: innerHeight, dpr: devicePixelRatio || 1,
+    still: matchMedia('(prefers-reduced-motion: reduce)').matches,
+    colors: Object.fromEntries(FLOOR_COLOURS.map((n) => [n, css.getPropertyValue('--' + n).trim()]).filter(([, v]) => v)),
+    sessions: floorSessions(),
+  };
+}
+
+/** How many sessions are in each state, and in all: only counts. */
+function floorSessions() {
+  const counts = { working: 0, waiting: 0, asking: 0, idle: 0, stopped: 0, total: 0 };
+  const names = { working: 'working', attention: 'waiting', asking: 'asking', running: 'idle', exited: 'stopped' };
+  for (const s of state.sessions) {
+    let cls = 'exited';
+    try { cls = statusClass(s); } catch { /* one not filled in yet counts as stopped */ }
+    counts[names[cls] ?? 'idle']++;
+    counts.total++;
+  }
+  return counts;
+}
+
+const floorSend = (m) => floor.frame?.contentWindow?.postMessage(m, '*');
+
+/** Puts the theme's floor on the window, or takes it away: when the theme has one, and Show the theme's own floor is on. */
+function themeFloor(look) {
+  const script = floorShown(look) ? look.floor : null;   // one that failed stays off until it's turned on again, or the next start
+  if (script && script === floor.script && floor.frame) return;   // the same floor: applyTheme sends it the new colours
+  floorStop();
+  if (!script) return;
+  floor.script = script;
+  floor.lastPong = Date.now();
+  floor.paused = false;
+  const frame = h('iframe', { id: 'themeFloor', sandbox: 'allow-scripts', referrerpolicy: 'no-referrer', 'aria-hidden': 'true', tabindex: '-1', title: '' });
+  frame.inert = true;
+  frame.srcdoc = floorPage(script);
+  floor.frame = frame;
+  document.body.prepend(frame);
+  floor.timer = setInterval(floorCheck, FLOOR_PING_MS);
+}
+
+function floorStop() {
+  clearInterval(floor.timer);
+  floor.timer = null;
+  floor.frame?.remove();
+  floor.frame = floor.script = null;
+  floor.sessions = '';
+}
+
+/** Every couple of seconds: paused while the window's hidden; new counts when they change; and still answering? */
+function floorCheck() {
+  if (!floor.frame) return;
+  if (Date.now() - floor.lastPong > FLOOR_DEAD_MS) { floorFailed('busy'); return; }
+  floorPause(document.hidden);
+  floorSend({ type: 'ping' });
+  const counts = JSON.stringify(floorSessions());
+  if (counts !== floor.sessions) { floor.sessions = counts; floorSend({ type: 'info', info: floorInfo() }); }
+}
+
+function floorPause(hidden) {
+  if (!floor.frame || hidden === floor.paused) return;
+  floor.paused = hidden;
+  floorSend({ type: hidden ? 'pause' : 'resume' });
+}
+
+/** The floor failed or stopped answering: it's taken away, and said once. */
+function floorFailed(why, detail) {
+  const name = themeLook()?.name ?? 'The theme';
+  floor.failed = floor.script;
+  floorStop();
+  markTheme();   // without it: the window's floor as the theme's colours have it
+  if (why === 'unsupported') return;   // this web view can't run one: the theme's colours are on, without it
+  toast(why === 'busy'
+    ? `${name}'s floor stopped answering, so it's been taken away. Choose the theme again to try it once more.`
+    : `${name}'s floor ran into a problem and has been taken away${detail ? `: ${detail}` : '.'}`, true);
+}
+
+addEventListener('message', (e) => {
+  if (!floor.frame || e.source !== floor.frame.contentWindow) return;
+  const m = e.data;
+  if (!m || typeof m !== 'object') return;
+  if (m.floor === 'ready') { floor.lastPong = Date.now(); floorSend({ type: 'start', info: floorInfo() }); }
+  else if (m.floor === 'pong') floor.lastPong = Date.now();
+  else if (m.floor === 'stopped') floorFailed(String(m.why), typeof m.detail === 'string' ? m.detail : '');
+});
+addEventListener('resize', () => { if (floor.frame) floorSend({ type: 'info', info: floorInfo() }); });
+document.addEventListener('visibilitychange', () => floorPause(document.hidden));
+
+/** Show the theme's own floor, on or off (kept). */
+function setThemeFloors(on) {
+  floor.on = on;
+  store.set('themeFloors', on);
+  floor.failed = null;
+  markTheme();
+}
+
+// ---- Terminal background --------------------------------------------------------------------------------------------
+// How solid the terminals are over the window's floor: the tile paints the terminal's background at --terminal-veil (see
+// .tile in app.css). A theme that lets you see through says how solid they start ("terminalBackground": Matrix's 42 shows
+// its rain, Tron's 100 starts solid), and only then is there a slider in each terminal's corner to change it. Yours is kept
+// per theme, so Matrix can be nearly solid for you while Tron stays as it is. Without it the terminals are solid.
+const veil = { byTheme: store.get('terminalVeil', {}) };
+const veilKey = () => theme.pref;
+/** The theme's own amount, 0–100, or null when it keeps the terminals solid (and has no slider). */
+const veilOwn = (look = themeLook()) => (typeof look?.terminalBackground === 'number' ? look.terminalBackground : null);
+/** Your amount for the theme on, 0–100, or null for the theme's own. */
+function veilSetting() {
+  const v = veil.byTheme?.[veilKey()];
+  return typeof v === 'number' && Number.isFinite(v) ? Math.min(100, Math.max(0, Math.round(v))) : null;
+}
+/** The amount on the page now, 0–100. */
+function veilAmount() {
+  const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--terminal-veil'));
+  return Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : 100;
+}
+/** Whether the terminals' own canvas must be see-through: over a floor, or under a veil of less than 100%. */
+const seeThrough = (look = themeLook()) => !!(look?.grid || look?.rain || floorShown(look)) || veilAmount() < 100;
+/**
+ * Puts the amount on the page (yours, else the theme's own; none when the theme keeps the terminals solid), marks the
+ * page while the terminals are see-through, and while the theme has a slider (data-veil-slider shows it).
+ */
+function markVeil(look = themeLook(), value = veilSetting()) {
+  const root = document.documentElement;
+  const own = veilOwn(look);
+  const amount = own === null ? null : value ?? own;
+  if (amount === null) root.style.removeProperty('--terminal-veil');
+  else root.style.setProperty('--terminal-veil', amount + '%');
+  if (own === null) delete root.dataset.veilSlider;
+  else root.dataset.veilSlider = '';
+  if (seeThrough(look)) root.dataset.veil = '';
+  else delete root.dataset.veil;
+}
+/** The amount on the page, every terminal dressed for it, and every tile's slider at it. */
+function applyVeil(value = veilSetting()) {
+  markVeil(themeLook(), value);
+  for (const s of state.sessions) if (s.term) dressCursor(s);
+  syncVeilSliders();
+}
+/**
+ * The small slider in a tile's corner (see .tile-veil in app.css), shown while the theme has one. Dragging shows at once;
+ * letting go keeps it for the theme on (or forgets yours, back at the theme's own). Its clicks stay its own, so they
+ * don't expand the tile.
+ */
+function veilSlider() {
+  const v = String(Math.round(veilAmount()));
+  const input = h('input', { type: 'range', min: '0', max: '100', step: '1', value: v, 'aria-label': 'How solid the terminal is' });
+  const out = h('span', {}, v + '%');
+  input.addEventListener('input', () => applyVeil(+input.value));
+  input.addEventListener('change', () => { const n = +input.value; setVeil(n === veilOwn() ? null : n); });
+  const el = h('div', { class: 'tile-veil', title: "How solid the terminals are over the theme's floor, for this theme. Drag to change it." }, input, out);
+  for (const type of ['pointerdown', 'mousedown', 'click', 'dblclick', 'contextmenu']) el.addEventListener(type, (e) => e.stopPropagation());
+  return el;
+}
+/** Every tile's slider at the amount on the page. */
+function syncVeilSliders() {
+  const v = String(Math.round(veilAmount()));
+  for (const s of state.sessions) {
+    if (!s.veil) continue;
+    const input = s.veil.querySelector('input');
+    if (input.value !== v) input.value = v;
+    s.veil.querySelector('span').textContent = v + '%';
+  }
+}
+/** Your amount for the theme on (null takes it away), kept and shown. */
+function setVeil(value) {
+  if (value === null) delete veil.byTheme[veilKey()];
+  else veil.byTheme[veilKey()] = value;
+  store.set('terminalVeil', veil.byTheme);
+  applyVeil();
+}
+
 /** Marks the page with the theme: data-theme light or dark for the stylesheet, and a theme's own colours, font and glow. */
 function markTheme(look = themeLook()) {
   const root = document.documentElement;
@@ -710,7 +1183,11 @@ function markTheme(look = themeLook()) {
   else delete root.dataset.grid;
   if (look?.rain) root.dataset.rain = '';
   else delete root.dataset.rain;
+  if (floorShown(look)) root.dataset.floor = '';
+  else delete root.dataset.floor;
+  markVeil(look);   // after the floor is marked: whether the terminals are see-through depends on it
   digitalRain(!!look?.rain);
+  themeFloor(look);
 }
 markTheme(themes.last?.id === theme.pref ? themes.last : null);   // the accent isn't known yet: last time's look
 
@@ -754,8 +1231,8 @@ function hslHex(h, s, l) {
 
 /**
  * Every colour of a monochrome theme, in shades of one hue: backgrounds near black (near white on a light base), text and
- * highlights lighter. What needs telling apart (status, Git's changes, the terminal's sixteen colours, added and removed
- * lines) differs in how light and how strong its shade is rather than in hue.
+ * highlights lighter. What needs telling apart (Git's changes, the terminal's sixteen colours, added and removed lines)
+ * differs in how light and how strong its shade is rather than in hue. Status is the exception (see status below).
  */
 function monochromeLook(hex, light) {
   const [h, sAccent] = hexToHsl(hex);
@@ -774,16 +1251,20 @@ function monochromeLook(hex, light) {
     const [[l0, r0], [l1, r1]] = [LEVELS[i - 1], LEVELS[i]];
     return r0 + (r1 - r0) * (l - l0) / (l1 - l0);
   };
-  const tone = (l, s) => {
+  const tone = (l, s, hue = h) => {
     const want = ratioFor(l);
     let lo = 0, hi = 100;   // lightness, searched away from the chrome until the shade reads as well as wanted
     for (let n = 0; n < 16; n++) {
       const mid = (lo + hi) / 2;
-      const enough = contrast(hslHex(h, s, light ? 100 - mid : mid), chrome) >= want;
+      const enough = contrast(hslHex(hue, s, light ? 100 - mid : mid), chrome) >= want;
       if (enough) hi = mid; else lo = mid;
     }
-    return hslHex(h, s, light ? 100 - hi : hi);
+    return hslHex(hue, s, light ? 100 - hi : hi);
   };
+  // A session's status is told apart by hue: shades of one hue on an 8px dot were too alike (idle, working, waiting and
+  // asking came within 1.3:1 of each other). Each keeps the hue it has in the other themes, as bright as the theme's
+  // marks; app.css uses them for the dots, session tabs and tiles only, so the rest stays in the one colour.
+  const status = (hue) => tone(66, 75, hue);
   const fg = (l) => tone(l, sat);           // text and marks
   const pale = (l) => tone(l, sat * 0.2);   // what's taken away (removed lines, errors), nearly grey
   // The accent: a bright shade that reads on the chrome for lines, and a deep one white text reads on for fills.
@@ -797,7 +1278,8 @@ function monochromeLook(hex, light) {
       border: bg(20), 'border-soft': bg(13), 'border-strong': bg(32),
       text: fg(78), 'text-dim': fg(55), 'text-faint': fg(36), 'text-strong': fg(93),
       focus: fg(lineL), select: bg(18), 'select-inactive': bg(11), 'terminal-bg': bg(2.2), 'editor-bg': bg(3),
-      ok: fg(66), working: fg(72), attention: fg(84), asking: fg(95), danger: pale(70), 'danger-fill': hslHex(h, sat * 0.3, strongL),
+      ok: fg(66), working: fg(72), attention: fg(84), asking: fg(95), danger: pale(70),
+      'status-ok': status(170), 'status-working': status(212), 'status-attention': status(36), 'status-asking': status(330), 'danger-fill': hslHex(h, sat * 0.3, strongL),
       'st-m': fg(80), 'st-a': fg(66), 'st-d': pale(52), 'st-r': fg(88), 'st-u': fg(58),
       'info-bg': bg(9), 'info-border': bg(26), 'error-bg': bg(8), 'error-border': bg(30), 'pv-warn-bg': bg(10), 'pv-warn-border': bg(28),
       'ico-folder': fg(70), 'ico-file': fg(52), graph: fg(55),
@@ -835,9 +1317,66 @@ const DOT_STYLES = [
   { id: 'calm', name: 'Calm', about: 'A different shape for each state, with only slow, small motion: a ring turning, a dot fading in a ring, a pink diamond.' },
   { id: 'signal', name: 'Signal', about: 'Bold, like a device’s status light: a ring filling while working, a blinking square, a dot that shakes for your answer.' },
 ];
-const dotStyle = { id: DOT_STYLES.some((d) => d.id === store.get('dotStyle')) ? store.get('dotStyle') : 'glow' };
-const applyDotStyle = () => { $('#app').dataset.dots = dotStyle.id; };
+// A theme can draw its own (its "dots": see ThemeDots), shown as one more style while it's on, until you pick another
+// while it's on: notThemes are the themes whose own you've put aside, and id is your style, shown with every other theme.
+const dotStyle = {
+  id: DOT_STYLES.some((d) => d.id === store.get('dotStyle')) ? store.get('dotStyle') : 'glow',
+  notThemes: new Set(store.get('dotStyleNotThemes', [])),
+};
+/** The style showing: the theme's own ("theme") while it has some you haven't put aside, otherwise yours. */
+const shownDotStyle = (look = themeLook()) => (look?.dots && !dotStyle.notThemes.has(look.id) ? 'theme' : dotStyle.id);
+const applyDotStyle = () => { $('#app').dataset.dots = shownDotStyle(); };
 applyDotStyle();
+
+// A theme's dots name the states as its floor's counts do; the page's dots are classed by status.
+const DOT_STATES = { idle: 'running', working: 'working', waiting: 'attention', asking: 'asking', stopped: 'exited' };
+// "status" in a dot's shape: the colour of the state it shows.
+const DOT_STATUS = { running: 'status-ok', working: 'status-working', attention: 'status-attention', asking: 'status-asking', exited: 'text-faint' };
+// How a theme's dot can move (ThemeDots.Motions): the app's own animations (see @keyframes in app.css).
+const DOT_MOTIONS = {
+  spin: 'dot-spin 1.6s linear infinite', pulse: 'dot-fade 2s ease-in-out infinite', breathe: 'dot-breathe 2s ease-in-out infinite',
+  blink: 'dot-blink 1.4s steps(1, end) infinite', beat: 'dot-beat 2.2s ease-out infinite', hop: 'dot-hop 1.6s infinite',
+  shake: 'dot-shake 1.6s ease-in-out infinite',
+};
+let dotVars = [];   // the variables themeDots set on the page, to take off again
+/**
+ * Puts a theme's own dots on the page: each state's picture as an image (--dot-icon-<status>) that the stylesheet shows
+ * in place of that dot when the theme's style is showing, with its motion (--dot-motion-<status>), and data-dot-icons on
+ * the root listing the states that have one. The pictures are drawn by cycleSvg from checked shapes, with their colours
+ * read off the page here (an image can't see the page's variables), so they're drawn again whenever the colours
+ * change: with the theme, and with the accent (applyAccent).
+ */
+function themeDots(look = themeLook()) {
+  const root = document.documentElement;
+  for (const v of dotVars) root.style.removeProperty(v);
+  dotVars = [];
+  const set = (name, value) => { root.style.setProperty(name, value); dotVars.push(name); };
+  const css = getComputedStyle(root);
+  const drawn = [];
+  for (const [state, cls] of Object.entries(DOT_STATES)) {
+    const dot = look?.dots?.states?.[state];
+    if (!dot?.image) continue;
+    const colour = (v) => {
+      const name = v === 'status' ? DOT_STATUS[cls] : v;
+      if (typeof name === 'string' && CYCLE_HEX.test(name)) return name;
+      if (typeof name !== 'string' || name === 'none' || !/^[a-z][a-z0-9-]{0,29}$/.test(name)) return 'none';
+      return css.getPropertyValue('--' + name).trim() || 'none';
+    };
+    const svg = cycleSvg(dot.image, colour);
+    svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    set(`--dot-icon-${cls}`, `url("data:image/svg+xml,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}")`);
+    if (DOT_MOTIONS[dot.motion]) set(`--dot-motion-${cls}`, DOT_MOTIONS[dot.motion]);
+    drawn.push(cls);
+  }
+  if (drawn.length) {
+    root.dataset.dotIcons = drawn.join(' ');
+    const size = look.dots.size;
+    set('--dot-icon-size', `${Number.isFinite(size) ? Math.min(14, Math.max(6, size)) : 10}px`);
+  }
+  else delete root.dataset.dotIcons;
+  applyDotStyle();
+}
 
 const TERM_THEME_DARK = {
   background: '#181818', foreground: '#cccccc', cursor: '#d4d4d4', cursorAccent: '#181818',
@@ -859,34 +1398,96 @@ const TERM_THEME_LIGHT = {
 const termTheme = (look = themeLook()) => ({ ...(isLight() ? TERM_THEME_LIGHT : TERM_THEME_DARK), ...look?.terminal });
 
 // The light cycle (a theme's "cursor": "light-cycle"): a light cycle drawn in the terminal's cursor colour, riding a little to
-// the right of the cursor (CYCLE_OFFSET; three cells wide) and leaving a ribbon of light that fades behind it as it moves,
+// the right of the cursor (three cells wide, unless a theme's "cycle" says otherwise) and leaving a ribbon of light that fades behind it as it moves,
 // turning at right angles when it changes line. It's a layer over the terminal's screen. The cursor itself stays a
 // blinking bar in the cursor colour, so you can see where you're typing and whether the terminal has focus; the cycle
 // dims while it hasn't (see .cycle-head in app.css).
 const TRAIL_MAX = 48;        // pieces of ribbon kept at once
-const CYCLE_CELLS = 3;       // how many cells wide the light cycle is drawn
-const CYCLE_OFFSET = 25;     // how far right of the cursor it rides, in pixels, so it never covers what you're typing
-// Side view, facing right, in a 24 by 16 box: two tall wheels with hubs, the canopy sweeping over them, the rider's
-// back, and the white light stripe along the canopy.
-const CYCLE_SVG = '<svg viewBox="0 0 24 16" preserveAspectRatio="xMinYMid meet" aria-hidden="true">' +
-  '<circle cx="5.5" cy="10.5" r="4.6"/><circle cx="18.5" cy="10.5" r="4.6"/>' +
-  '<circle cx="5.5" cy="10.5" r="1.3" fill="currentColor"/><circle cx="18.5" cy="10.5" r="1.3" fill="currentColor"/>' +
-  '<path d="M1.5 8 C3.5 3.6 8 2.2 12 2.6 C16.5 3 20.5 5 22.5 8.5"/><path d="M8.5 6.2 L10.5 3.6"/><path d="M9 10.5 H15"/>' +
-  '<path d="M4 6.4 C8 3.2 15 3 20 5.8" stroke="#fff" stroke-width="1" opacity=".9"/></svg>';
+// The app's own cycle, written as a theme's "cycle" is (see ThemeCycle): side view, facing right, in a 24 by 16 box: two
+// tall wheels with hubs, the canopy sweeping over them, the rider's back, and the white light stripe along the canopy;
+// three cells wide, riding 25 pixels right of the cursor (so it never covers what you're typing), the ribbon at the
+// wheels' height (11 of 16).
+const cycleShape = (kind, numbers, more = {}) => ({ kind, numbers: kind === 'path' ? null : numbers, path: kind === 'path' ? numbers : null, fill: 'none', stroke: 'cursor', width: 1.6, opacity: 1, ...more });
+const CYCLE_DEFAULT = {
+  image: {
+    viewBox: [0, 0, 24, 16],
+    shapes: [
+      cycleShape('circle', [5.5, 10.5, 4.6]), cycleShape('circle', [18.5, 10.5, 4.6]),
+      cycleShape('circle', [5.5, 10.5, 1.3], { fill: 'cursor' }), cycleShape('circle', [18.5, 10.5, 1.3], { fill: 'cursor' }),
+      cycleShape('path', 'M1.5 8 C3.5 3.6 8 2.2 12 2.6 C16.5 3 20.5 5 22.5 8.5'), cycleShape('path', 'M8.5 6.2 L10.5 3.6'), cycleShape('path', 'M9 10.5 H15'),
+      cycleShape('path', 'M4 6.4 C8 3.2 15 3 20 5.8', { stroke: '#ffffff', width: 1, opacity: 0.9 }),
+    ],
+  },
+  size: 3, offset: 25, glow: 6,
+  trail: { width: 2, glow: 10, fade: 800, at: 0.69, colour: 'cursor' },
+};
+/** The cycle the theme on screen rides: its own picture and options (checked by ThemeCatalog), or the app's own. */
+function cycleOptions(look = themeLook()) {
+  const c = look?.cycle;
+  if (!c) return CYCLE_DEFAULT;
+  return { image: c.image ?? CYCLE_DEFAULT.image, size: c.size, offset: c.offset, glow: c.glow, trail: c.trail ?? null };
+}
+const CYCLE_HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const CYCLE_PATH = /^\s*[Mm][MmLlHhVvCcSsQqTtAaZz0-9eE.,+\-\s]*$/;
+/** A cycle colour as CSS: the cursor's, the accent or a page colour by name (as variables), a hex, or none. */
+function cycleColour(v) {
+  if (v === 'cursor') return 'var(--cycle)';
+  if (typeof v === 'string' && CYCLE_HEX.test(v)) return v;
+  if (typeof v === 'string' && v !== 'none' && /^[a-z][a-z0-9-]{0,29}$/.test(v)) return `var(--${v})`;
+  return 'none';
+}
+/**
+ * The cycle's picture as SVG, built here element by element from its shapes' numbers and path data: a theme's markup
+ * is never put on the page, so a picture can't bring a script, a link or a style with it. Each value is checked again.
+ */
+function cycleSvg(image, colour = cycleColour) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const finite = (a) => Array.isArray(a) && a.every((n) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 10000);
+  const clamp = (n, lo, hi, d) => (typeof n === 'number' && Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d);
+  const svg = document.createElementNS(ns, 'svg');
+  const box = finite(image?.viewBox) && image.viewBox.length === 4 && image.viewBox[2] > 0 && image.viewBox[3] > 0 ? image.viewBox : CYCLE_DEFAULT.image.viewBox;
+  svg.setAttribute('viewBox', box.join(' '));
+  svg.setAttribute('preserveAspectRatio', 'xMinYMid meet');
+  svg.setAttribute('aria-hidden', 'true');
+  const names = { circle: ['cx', 'cy', 'r'], ellipse: ['cx', 'cy', 'rx', 'ry'], rect: ['x', 'y', 'width', 'height'], line: ['x1', 'y1', 'x2', 'y2'] };
+  for (const sh of (Array.isArray(image?.shapes) ? image.shapes : []).slice(0, 64)) {
+    let el = null;
+    if (sh?.kind === 'path') {
+      if (typeof sh.path !== 'string' || sh.path.length > 4000 || !CYCLE_PATH.test(sh.path)) continue;
+      el = document.createElementNS(ns, 'path');
+      el.setAttribute('d', sh.path);
+    } else if (names[sh?.kind]) {
+      if (!finite(sh.numbers) || sh.numbers.length !== names[sh.kind].length) continue;
+      el = document.createElementNS(ns, sh.kind);
+      names[sh.kind].forEach((a, i) => el.setAttribute(a, String(sh.numbers[i])));
+    } else if (sh?.kind === 'polyline' || sh?.kind === 'polygon') {
+      if (!finite(sh.numbers) || sh.numbers.length < 4 || sh.numbers.length > 200 || sh.numbers.length % 2) continue;
+      el = document.createElementNS(ns, sh.kind);
+      el.setAttribute('points', sh.numbers.join(' '));
+    } else continue;
+    el.style.fill = colour(sh.fill);
+    el.style.stroke = colour(sh.stroke);
+    el.style.strokeWidth = String(clamp(sh.width, 0, 8, 1.6));
+    el.style.opacity = String(clamp(sh.opacity, 0, 1, 1));
+    svg.append(el);
+  }
+  return svg;
+}
 // A program repainting its screen (a listing streaming by, Claude's own interface) moves the cursor every frame; that's
 // not riding, so past this many moves in half a second only the glow follows, and the ribbon waits for your own moves.
 const BURST_MOVES = 12, BURST_MS = 500;
 const trailsAllowed = () => !matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /**
- * The terminal's colours as the theme wants them on screen: see-through over the Grid floor (the tile under it paints
- * the floor's lines, see .tile in app.css), and the cursor a bar, blinking as ever, while the light cycle rides beside it.
+ * The terminal's colours as the theme wants them on screen: see-through over the Grid floor or the rain (the tile under
+ * it paints the floor's lines, see .tile in app.css) and under a veil of less than 100% (the slider in its corner), and the
+ * cursor a bar, blinking as ever, while the light cycle rides beside it.
  */
 function dressCursor(s) {
   const t = termTheme();
   const theme = { ...t };
   const look = themeLook();
-  if (look?.grid || look?.rain) theme.background = 'rgba(0, 0, 0, 0)';
+  if (seeThrough(look)) theme.background = 'rgba(0, 0, 0, 0)';
   s.term.options.theme = theme;
   s.term.options.cursorStyle = s.cycle ? 'bar' : 'block';   // a bar beside the cycle: the cell stays readable
 }
@@ -895,21 +1496,25 @@ function dressCursor(s) {
 function lightCycle(s, on) {
   if (!on) {
     if (s.cycle) {
-      s.cycle.move.dispose(); s.cycle.resize.dispose(); s.cycle.layer.remove();
+      s.cycle.move.dispose(); s.cycle.resize.dispose(); s.cycle.write.dispose(); s.cycle.layer.remove();
       s.cycle = null;
     }
     dressCursor(s);
     return;
   }
+  const opts = cycleOptions(), key = JSON.stringify(opts);
+  if (s.cycle && s.cycle.key !== key) lightCycle(s, false);   // another theme's cycle: put up the new one
   if (s.cycle) { s.cycle.layer.style.setProperty('--cycle', termTheme().cursor); dressCursor(s); return; }
   const screen = s.surface.querySelector('.xterm-screen');
   if (!screen) return;
-  const head = h('div', { class: 'cycle-head', hidden: true });
-  head.innerHTML = CYCLE_SVG;
+  const head = h('div', { class: 'cycle-head', hidden: true }, cycleSvg(opts.image));
+  head.style.filter = opts.glow > 0 ? `drop-shadow(0 0 ${opts.glow / 3}px var(--cycle)) drop-shadow(0 0 ${opts.glow}px var(--cycle))` : 'none';
   const layer = h('div', { class: 'cycle-layer' }, head);
   layer.style.setProperty('--cycle', termTheme().cursor);
+  const trail = opts.trail;
+  if (trail) layer.style.setProperty('--cycle-trail', cycleColour(trail.colour));
   screen.append(layer);
-  const c = { layer, head, last: null, queued: false, pieces: [], moves: [] };
+  const c = { key, layer, head, last: null, queued: false, pieces: [], moves: [] };
   const ride = () => {
     c.queued = false;
     const term = s.term, b = term.buffer.active;
@@ -917,30 +1522,40 @@ function lightCycle(s, on) {
     const cw = screen.clientWidth / term.cols, ch = screen.clientHeight / term.rows;
     const x = b.cursorX, y = b.cursorY;
     head.hidden = false;
-    Object.assign(head.style, { left: `${x * cw + CYCLE_OFFSET}px`, top: `${y * ch}px`, width: `${cw * CYCLE_CELLS}px`, height: `${ch}px` });
+    Object.assign(head.style, { left: `${x * cw + opts.offset}px`, top: `${y * ch}px`, width: `${cw * opts.size}px`, height: `${ch}px` });
+    // Text where it would ride (the cursor moved back into a line, or a hint after it, as Claude's prompt has): it steps
+    // back, faint and without its glow, so the text can be read, until it's over empty cells again.
+    const line = b.getLine(b.baseY + y), first = Math.floor(x + opts.offset / cw), last = Math.ceil(x + opts.offset / cw + opts.size);
+    let over = false;
+    for (let col = Math.max(first, x + 1); line && col <= last && col < term.cols && !over; col++) over = /\S/.test(line.getCell(col)?.getChars() ?? '');
+    head.classList.toggle('over-text', over);
     const from = c.last;
     c.last = { x, y };
     if (!from || (from.x === x && from.y === y)) return;
     const now = performance.now();
     c.moves = c.moves.filter((t) => now - t < BURST_MS);
     c.moves.push(now);
-    if (c.moves.length > BURST_MOVES || !trailsAllowed()) return;
+    if (c.moves.length > BURST_MOVES || !trailsAllowed() || !trail) return;
     // The ribbon, from the rear wheel: down (or up) the old column to the new line, then along it to the new cell.
-    const midX = (col) => (col + 0.5) * cw + CYCLE_OFFSET;   // a column's middle, where the cycle rides
-    const wheel = (row) => (row + 0.69) * ch;   // the wheels' height in the cell (11 of 16 in CYCLE_SVG)
+    const midX = (col) => (col + 0.5) * cw + opts.offset;   // a column's middle, where the cycle rides
+    const wheel = (row) => (row + trail.at) * ch;   // the wheels' height in the cell
+    const t = trail.width, g = trail.glow;
     const piece = (left, top, width, height) => {
       const p = h('div', { class: 'cycle-trail', style: `left:${left}px;top:${top}px;width:${width}px;height:${height}px` });
+      p.style.boxShadow = g > 0 ? `0 0 ${g * 0.4}px var(--cycle-trail), 0 0 ${g}px var(--cycle-trail)` : 'none';
+      p.style.animationDuration = trail.fade + 'ms';
       p.addEventListener('animationend', () => { p.remove(); c.pieces = c.pieces.filter((q) => q !== p); });
       layer.append(p);
       c.pieces.push(p);
       while (c.pieces.length > TRAIL_MAX) c.pieces.shift().remove();
     };
-    if (from.y !== y) piece(midX(from.x) - 1, Math.min(wheel(from.y), wheel(y)), 2, Math.abs(y - from.y) * ch);
-    if (from.x !== x) piece(Math.min(midX(from.x), midX(x)), wheel(y) - 1, Math.abs(x - from.x) * cw, 2);
+    if (from.y !== y) piece(midX(from.x) - t / 2, Math.min(wheel(from.y), wheel(y)), t, Math.abs(y - from.y) * ch);
+    if (from.x !== x) piece(Math.min(midX(from.x), midX(x)), wheel(y) - t / 2, Math.abs(x - from.x) * cw, t);
   };
   const queue = () => { if (!c.queued) { c.queued = true; requestAnimationFrame(ride); } };
   c.move = s.term.onCursorMove(queue);
   c.resize = s.term.onResize(() => { c.last = null; queue(); });
+  c.write = s.term.onWriteParsed(queue);   // text written beside it, though the cursor didn't move
   s.cycle = c;
   dressCursor(s);
   queue();
@@ -981,8 +1596,11 @@ function syncSessions(list, projects) {
   const known = new Set([...projects.map((p) => p.id), UNKNOWN]);
   for (const id of [...state.hiddenProjects]) if (!known.has(id)) state.hiddenProjects.delete(id);
   saveHiddenProjects();
+  for (const id of [...state.unpinnedProjects]) if (!known.has(id)) state.unpinnedProjects.delete(id);
+  saveUnpinnedProjects();
 
   const seen = new Set();
+  const stopped = [];
   for (const info of list) {
     seen.add(info.id);
     let s = state.byId.get(info.id);
@@ -993,11 +1611,23 @@ function syncSessions(list, projects) {
       Object.assign(s, { name: info.name, directory: info.directory, command: info.command, conversation: info.conversation, server: info.server ?? null });
     }
     s.project = info.project || null;
+    s.startWithApp = info.startWithApp || null;   // see showEditDialog
+    s.autoStart = !!info.autoStart;   // the app has just opened, and this session starts with it
     // Running already: it ran on in the session host while no window was open (its output follows as a replay).
     if (info.running && !s.running) s.started = true;
     s.startedBy = info.startedBy || null;   // the session whose agent started this one (start_session)
-    s.running = info.running || s.running;
+    // A server's list is its word on what runs there. Its sessions can end without an "exited" reaching here: its
+    // LlamaTree restarting on a new version stops them as the connection closes, and so does the server restarting.
+    // Taken as exited, the terminal says so, and Enter starts it again there, rather than typing into nothing.
+    if (info.server && s.running && !info.running) stopped.push(s.id);
+    else if (info.running && !s.running) {
+      // Ran on without this window: its console has whatever size it had, so it's given this terminal's.
+      s.running = true;
+      s.ptySize = null;
+      refit();   // once it's fitted
+    }
   }
+  for (const id of stopped) onExited(id, null);
   for (const s of [...state.byId.values()]) {
     if (!seen.has(s.id)) disposeSession(s);
   }
@@ -1015,12 +1645,13 @@ function syncSessions(list, projects) {
   layout(true);
   // Claude sessions brought back with the app start when they're first opened, not all at once: Claude's start-up
   // context (hooks, the date, Git status) is then fresh when you use it, and a session nobody opens runs nothing. A new
-  // session, and any other command (a dev server, say), starts straight away, visible or not.
+  // session, and any other command (a dev server, say), starts straight away, visible or not. So does one set to start
+  // with LlamaTree (always, or when it was running as LlamaTree closed).
   const restoring = !state.restored;
   state.restored = true;
   for (const s of state.sessions) {
     if (s.running || s.started || s.startsOnOpen) continue;
-    if (restoring && agentOf(s.command)) { s.startsOnOpen = true; renderTileHeader(s); }
+    if (restoring && agentOf(s.command) && !s.autoStart) { s.startsOnOpen = true; renderTileHeader(s); }
     else startSession(s);
   }
   applyProjectFilter(true);
@@ -1051,7 +1682,8 @@ function createSession(info) {
   s.header.addEventListener('mouseenter', () => loadConversationInfo(s));
   s.rail = h('div', { class: 'chat-rail' });
   attachRail(s.rail);
-  s.tile = h('div', { class: 'tile', 'data-id': s.id }, s.header, h('div', { class: 'tile-body' }, s.surface, s.rail, s.cover, s.exitedBadge));
+  s.veil = veilSlider();
+  s.tile = h('div', { class: 'tile', 'data-id': s.id }, s.header, h('div', { class: 'tile-body' }, s.surface, s.rail, s.cover, s.exitedBadge, s.veil));
 
   const term = new Terminal({
     fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, Menlo, "DejaVu Sans Mono", "Courier New", monospace',
@@ -1064,6 +1696,7 @@ function createSession(info) {
     theme: termTheme(),
     windowsPty: { backend: 'conpty', buildNumber: 22621 },
     rightClickSelectsWord: false,
+    linkHandler: oscLinkHandler(s),
   });
   s.term = term;
   s.fit = new FitAddon.FitAddon();
@@ -1094,7 +1727,7 @@ function createSession(info) {
     if (data.includes('\r')) s.act.starting = false;
     post({ type: 'input', id: s.id, data });
   });
-  term.onResize(({ cols, rows }) => { if (s.running) post({ type: 'resize', id: s.id, cols, rows }); });
+  term.onResize(() => syncPtySize(s));
   term.onTitleChange((t) => { s.title = t; renderTileHeader(s); });
   // Some agents (Codex) report what they're doing in an OSC 7501 sequence, "state=working:app=codex" (see reportState).
   term.parser.registerOscHandler(7501, (data) => {
@@ -1131,6 +1764,24 @@ function createSession(info) {
     e.stopPropagation();
     pasteClipboardFiles(s);
   }, true);
+  // Files dropped on the terminal paste their paths, as Ctrl+V does files copied in the file manager; dropped text pastes.
+  const droppable = (e) => ['Files', 'text/plain'].some((t) => e.dataTransfer?.types.includes(t));
+  s.tile.addEventListener('dragover', (e) => {
+    if (!droppable(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    s.tile.classList.add('drop-over');
+  });
+  s.tile.addEventListener('dragleave', (e) => { if (!s.tile.contains(e.relatedTarget)) s.tile.classList.remove('drop-over'); });
+  s.tile.addEventListener('drop', (e) => {
+    s.tile.classList.remove('drop-over');
+    if (!droppable(e)) return;
+    e.preventDefault();
+    // The drag came from another app, which is still in front: the window comes forward so typing goes on here.
+    post({ type: 'window.front' });
+    if (state.expandedId === s.id) s.term.focus();
+    dropOnTerminal(s, e.dataTransfer);
+  });
   return s;
 }
 
@@ -1144,6 +1795,27 @@ function disposeSession(s) {
 
 function fitTerm(s) {
   try { s.fit.fit(); } catch { /* not attached yet */ }
+}
+
+/**
+ * Gives the session's console the terminal's size, when it isn't that size already (s.ptySize is the size it was last
+ * given). Not only on xterm's resize: one that comes while a start is on its way can't be sent, and xterm, at that size
+ * already, never reports it again, so the agent stayed laid out for the size the terminal had when it started.
+ */
+function syncPtySize(s) {
+  if (!s.running) return;
+  const { cols, rows } = s.term;
+  if (s.ptySize?.cols === cols && s.ptySize?.rows === rows) return;
+  s.ptySize = { cols, rows };
+  post({ type: 'resize', id: s.id, cols, rows });
+}
+
+/** Starts (or restarts) the session's console at the terminal's size, and gives it any size the terminal took meanwhile. */
+function requestStart(s, type, extra) {
+  const { cols, rows } = s.term;
+  s.ptySize = { cols, rows };
+  return request(type, { id: s.id, cols, rows, theme: s.startedTheme, ...extra })
+    .then((r) => { if (r?.prompted) s.act.starting = false; s.running = true; s.exitCode = null; syncPtySize(s); renderTileHeader(s); renderSessionTabs(); });
 }
 
 /** The coding agent a command runs (one of state.agents, as the host's Agents.For), or null for any other command. */
@@ -1162,8 +1834,7 @@ function startSession(s) {
   fitTerm(s);
   s.startedTheme = themeName();
   s.act.starting = true;
-  request('start', { id: s.id, cols: s.term.cols, rows: s.term.rows, theme: s.startedTheme })
-    .then((r) => { if (r?.prompted) s.act.starting = false; s.running = true; s.exitCode = null; renderTileHeader(s); renderSessionTabs(); })
+  requestStart(s, 'start')
     .catch((err) => {
       s.running = false;
       s.term.writeln(`\x1b[31mFailed to start "${s.command}" in ${s.directory}\x1b[0m`);
@@ -1182,8 +1853,7 @@ function restartSession(s, { resume = false } = {}) {
   setAsking(s, false);   // the question went with the old screen (and a failed restart writes no output to clear it)
   s.startedTheme = themeName();
   s.act.starting = true;
-  request('restart', { id: s.id, cols: s.term.cols, rows: s.term.rows, theme: s.startedTheme, resume })
-    .then((r) => { if (r?.prompted) s.act.starting = false; s.running = true; s.exitCode = null; renderTileHeader(s); renderSessionTabs(); })
+  requestStart(s, 'restart', { resume })
     .catch((err) => { s.term.writeln(`\x1b[31m${err.message}\x1b[0m`); });
 }
 
@@ -1351,7 +2021,7 @@ function statusClass(s) {
 }
 
 function statusText(s) {
-  if (s.startsOnOpen) return 'Starts when you open it';
+  if (s.startsOnOpen) return 'Starts when you click it';
   return { exited: 'Not running', asking: 'Needs your answer', attention: 'Waiting for you', working: 'Working…', running: 'Idle' }[statusClass(s)];
 }
 
@@ -1412,6 +2082,7 @@ function projectDot(members) {
 
 /** Refreshes one project tab's dot and waiting badge in place (rebuilding the bar would drop keyboard focus). */
 function updateProjectIndicators(projectId) {
+  if (tabbedProjects() && !isPinned(projectId)) updateProjectMoreIndicators();
   const name = document.querySelector(`.project-tab[data-id="${projectId}"] .project-name`);
   if (!name) return;
   const members = state.sessions.filter((x) => groupOf(x) === projectId);
@@ -1455,7 +2126,7 @@ function renderTileHeader(s) {
   const away = serverDown(s);   // a session on a server that can't be reached: why, rather than whether it runs
   s.exitedBadge.hidden = !away && (s.running || !(s.started || s.startsOnOpen));
   s.exitedBadge.textContent = away ? serverStateText(serverOf(s))
-    : s.startsOnOpen ? 'Starts when you open it' : s.exitCode === null ? 'Not running' : `Exited (${s.exitCode})`;
+    : s.startsOnOpen ? 'Starts when you click it' : s.exitCode === null ? 'Not running' : `Exited (${s.exitCode})`;
   renderTileState(s);
   syncControlStatus(s);
 }
@@ -1549,8 +2220,8 @@ function sessionMarks(s) {
   const glyph = a ? AGENT_ICONS[a.id] ?? 'sparkle' : 'terminal';   // an agent with no icon of its own gets a generic one
   return h('span', { class: 'session-marks' },
     h('span', {
-      class: 'session-mark agent' + (a?.color ? ' colored' : ''),
-      style: a?.color && `--agent-dark: ${a.color.dark}; --agent-light: ${a.color.light}`,
+      class: 'session-mark agent' + (agentStyle(a) ? ' colored' : ''),
+      style: agentStyle(a),
       title: a ? `Runs ${a.name}` : `Runs ${(s.command || '').trim().split(' ')[0] || 'a command'}: not a coding agent`,
     }, iconEl(glyph)),
     h('span', {
@@ -1618,7 +2289,7 @@ function surfaceSize() {
 }
 
 const refit = debounce(() => {
-  for (const s of state.sessions) fitTerm(s);
+  for (const s of state.sessions) { fitTerm(s); syncPtySize(s); }
 }, 60);
 
 function layout(instant = false) {
@@ -1819,13 +2490,57 @@ async function pasteClipboard(s) {
  */
 async function pasteClipboardFiles(s) {
   try {
-    let paths = await request('clipboard.files');
-    // A session on a server gets copies there: their paths there are pasted.
-    if (paths?.length && s.server) paths = await request('files.upload', { id: s.id, paths });
-    if (paths?.length) s.term.paste(paths.map((p) => (/\s/.test(p) ? `"${p}"` : p)).join(' '));
+    await pastePaths(s, await request('clipboard.files'));
   } catch (err) {
     toast(err.message, true);
   }
+}
+
+/** Pastes the paths of files on this computer; a session on a server gets copies there, and their paths there are pasted. */
+async function pastePaths(s, paths) {
+  if (paths?.length && s.server) paths = await request('files.upload', { id: s.id, paths });
+  if (paths?.length) s.term.paste(paths.map((p) => (/\s/.test(p) ? `"${p}"` : p)).join(' '));
+}
+
+/** The most a file dropped by its contents may hold (as the host's MaxDroppedBytes). */
+const MAX_DROPPED_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Files dropped on a terminal paste their paths. WebView2 tells the window where they are; WKWebView and WebKitGTK
+ * (and WebView2, for a picture dragged from a browser) give only their contents, which the window saves (see
+ * Desktop.NewDroppedFilePath) to paste the copies' paths. Dropped text is pasted as it is.
+ */
+async function dropOnTerminal(s, dt) {
+  const files = [...(dt.files ?? [])];   // taken now: the drop's data is gone once the event is over
+  if (!files.length) {
+    const text = dt.getData('text/plain');
+    if (text) s.term.paste(text);
+    return;
+  }
+  try {
+    let paths = host.postMessageWithAdditionalObjects ? await requestWithFiles('drop.files', files).catch(() => []) : [];
+    if (paths?.length !== files.length) {
+      paths = [];
+      for (const file of files) {
+        if (file.size > MAX_DROPPED_BYTES) throw new Error(`${file.name} is too big to drop here (over 25 MB).`);
+        paths.push(...await request('drop.save', { name: file.name, data: await fileBase64(file) }));
+      }
+    }
+    await pastePaths(s, paths);
+    if (state.expandedId === s.id) s.term.focus();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+/** A dropped file's contents in base64; fails for a folder, which only WebView2 can drop (by its path). */
+function fileBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ''));
+    reader.onerror = () => reject(new Error(`${file.name} couldn't be read (a folder can't be dropped here).`));
+    reader.readAsDataURL(file);
+  });
 }
 
 document.addEventListener('keydown', (e) => {
@@ -1973,6 +2688,41 @@ function termPathText(word, quoted = false) {
   if (t.length < 2 || t.length > 1024 || t.includes('://') || t.startsWith('-') || /^[\d.]+$/.test(t)) return null;
   if (/^[a-z][\w+.@-]*:/i.test(t) && !/^[a-z]:[\\/]/i.test(t)) return null;
   return quoted || /[\\/]/.test(t) || /\.[A-Za-z][A-Za-z0-9]{0,7}$/.test(t) ? t : null;
+}
+
+/**
+ * Handles OSC 8 hyperlinks (a URL behind other text) in a terminal's output: they open through openUrl like any other
+ * link (the host opens http/https only), and where the text shown isn't the URL itself, the real URL is shown first and
+ * the person confirms. xterm passes only http/https links here (allowNonHttpProtocols: false).
+ */
+function oscLinkHandler(s) {
+  const shownText = (range) => {
+    const buf = s.term.buffer.active;
+    let text = '';
+    for (let y = range.start.y; y <= range.end.y; y++) {
+      const line = buf.getLine(y - 1);
+      if (!line) break;
+      text += line.translateToString(true, y === range.start.y ? range.start.x - 1 : 0, y === range.end.y ? range.end.x : undefined);
+    }
+    return text.trim();
+  };
+  const same = (a, b) => a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
+  return {
+    allowNonHttpProtocols: false,
+    activate(ev, uri, range) {
+      const open = () => request('openUrl', { uri }).catch((err) => toast(err.message, true));
+      const text = shownText(range);
+      if (same(text, uri)) return open();
+      openModal('Open link', h('div', {},
+        h('div', {}, 'The link says:'),
+        h('div', { class: 'link-confirm-url' }, text || '(no text)'),
+        h('div', {}, 'but it opens:'),
+        h('div', { class: 'link-confirm-url' }, uri)), [
+        h('button', { class: 'btn', onclick: closeModal, 'data-autofocus': true }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: () => { closeModal(); open(); } }, 'Open'),
+      ]);
+    },
+  };
 }
 
 /**
@@ -2143,11 +2893,27 @@ function defaultProjectId() {
   return shown.length === 1 ? shown[0].id : null;
 }
 
+/**
+ * When a Claude or Codex session on this computer starts: when its terminal is first shown (''), or as LlamaTree opens ("always",
+ * or "running": if it was running as LlamaTree closed). See SessionInfo.StartWithApp.
+ */
+function startsField(selected) {
+  const select = h('select', {},
+    [['', 'When you first click on its terminal'], ['running', 'When LlamaTree opens, if its terminal was running when LlamaTree last closed'], ['always', 'When LlamaTree opens, always']]
+      .map(([value, label]) => h('option', { value, selected: (selected ?? '') === value }, label)));
+  return {
+    select,
+    el: field('Starts', h('div', { class: 'combo' }, select, h('span', { class: 'combo-btn' }, iconEl('chevD'))),
+      'Started when you first click on its terminal, its start-up context (hooks, the date, Git status) is fresh when you use it. "If its terminal was running" brings back the terminals you were using, even after you sign out or restart the computer.'),
+  };
+}
+
 function showEditDialog(s, focus) {
   const agent = agentOf(s.command);
   const name = h('input', { value: s.name, spellcheck: 'false' });
   const command = h('input', { value: s.command, spellcheck: 'false' });
   const project = projectField(s.project);
+  const starts = agent && !s.server ? startsField(s.startWithApp) : null;   // a server's session runs with its own LlamaTree
   const error = h('div', { class: 'form-error', hidden: true });
   const save = async () => {
     let projectId;
@@ -2158,7 +2924,9 @@ function showEditDialog(s, focus) {
       error.textContent = e.message;
       return;
     }
-    request('updateSession', { id: s.id, name: name.value, command: command.value, project: projectId ?? '' }).catch((e) => toast(e.message, true));
+    request('updateSession', {
+      id: s.id, name: name.value, command: command.value, project: projectId ?? '', ...(starts && { startWithApp: starts.select.value }),
+    }).catch((e) => toast(e.message, true));
     closeModal();
     if (s.running && command.value.trim() !== s.command) toast('Command changes apply the next time the session starts.');
     if (projectId && state.hiddenProjects.has(projectId)) toast(`"${s.name}" moved to a project that's hidden; tick it above to see the session.`);
@@ -2175,6 +2943,7 @@ function showEditDialog(s, focus) {
         placeholder: agent.choosesId ? `Learned from ${agent.name} once it has picked one (--continue)` : `Learned from ${agent.name} once it has started one`,
       }),
       `The conversation this session reopens each time it starts, followed ${agent.follows}. Change it with Resume a different conversation…`),
+    starts?.el,
     error,
   ], [h('button', { class: 'btn', onclick: closeModal }, 'Cancel'), h('button', { class: 'btn primary', onclick: save }, 'Save')]);
   if (focus === 'project') setTimeout(() => project.select.focus(), 30);
@@ -2184,8 +2953,8 @@ function showEditDialog(s, focus) {
 function agentTag(id) {
   const a = agentById(id);
   return h('span', {
-    class: 'conv-agent' + (a?.color ? ' colored' : ''),
-    style: a?.color && `--agent-dark: ${a.color.dark}; --agent-light: ${a.color.light}`,
+    class: 'conv-agent' + (agentStyle(a) ? ' colored' : ''),
+    style: agentStyle(a),
   }, a?.name ?? id);
 }
 
@@ -2235,6 +3004,255 @@ function conversationPicker({ directory = null, agent = null, server = null, onP
   return h('div', { class: 'conv-picker' }, search, list);
 }
 
+// ------------------------------------------------------------------ welcome: no sessions at all
+
+/**
+ * With no sessions (the first run, or after closing them all) the empty grid welcomes you, in one of three ways:
+ * - with the conversations already had with Claude or Codex, latest first: tick any number and open them together, or
+ *   double-click one to open just it;
+ * - with neither agent installed, how to install one (it checks again on its own, so installing one shows up here);
+ * - with an agent but no conversations yet, a nudge to start the first session.
+ * What it shows is read on the way in, again when the window comes back to the front, and again every few seconds while
+ * there's nothing to list (the host may still be starting, or an agent being installed). A full list is kept for a
+ * minute, and only rebuilt when it's read, so redraws keep its ticks and scroll.
+ */
+const welcome = { at: 0, read: false, installed: null, conversations: [], loading: false, retry: 0, picked: new Set(), project: null };
+const WELCOME_SHOWN = 20;
+
+function renderWelcome(on) {
+  if (on) readWelcome();
+  const known = welcome.installed != null;   // until the host first answers, just the title
+  const noAgents = on && known && !welcome.installed.length;
+  const list = on && !noAgents && welcome.conversations.length > 0;
+  $('#empty').classList.toggle('welcome', on);   // shows the LlamaTree mark above the title
+  if (noAgents && $('#emptyAgents').hidden) buildWelcomeAgents();   // on the way in: a server's window knows it's one by then
+  $('#emptyAgents').hidden = !noAgents;
+  $('#emptyRecent').hidden = $('#btnResumeEmpty').hidden = !list;
+  syncWelcomePicked(list);
+  if (!on) return;
+  $('#empty .empty-title').textContent = 'Welcome to LlamaTree';
+  $('#empty .empty-sub').textContent = !known ? ''
+    : noAgents ? 'Each session runs Claude Code or Codex in a folder of yours. Install one of them to get started.'
+    : list ? 'Pick up where you left off: tick the conversations to carry on and open them as sessions, or start a new one.'
+    : 'Start your first session: pick a folder to work in, and it opens there.';
+}
+
+function readWelcome() {
+  const full = welcome.read && welcome.installed?.length && welcome.conversations.length;
+  if (welcome.loading || Date.now() - welcome.at < (full ? 60000 : 4000)) return;
+  welcome.loading = true;
+  Promise.all([request('agents.installed', {}), request('conversations', {})])
+    .then(([installed, conversations]) => {
+      welcome.read = true;
+      welcome.installed = installed || [];
+      welcome.conversations = (conversations || []).filter((c) => c.cwd && agentById(c.agent)).slice(0, WELCOME_SHOWN);
+    })
+    .catch(() => { welcome.read = false; })
+    .finally(() => {
+      welcome.loading = false;
+      welcome.at = Date.now();
+      const ids = new Set(welcome.conversations.map((c) => c.sessionId));
+      for (const id of welcome.picked) if (!ids.has(id)) welcome.picked.delete(id);
+      buildWelcomeList();
+      if (state.sessions.length) return;
+      renderWelcome(true);
+      // Nothing to list yet: look again soon, while the window is on screen (coming back to it looks at once).
+      clearTimeout(welcome.retry);
+      if (!(welcome.read && welcome.installed.length && welcome.conversations.length))
+        welcome.retry = setTimeout(() => { if (!state.sessions.length && !document.hidden) renderWelcome(true); }, 5000);
+    });
+}
+
+window.addEventListener('focus', () => {
+  if (state.sessions.length) return;
+  welcome.at = 0;   // an agent installed, or a conversation had, while the window was in the background
+  renderWelcome(true);
+});
+
+/**
+ * How to install each agent, from their own setup pages (code.claude.com/docs/en/setup and the openai/codex README):
+ * the one-line installer for this computer's system (both kinds in a server's window, which may be either).
+ */
+const AGENT_INSTALLS = [
+  {
+    name: 'Claude Code', guide: 'https://code.claude.com/docs/en/setup',
+    windows: 'irm https://claude.ai/install.ps1 | iex',
+    unix: 'curl -fsSL https://claude.ai/install.sh | bash',
+  },
+  {
+    name: 'Codex', guide: 'https://github.com/openai/codex',
+    windows: 'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"',
+    unix: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+  },
+];
+
+function buildWelcomeAgents() {
+  const kinds = machine ? [['windows', 'Windows (PowerShell)'], ['unix', 'macOS or Linux']]
+    : [IS_MAC || IS_LINUX ? ['unix', 'In a terminal'] : ['windows', 'In PowerShell']];
+  const copy = (text, btn) => navigator.clipboard.writeText(text)
+    .then(() => { btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); })
+    .catch((e) => toast(e.message, true));
+  $('#emptyAgents').replaceChildren(
+    h('div', { class: 'agents-missing' }, machine
+      ? 'Neither Claude Code nor Codex is installed on this server, so its sessions have nothing to run.'
+      : 'Neither Claude Code nor Codex is installed on this computer, so sessions have nothing to run.'),
+    ...AGENT_INSTALLS.map((a) => h('div', { class: 'agent-install' },
+      h('div', { class: 'agent-install-head' }, h('b', {}, a.name),
+        h('a', { href: '#', onclick: (e) => { e.preventDefault(); request('openUrl', { uri: a.guide }).catch((err) => toast(err.message, true)); } }, 'Install guide')),
+      kinds.map(([kind, label]) => {
+        const btn = h('button', { class: 'btn', onclick: () => copy(a[kind], btn) }, 'Copy');
+        return h('div', { class: 'agent-install-cmd' },
+          h('div', { class: 'agent-install-label' }, label),
+          h('div', { class: 'agent-install-line' }, h('code', {}, a[kind]), btn));
+      }))),
+    h('div', { class: 'agents-again' }, 'This page checks again by itself once one is installed. ',
+      h('button', { class: 'btn', onclick: () => { welcome.at = 0; renderWelcome(!state.sessions.length); } }, 'Check again')));
+}
+
+function buildWelcomeList() {
+  $('#emptyRecent').replaceChildren(h('div', { class: 'conv-list' }, welcome.conversations.map((c) => {
+    const prompt = c.lastPrompt && c.lastPrompt !== c.firstPrompt ? c.lastPrompt : c.firstPrompt;
+    const box = h('input', { type: 'checkbox', tabindex: '-1' });
+    const toggle = () => {
+      if (welcome.picked.has(c.sessionId)) welcome.picked.delete(c.sessionId); else welcome.picked.add(c.sessionId);
+      syncWelcomePicked(true);
+    };
+    return h('div', {
+      class: 'conv-item welcome-item', tabindex: '0', 'data-id': c.sessionId,
+      title: `${c.title}\n${c.cwd}\nSession ${c.sessionId}\nClick to tick it; double-click to open just this one`,
+      onclick: toggle,
+      ondblclick: () => resumeAsSessions([c]),
+      onkeydown: (e) => {
+        if (e.key === ' ') { e.preventDefault(); toggle(); }
+        else if (e.key === 'Enter') openWelcomePicked(c);
+      },
+    },
+    box,
+    h('div', { class: 'welcome-text' },
+      h('div', { class: 'conv-title' }, h('span', {}, c.title), agentTag(c.agent),
+        Date.now() - new Date(c.modified) < 3 * 60000 && h('span', { class: 'conv-open', title: 'Updated in the last few minutes — it may still be running in another terminal' }, 'active now')),
+      h('div', { class: 'conv-meta' }, [c.cwd, c.branch && 'on ' + c.branch, relTime(c.modified)].filter(Boolean).join('  ·  ')),
+      prompt && h('div', { class: 'conv-prompt' }, prompt)));
+  })));
+  buildWelcomeProject();
+}
+
+/**
+ * The project the sessions go into, in one box like the New Session dialog's Command: pick from its drop-down (the
+ * arrow, or Alt+Down) or type a name, and a name that isn't a project yet makes one. The drop-down also suggests the
+ * ticked conversations' folder names as new projects. Empty is no project. resolve() gives the project's id (creating
+ * it first if needed), or null.
+ */
+function buildWelcomeProject() {
+  const initial = state.projects.find((p) => p.id === defaultProjectId());
+  const input = h('input', {
+    value: initial?.name ?? '', spellcheck: 'false', maxlength: '60',
+    placeholder: 'No project: choose one, or type a name for a new one',
+  });
+  const note = h('div', { class: 'help' });
+  const byName = (name) => state.projects.find((p) => p.name.toLowerCase() === name.toLowerCase());
+  const describe = () => {
+    const name = input.value.trim();
+    note.textContent = !name ? `No project: the sessions show under ${UNKNOWN_NAME}.`
+      : byName(name) ? `Adds the sessions to ${byName(name).name}.`
+      : `Makes a new project, "${name}", for the sessions.`;
+  };
+  const choose = (name) => { input.value = name; describe(); input.focus(); };
+  const suggestions = () => {
+    const r = input.getBoundingClientRect();
+    const current = input.value.trim().toLowerCase();
+    const folders = [...new Set(welcome.conversations.filter((c) => welcome.picked.has(c.sessionId)).map((c) => leafName(c.cwd)))]
+      .filter((f) => !byName(f));
+    showMenu(r.left, r.bottom + 2, [
+      { label: `No project (shown under ${UNKNOWN_NAME})`, checked: !current, action: () => choose('') },
+      state.projects.length && '-',
+      ...state.projects.map((p) => ({ label: p.name, checked: p.name.toLowerCase() === current, action: () => choose(p.name) })),
+      folders.length && '-',
+      folders.length && { header: 'New project' },
+      ...folders.map((f) => ({ label: f, checked: f.toLowerCase() === current, action: () => choose(f) })),
+    ]);
+    openMenuEl.style.minWidth = r.width + 'px';
+  };
+  input.addEventListener('input', describe);
+  input.addEventListener('keydown', (e) => {
+    if (e.altKey && e.key === 'ArrowDown') { e.preventDefault(); suggestions(); }
+    else if (e.key === 'Enter') openWelcomePicked();
+  });
+  const arrow = h('button', { class: 'combo-btn', title: 'Projects (Alt+Down)', tabindex: '-1', onclick: suggestions }, iconEl('chevD'));
+  let created = null;   // so retrying after a failed add doesn't make the project twice
+  welcome.project = {
+    async resolve() {
+      const name = input.value.trim();
+      if (!name) return null;
+      const existing = byName(name);
+      if (existing) return existing.id;
+      if (created?.name !== name) created = { name, id: await request('projects.add', { name }) };
+      return created.id;
+    },
+  };
+  describe();
+  $('#emptyProject').replaceChildren(field('Project', h('div', { class: 'combo' }, input, arrow)), note);
+}
+
+/**
+ * The ticks, and the Open button that counts them (the main button while anything is ticked, else New Session is).
+ * The project box and the button are always there, disabled until something is ticked, so ticking moves nothing.
+ */
+function syncWelcomePicked(shown) {
+  for (const row of $('#emptyRecent').querySelectorAll('.welcome-item')) {
+    const on = welcome.picked.has(row.dataset.id);
+    row.classList.toggle('selected', on);
+    row.querySelector('input').checked = on;
+  }
+  const n = shown ? welcome.picked.size : 0;
+  $('#emptyProject').hidden = !shown;
+  const open = $('#btnOpenPicked');
+  open.hidden = !shown;
+  open.disabled = !n;
+  open.textContent = n === 1 ? 'Open 1 session' : n ? `Open ${n} sessions` : 'Open sessions';
+  $('#btnAddEmpty').classList.toggle('primary', !n);
+}
+
+/** Opens the ticked conversations; Enter on a row with nothing ticked opens that row's. */
+function openWelcomePicked(fallback = null) {
+  const list = welcome.conversations.filter((c) => welcome.picked.has(c.sessionId));
+  if (!list.length && fallback) list.push(fallback);
+  if (list.length) resumeAsSessions(list);
+}
+
+/**
+ * A session for each saved conversation, in its folder, with the command last used for its agent (else the plain one),
+ * in the project chosen under the list.
+ */
+async function resumeAsSessions(convs) {
+  const last = store.get('lastCommand', null);
+  let projectId;
+  try { projectId = welcome.project ? await welcome.project.resolve() : defaultProjectId(); }
+  catch (e) { toast(e.message, true); welcome.project?.newName.focus(); return; }
+  const project = projectId ?? '';
+  const taken = new Set(state.sessions.map((x) => x.name.toLowerCase()));
+  const unique = (base) => {
+    let name = base;
+    for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${base} ${n}`;
+    taken.add(name.toLowerCase());
+    return name;
+  };
+  const sessions = convs.map((c) => ({
+    directory: c.cwd, name: unique(leafName(c.cwd)), conversation: c.sessionId, project,
+    command: last && agentOf(last)?.id === c.agent ? ownOptionsOnly(last) : agentById(c.agent).programs[0],
+  }));
+  const before = new Set(state.sessions.map((x) => x.id));
+  try {
+    await request('addSessions', { sessions });
+    welcome.picked.clear();
+    buildWelcomeProject();   // fresh for next time: the project just made is now one to pick
+    if (projectId && state.hiddenProjects.has(projectId)) toggleProject(projectId);   // on screen even if its project was hidden
+    store.set('lastDir', convs[0].cwd);
+    const added = state.sessions.filter((x) => !before.has(x.id));
+    if (added.length === 1) expand(added[0].id);   // several stay side by side in the grid
+  } catch (e) { toast(e.message, true); }
+}
+
 /**
  * from: a panel's button { directory, name, project, prompt }: the dialog opens filled in, and the session's first start
  * is a new conversation beginning with the (editable) prompt.
@@ -2265,6 +3283,7 @@ function showAddDialog(mode = 'new', from = null) {
     browserHost.hidden = true;
     wtHost.hidden = true;
     setPlaceholder();
+    showStarts();
     if (mode === 'resume') setMode('resume');   // that computer's conversations
     else loadWorktrees();
   };
@@ -2278,6 +3297,9 @@ function showAddDialog(mode = 'new', from = null) {
   const project = projectField(from ? from.project : defaultProjectId());
   const firstPrompt = from?.prompt != null && h('textarea', { class: 'first-prompt', spellcheck: 'false' }, from.prompt);
   const commandNote = h('span');
+  // Only a Claude or Codex session on this computer can start with LlamaTree (a server's runs with its own).
+  const starts = startsField(null);
+  const showStarts = () => { starts.el.hidden = !agentOf(command.value.trim() || DEFAULT_COMMAND) || !!serverValue(); };
   let picked = null;   // the saved conversation chosen in "Resume existing conversation"
 
   const loadWorktrees = debounce(async () => {
@@ -2328,13 +3350,14 @@ function showAddDialog(mode = 'new', from = null) {
     const d = dir.value.trim();
     if (mode === 'resume' ? !picked : !d) { error.hidden = false; error.textContent = mode === 'resume' ? 'Choose a conversation.' : 'Choose a folder.'; return; }
     const cmd = command.value.trim() || DEFAULT_COMMAND;
+    const startWithApp = starts.el.hidden ? undefined : starts.select.value;
     const list = [{
       directory: d, name: name.value.trim(), command: cmd, prompt: firstPrompt ? firstPrompt.value.trim() : undefined,
-      conversation: mode === 'resume' ? picked?.sessionId : undefined,
+      conversation: mode === 'resume' ? picked?.sessionId : undefined, startWithApp,
     }];
     if (mode === 'new' && !wtHost.hidden && wtHost.dataset.for === d) {   // only ticks made for this folder
       for (const cb of wtHost.querySelectorAll('input[type=checkbox]:checked')) {
-        list.push({ directory: cb.dataset.path, name: leafName(cb.dataset.path), command: cmd });
+        list.push({ directory: cb.dataset.path, name: leafName(cb.dataset.path), command: cmd, startWithApp });
       }
     }
     const before = new Set(state.sessions.map((x) => x.id));
@@ -2411,6 +3434,7 @@ function showAddDialog(mode = 'new', from = null) {
     else if (hasOption(agent.continue, cmd)) text = 'Carries on the folder\'s latest conversation, then keeps that one: it reopens each time the session starts.';
     else text = `${agent.choosesId ? 'Gets a conversation of its own' : 'Starts a new conversation'} and reopens it each time the session or the app restarts, following it ${agent.follows}.`;
     commandNote.textContent = text;
+    showStarts();
   }
   command.addEventListener('input', updateNote);
   // Each agent's plain command to pick from, dropped down from the box like a combo box's list (the arrow, or Alt+Down
@@ -2438,6 +3462,7 @@ function showAddDialog(mode = 'new', from = null) {
     firstPrompt && field('First prompt', firstPrompt, 'From the panel. Starts a new conversation in this session; edit it first if you like.'),
     field('Command', h('div', { class: 'combo' }, command, suggest), commandNote),
     project.el,
+    starts.el,
     wtHost,
     error,
   ], [h('button', { class: 'btn', onclick: closeModal }, 'Cancel'), h('button', { class: 'btn primary', onclick: add }, firstPrompt ? 'Start session' : 'Add')]);
@@ -2629,7 +3654,7 @@ function applySideEmpty() {
   const btn = $('#btnGit');
   btn.classList.toggle('active', state.gitVisible && !empty);
   const git = anyGitTab();
-  btn.innerHTML = icon(git ? 'git' : 'panel');
+  btn.innerHTML = icon('panel');
   btn.title = git ? 'Git and the side panel (Ctrl+Shift+G)'
     : empty ? 'Side panel: nothing open (click for its options)' : 'Side panel: panels and plugins (Ctrl+Shift+G)';
   $('#gitRefresh').hidden = !git;
@@ -3305,7 +4330,52 @@ function gitMoreMenu(s, x, y) {
     info && !info.pr && { label: 'New Pull Request', action: () => request('openUrl', { uri: info.newUrl }) },
     '-',
     { label: 'Refresh', action: () => { request('git.refresh', { id: s.id }).catch((e) => toast(e.message, true)); ensurePullRequest(s, true); } },
+    s.git.trust && '-',
+    // The repository's own settings that can run programs (see trustBanner): trusted here, and trust taken back here.
+    s.git.trust?.trusted && { label: 'Stop Trusting This Repository’s Settings', action: () => setRepoTrust(s, false) },
+    s.git.trust && !s.git.trust.trusted && { label: 'Trust This Repository’s Settings…', action: () => askRepoTrust(s) },
   ]);
+}
+
+/** Repositories whose question was put off with Not now, this run, by repository and settings: their settings stay off. */
+const trustPutOff = new Set();
+
+const trustKeyName = (k) => (k.where === 'hook' ? `hook ${k.key}` : k.key);
+
+/**
+ * The question above Git Changes for a repository whose own settings (its .git/config, a file it includes, its hooks)
+ * can run programs, until it's trusted. Until then the app turns its filters off for its own git calls and won't fetch,
+ * pull, push, commit, stage, undo or switch branches there; asking for one of those shows the question again.
+ */
+function trustBanner(s) {
+  const t = s.git?.trust;
+  if (!t || t.trusted || (trustPutOff.has(`${t.repo}|${t.hash}`) && !s.trustAsked)) return null;
+  const names = [...new Set(t.keys.map(trustKeyName))];
+  const short = names.length <= 4 ? names.join(', ') : `${names.slice(0, 4).join(', ')} and ${names.length - 4} more`;
+  const detail = t.keys.map((k) => (k.where === 'hook' ? `hook ${k.key}` : `${k.key} = ${k.value ?? ''}`) + `  (${k.where})`).join('\n');
+  return h('div', { class: 'infobar trust-bar', title: `${detail}\n\nUntil you trust it, LlamaTree turns its filters off and won't run commands that would use the rest.` },
+    h('span', { class: 'msg' }, `This repository's own settings can run programs: ${short}. Trust it?`),
+    h('button', { class: 'btn primary', onclick: () => setRepoTrust(s, true) }, 'Trust'),
+    h('button', { class: 'btn', onclick: () => { trustPutOff.add(`${t.repo}|${t.hash}`); s.trustAsked = false; renderGit(); } }, 'Not now'));
+}
+
+/** Shows the question again (a command was refused for it, or the person asked from the menu). */
+function askRepoTrust(s) {
+  if (!s) return;
+  s.trustAsked = true;
+  if (currentSession() === s) renderGit();
+}
+
+async function setRepoTrust(s, trusted) {
+  try {
+    await request('git.trust', { id: s.id, trusted, hash: s.git?.trust?.hash });
+    s.trustAsked = false;
+    s.info = { text: trusted ? 'Trusted. This repository’s own settings apply again; try the command again if one was refused.'
+      : 'No longer trusted. This repository’s filters are off again, and commands that would use its other settings ask first.' };
+  } catch (e) {
+    s.info = { text: e.message, error: true };
+  }
+  renderGit();
 }
 
 /** Runs fetch, pull or push for a session, one at a time; the result goes to the info bar. */
@@ -3534,6 +4604,7 @@ function renderChanges(s, body) {
 
   const before = branchLine(s);
   const after = [
+    trustBanner(s),
     s.info && h('div', { class: 'infobar' + (s.info.error ? ' error' : '') }, h('span', { class: 'msg' }, s.info.text),
       h('button', { class: 'icon-btn small', title: 'Dismiss', onclick: () => { s.info = null; renderGit(); } }, iconEl('close'))),
     scroll,
@@ -3729,6 +4800,13 @@ function fileSection(s, kind, title, files) {
         '-',
         { label: machine || s.server ? 'Browse the folder' : `Open in ${FILE_MANAGER}`, action: () => request('git.openFolder', { id: s.id, path: folder }) },
       ]);
+    },
+    // A folder stages (or unstages) everything changed under it, as Visual Studio's does.
+    (folder, folderFiles) => {
+      const n = folderFiles.length, what = `${n} file${n === 1 ? '' : 's'} in ${folder.replaceAll('/', '\\')}`;
+      return kind === 'staged'
+        ? h('button', { class: 'icon-btn small', title: `Unstage ${what}`, onclick: (e) => { e.stopPropagation(); gitOp(s, 'git.unstage', folderFiles.map((f) => f.path)); } }, iconEl('minus'))
+        : h('button', { class: 'icon-btn small', title: `Stage ${what}`, onclick: (e) => { e.stopPropagation(); gitOp(s, 'git.stage', folderFiles.map((f) => f.path)); } }, iconEl('plus'));
     })];
 }
 
@@ -3785,7 +4863,8 @@ function confirmUndo(s, kind, files, folder) {
 
 const joinPath = (root, rel) => root.replace(/[\\/]+$/, '') + '\\' + rel.replaceAll('/', '\\');
 
-function treeRows(files, depth, scope, s, onOpen, rowAction, onMenu, onFolderMenu) {
+/** The rows of a changed-files tree. folderAction(folder, files), if given, makes a folder's hover button (Stage, Unstage). */
+function treeRows(files, depth, scope, s, onOpen, rowAction, onMenu, onFolderMenu, folderAction) {
   const root = { dirs: new Map(), files: [] };
   for (const f of files) {
     const parts = f.path.split('/');
@@ -3817,7 +4896,8 @@ function treeRows(files, depth, scope, s, onOpen, rowAction, onMenu, onFolderMen
         class: 'row', style: `padding-left:${d * 12}px`, title: full,
         onclick: () => { isCollapsed ? s.collapsed.delete(key) : s.collapsed.add(key); renderGit(); },
         oncontextmenu: (e) => { e.preventDefault(); onFolderMenu?.(full, filesUnder(folderNode), e); },
-      }, h('span', { class: 'chev', html: icon(isCollapsed ? 'chevR' : 'chevD') }), iconEl('folder', 'ico-folder'), h('span', { class: 'label' }, name)));
+      }, h('span', { class: 'chev', html: icon(isCollapsed ? 'chevR' : 'chevD') }), iconEl('folder', 'ico-folder'), h('span', { class: 'label' }, name),
+      folderAction && h('span', { class: 'row-actions' }, folderAction(full, filesUnder(folderNode)))));
       if (!isCollapsed) walk(child, d + 1, full + '/');
     }
     const fl = [...node.files].sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: 'base' }));
@@ -4265,18 +5345,47 @@ function panelButton(p, b) {
     showAddDialog('new', { directory: owner?.directory, name: b.name, project: owner?.project ?? null, prompt: b.prompt });
     return;
   }
-  typeHere(b.prompt);
+  typeHere(b.prompt, p);
 }
 
-/** Types text into the session you're looking at, for you to finish or send (never sent from here). */
-function typeHere(text) {
+/**
+ * Text to type into a terminal with no keys of its own: control characters (Esc and the sequences it starts, Enter,
+ * Ctrl+C, C1 codes) dropped, line endings made \n, and only the characters in keep (such as '\n') left in.
+ */
+function typeable(text, keep = '') {
+  return [...(text ?? '').replace(/\r\n?/g, '\n')].filter((c) => !/[\u0000-\u001f\u007f-\u009f]/.test(c) || keep.includes(c)).join('');
+}
+
+/**
+ * Types text into the session you're looking at, for you to finish or send (never sent from here). From a panel's
+ * button (panel given), you're asked first when it would go to a session other than the panel's own, or is more than
+ * one line (in a plain shell, each line could run as it's typed).
+ */
+function typeHere(text, panel) {
   const s = currentSession();
   if (!s) return;
   if (s.startsOnOpen) { expand(s.id); toast(`Starting "${s.name}". Try again once Claude is up.`); return; }
   if (!s.running) { toast(`"${s.name}" isn't running. Start it, then try again.`, true); return; }
-  if (state.expandedId !== s.id) expand(s.id);
-  s.term.paste(text);
-  setTimeout(() => s.term.focus(), 40);
+  text = typeable(text, '\n');
+  if (!text) return;
+  const type = () => {
+    if (state.byId.get(s.id) !== s || !s.running) { toast(`"${s.name}" isn't running any more.`, true); return; }
+    if (state.expandedId !== s.id) expand(s.id);
+    s.term.paste(text);   // bracketed when the program asked for it, and never followed by Enter
+    setTimeout(() => s.term.focus(), 40);
+  };
+  const other = panel && panel.owner !== s.id;
+  const lines = text.split('\n').length;
+  if (!panel || (!other && lines === 1)) { type(); return; }
+  const owner = state.byId.get(panel.owner);
+  openModal(`Type into “${s.name}”?`, h('div', {},
+    other && h('p', {}, `This button is from the “${panel.title}” panel of ${owner ? `“${owner.name}”` : 'a removed session'}, not of “${s.name}”, which it would type into.`),
+    lines > 1 && h('p', {}, `It is ${lines} lines. In a plain shell, each line could run as it is typed.`),
+    h('p', { class: 'dim' }, 'LlamaTree doesn’t press Enter: read it, then send it yourself.'),
+    h('pre', { class: 'spawn-prompt' }, text)), [
+    h('button', { class: 'btn', 'data-autofocus': true, onclick: closeModal }, 'Cancel'),
+    h('button', { class: 'btn primary', onclick: () => { closeModal(); type(); } }, `Type into “${s.name}”`),
+  ]);
 }
 
 /** Every item in a panel, wherever it sits. */
@@ -4351,20 +5460,25 @@ function showExampleSkill() {
   $('#modalHost .modal').classList.add('wide');
 }
 
-/** Refresh asks the session that made the panel to rebuild it (the prompt it gave, e.g. the slash command). */
+/**
+ * Refresh asks the session that made the panel to rebuild it: its slash command, typed as a paste (never as keys) and
+ * sent. The host accepts only a one-line slash command; this checks again, so nothing else is ever sent with Enter.
+ */
 function refreshPanel(p) {
   const owner = state.byId.get(p.owner);
   if (owner?.startsOnOpen) { startSession(owner); toast(`Starting "${owner.name}". Refresh again once Claude is up.`); return; }
   if (!owner?.running) { toast(`"${owner?.name ?? 'Its session'}" isn't running, so it can't refresh this panel.`, true); return; }
-  post({ type: 'input', id: owner.id, data: p.refresh });
-  setTimeout(() => pressEnter(owner), 150);
+  const command = typeable(p.refresh);
+  if (command !== p.refresh || !/^\/[A-Za-z0-9][A-Za-z0-9_:.-]*( .*)?$/.test(command)) { toast(`This panel's refresh isn't a slash command, so it wasn't sent.`, true); return; }
+  owner.term.paste(command);
+  enterAfterTyping(owner);
   toast(`Asked ${owner.name} to refresh "${p.title}".`);
 }
 
 /** A first prompt that couldn't go on Claude's command line: typed once Claude is up, for you to send. */
 function typePrompt(id, text) {
   const s = state.byId.get(id);
-  if (s?.running && text) s.term.paste(text);
+  if (s?.running && text) s.term.paste(typeable(text, '\n\t'));
 }
 
 function panelMarkdown(p) {
@@ -4539,7 +5653,7 @@ function tabShown(t) {
   // A Project view is shown on its own: neither a session's tabs with it, nor it with a session's.
   if (isProjectTab(t)) return state.projectViewOf === t.projectId;
   if (state.projectViewOf != null) return false;
-  if (isPluginTab(t) || isPermsTab(t)) return true;   // a plugin, or Permissions, belongs to no project
+  if (isPluginTab(t) || isPermsTab(t) || isGalleryTab(t)) return true;   // a plugin, Permissions or Get plugins belongs to no project
   const cur = currentSession();
   const s = state.byId.get(t.sessionId);
   return !cur || !s || groupOf(s) === groupOf(cur);
@@ -4593,15 +5707,17 @@ function showDocs() {
     if (isConvTab(prev)) prev.scrollTop = $('#convBody').scrollTop;
     else if (isProjectTab(prev)) prev.scrollTop = $('#projectBody').scrollTop;
     else if (isPermsTab(prev)) prev.scrollTop = $('#permsBody').scrollTop;
+    else if (isGalleryTab(prev)) prev.scrollTop = $('#galleryBody').scrollTop;
     else if (!isPluginTab(prev) && !isPermsTab(prev) && diffEditor) prev.viewState = diffEditor.saveViewState();
   }
   docs.shown = tab;
   const split = !!tab && tab === sideTab();
-  $('#diffDoc').hidden = !tab || isConvTab(tab) || isProjectTab(tab) || isPluginTab(tab) || isPermsTab(tab);
+  $('#diffDoc').hidden = !tab || isConvTab(tab) || isProjectTab(tab) || isPluginTab(tab) || isPermsTab(tab) || isGalleryTab(tab);
   $('#convDoc').hidden = !isConvTab(tab);
   $('#projectDoc').hidden = !isProjectTab(tab);
   $('#pluginDoc').hidden = !isPluginTab(tab);
   $('#permsDoc').hidden = !isPermsTab(tab);
+  $('#galleryDoc').hidden = !isGalleryTab(tab);
   $('#termPane').classList.toggle('behind', !!tab && !split);
   const area = $('#docArea');
   for (const dir in DOCK_SIDES) area.classList.toggle('split-' + dir, split && docs.dir === dir);
@@ -4613,6 +5729,7 @@ function showDocs() {
     else if (isProjectTab(tab)) showProjectView(tab);
     else if (isPluginTab(tab)) showPlugin(tab);
     else if (isPermsTab(tab)) showPermissions(tab);
+    else if (isGalleryTab(tab)) showGallery(tab);
     else loadDiff(tab);
   } else if (!tab) {
     diffState.seq++;
@@ -4644,6 +5761,7 @@ function closeDoc(key) {
   const wasActive = docs.active === key;
   const wasSide = docs.side === key;
   if (isPluginTab(docs.tabs[i])) { closePluginFrame(docs.tabs[i].pluginId); seatPanelPlugins(); }   // one opened wide goes back to the side panel
+  if (isGalleryTab(docs.tabs[i]) && themePreview) { themePreview = null; applyTheme(); }   // a theme tried on goes with it
   docs.tabs.splice(i, 1);
   // The nearest shown tab after it, else before it, that `ok` accepts.
   const near = (ok) => docs.tabs.slice(i).find((t) => tabShown(t) && ok(t)) || docs.tabs.slice(0, i).reverse().find((t) => tabShown(t) && ok(t));
@@ -4657,7 +5775,7 @@ function closeDoc(key) {
   } else {
     renderDocTabs();
   }
-  if (!docs.tabs.some((t) => !isConvTab(t) && !isProjectTab(t) && !isPluginTab(t) && !isPermsTab(t))) disposeDiffModels();
+  if (!docs.tabs.some((t) => !isConvTab(t) && !isProjectTab(t) && !isPluginTab(t) && !isPermsTab(t) && !isGalleryTab(t))) disposeDiffModels();
 }
 
 function cycleDoc(delta) {
@@ -4714,6 +5832,17 @@ function renderDocTabs() {
         onmousedown: (e) => { if (e.button === 1) e.preventDefault(); },
         onauxclick: (e) => { if (e.button === 1) closeDoc(t.key); },
       }, iconEl('shield'), h('span', { class: 'doc-title' }, 'Permissions'),
+      h('button', { class: 'icon-btn small', title: 'Close (Ctrl+W)', onclick: () => closeDoc(t.key) }, iconEl('close')));
+    }
+    if (isGalleryTab(t)) {
+      return h('div', {
+        class: 'doc-tab' + (docs.active === t.key ? ' active' : ''),
+        'data-id': t.key,
+        title: 'Get plugins and themes: from the LlamaTree-Plugins and LlamaTree-Themes repositories',
+        onclick: (e) => { if (!e.target.closest('button')) activateDoc(t.key); },
+        onmousedown: (e) => { if (e.button === 1) e.preventDefault(); },
+        onauxclick: (e) => { if (e.button === 1) closeDoc(t.key); },
+      }, iconEl('bag'), h('span', { class: 'doc-title' }, gallery.by === 'themes' ? 'Get themes' : 'Get plugins'),
       h('button', { class: 'icon-btn small', title: 'Close (Ctrl+W)', onclick: () => closeDoc(t.key) }, iconEl('close')));
     }
     if (isConvTab(t)) {
@@ -5543,28 +6672,63 @@ function startSessionIn(row) {
 
 /**
  * Removing a worktree: its sessions go first (a process with the folder as its working directory would keep it), then
- * git removes it, never forced, so one with uncommitted changes is refused and left as it is. The branch stays.
+ * git removes it, never forced, so one with uncommitted changes is refused and left as it is. Git deletes the ignored
+ * files in it all the same (a .env, local settings, build output), so those are listed, and Remove waits for a tick
+ * saying they may go. The branch stays.
  */
 function confirmRemoveWorktree(row) {
   const tab = activeTab();
   const projectId = tab.projectId;
   const repo = row.repo;
-  const busy = row.changes > 0;
+  let busy = row.changes > 0;
+  let ignored = [];
   const error = h('div', { class: 'form-error', hidden: true });
-  const remove = h('button', { class: 'btn danger primary', disabled: busy }, 'Remove worktree');
+  const remove = h('button', { class: 'btn danger primary', disabled: true }, 'Remove worktree');
+  const agree = h('input', { type: 'checkbox' });
+  const ignoredBox = h('div', { hidden: true });
+  const busyNote = h('div', { class: 'form-error', hidden: !busy });
+  const checking = h('div', { class: 'dim', hidden: row.missing }, 'Checking the folder for ignored files…');
+  const ready = () => { remove.disabled = busy || (ignored.length > 0 && !agree.checked); };
+  agree.addEventListener('change', ready);
+  const showBusy = (n) => {
+    busy = n > 0;
+    busyNote.hidden = !busy;
+    busyNote.textContent = `${n} file${n === 1 ? ' is' : 's are'} changed or new in this worktree and would be lost. Commit or undo ${n === 1 ? 'it' : 'them'} first.`;
+  };
+  if (busy) showBusy(row.changes);
+  if (row.missing) ready();
+  else {
+    request('worktree.contents', { root: repo.root, path: row.path, ...onServer(repo.server) }).then((c) => {
+      showBusy(c.changes);
+      ignored = c.ignored ?? [];
+      if (ignored.length) {
+        const shown = 8;
+        ignoredBox.replaceChildren(
+          h('div', { class: 'form-error' }, `${ignored.length} ignored file${ignored.length === 1 ? ' or folder' : 's or folders'} in it will be deleted too. Git doesn't keep them, so they can't be got back:`),
+          h('ul', { class: 'pv-files' }, ignored.slice(0, shown).map((f) => h('li', {}, f)),
+            ignored.length > shown && h('li', { class: 'dim' }, `and ${ignored.length - shown} more`)),
+          h('label', { class: 'check-field' }, agree, 'Delete these ignored files with the worktree'));
+        ignoredBox.hidden = false;
+      }
+    }, () => {
+      // An older server doesn't answer this; its removal deletes ignored files without asking, as it always did.
+      ignoredBox.replaceChildren(h('div', { class: 'dim' }, 'Couldn\'t check the folder for ignored files; any there are deleted with it.'));
+      ignoredBox.hidden = false;
+    }).finally(() => { checking.hidden = true; ready(); });
+  }
   remove.addEventListener('click', async () => {
     remove.disabled = true;
     remove.textContent = 'Removing…';
     try {
       for (const s of row.sessions) await request('removeSession', { id: s.id });
-      await request('worktree.remove', { root: repo.root, path: row.path, ...onServer(repo.server) });
+      await request('worktree.remove', { root: repo.root, path: row.path, deleteIgnored: ignored.length > 0 && agree.checked, ...onServer(repo.server) });
       closeModal();
       toast(`Removed the worktree at ${row.path}. The branch ${row.branch ?? ''} stays.`);
     } catch (e) {
       error.hidden = false;
       error.textContent = e.message;
-      remove.disabled = false;
       remove.textContent = 'Remove worktree';
+      ready();
     }
     projectView.open.delete(normPath(row.path));
     const t = activeTab();
@@ -5574,7 +6738,9 @@ function confirmRemoveWorktree(row) {
     h('div', {}, `Remove the worktree at ${row.path}?`),
     h('div', { class: 'dim' }, `The branch ${row.branch ?? ''} stays in the repository; only the folder goes.`),
     row.sessions.length > 0 && h('div', {}, `${row.sessions.length === 1 ? 'This session is' : 'These sessions are'} in it and will be removed first: ${row.sessions.map((s) => `"${s.name}"`).join(', ')}.`),
-    busy && h('div', { class: 'form-error' }, `${row.changes} file${row.changes === 1 ? ' is' : 's are'} changed or new in this worktree and would be lost. Commit or undo ${row.changes === 1 ? 'it' : 'them'} first.`),
+    busyNote,
+    checking,
+    ignoredBox,
     error,
   ], [h('button', { class: 'btn', onclick: closeModal, 'data-autofocus': true }, 'Cancel'), remove]);
 }
@@ -5714,7 +6880,13 @@ function contrast(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
+/** Puts the accent colour on the page, and draws a theme's own dots again in it (and in the theme's colours). */
 function applyAccent() {
+  accentColours();
+  themeDots();
+}
+
+function accentColours() {
   const root = document.documentElement.style;
   const own = themeLook()?.accent;   // a theme's own accent, or the one a monochrome theme built
   if (own) {
@@ -5827,11 +6999,13 @@ function applyTheme(before = null) {
   const look = themeLook();
   store.set('themeLook', look);   // so it paints at once on the next start
   markTheme(look);
+  syncVeilSliders();   // the new theme's amount (its own, or yours for it)
   for (const s of state.sessions) lightCycle(s, look?.cursor === 'light-cycle');   // sets the terminal's colours either way
   if (window.monaco) monaco.editor.setTheme(diffTheme(look));
   applyAccent();
   rainColours();   // the rain takes the accent, which is only now on the page
-  for (const f of pluginFrames.values()) postPluginTheme(f.frame);
+  if (floor.frame) floorSend({ type: 'info', info: floorInfo() });   // and so does a theme's own floor
+  for (const f of pluginFrames.values()) if (f.ready) postPluginTheme(f.frame);   // one still loading gets it on its load
   // A theme's window and title bar take its own background; Light and Dark keep Windows' own.
   post({ type: 'theme', light: isLight(), background: look?.colors.chrome ?? null });
   if (before && before !== name) offerClaudeRestart();
@@ -5854,6 +7028,8 @@ function offerClaudeRestart() {
 
 function setThemePref(pref) {
   const before = themeName();
+  floor.failed = null;   // choosing a theme again tries its floor again
+  themePreview = null;
   theme.pref = pref;
   store.set('theme', pref);
   applyTheme(before);
@@ -5866,6 +7042,159 @@ function setThemePref(pref) {
 
 const NOTICES_EVERY_MS = 30 * 60 * 1000;
 const notices = { list: [], shown: null, waiting: false, dismissed: new Set(store.get('dismissedNotices', [])), tips: store.get('showTips', true) };
+
+// ---- Counting users -------------------------------------------------------------------------------------------------
+// Whether you've said yes to being counted (count.state and count.set in MainForm, TelemetryService behind them). The
+// host keeps the answer and makes the hourly request; the page asks the question once, along the top, until it's
+// answered either way, and offers the switch in the version menu.
+
+const count = { enabled: undefined };   // undefined: not read yet; null: not asked yet; true or false: your answer
+const COUNT_SENT = "Once an hour while it's open, the app makes one request to api.llamatree.dev that says six things: a random id made when you said yes, the app's version, the operating system and its version, and how many projects and sessions are open. Only how many: never their names, their folders or anything in them, and nothing that says who you are. The id stays the same from one request to the next (that's how a copy counts once), so the count shows which hours this copy was open; like any server, ours also sees the IP address each request comes from. We keep the id and those numbers by the hour for 400 days, and not the IP address, the user agent or anything else about the request. Turning it off throws the id away here, so turning it on again starts over with a new one.";
+const PRIVACY_URL = 'https://github.com/LlamachantTechnology/LlamaTree/blob/main/docs/privacy.md#counting-users';
+
+async function loadCount() {
+  try { count.enabled = (await request('count.state')).enabled; } catch { count.enabled = false; }
+  renderNotice();
+}
+
+async function setCount(on) {
+  try { count.enabled = (await request('count.set', { enabled: on })).enabled; } catch (e) { toast(String(e), true); }
+  renderNotice();
+}
+
+/** What the count is and what it sends, with the switch. */
+function showCountDialog() {
+  openModal('Counting users', [
+    h('div', {}, "We'd like to know how many people use LlamaTree, on which versions and systems, and how much, and we don't want to know anything else."),
+    h('div', {}, COUNT_SENT),
+    h('div', {}, h('a', { href: '#', onclick: (e) => { e.preventDefault(); request('openUrl', { uri: PRIVACY_URL }); } }, 'Privacy and network, in full')),
+  ], [
+    h('label', { class: 'check-field' }, h('input', { type: 'checkbox', checked: count.enabled === true, onchange: (e) => setCount(e.target.checked) }), 'Count me among the users'),
+    h('div', { class: 'spacer' }),
+    h('button', { class: 'btn primary', onclick: closeModal }, 'Close'),
+  ]);
+}
+
+// ---- Let my other computers connect --------------------------------------------------------------------------------
+// This Windows computer as a server for LlamaTree on your others, through Windows' own OpenSSH Server (RemoteAccess in
+// the window, which asks Windows for permission where it needs it). Only in a window of this computer's own sessions.
+
+const canShareThisComputer = () => !machine && !IS_MAC && !IS_LINUX;
+
+async function showRemoteAccessDialog() {
+  let st;
+  try { st = await request('remoteAccess.state'); } catch (e) { toast(e.message, true); return; }
+  let busy = null;   // what's being done, while Windows asks or it runs
+  let keysOnly = true, publicNetworks = false;
+  const keyBox = h('textarea', { class: 'key-text', rows: 3, spellcheck: 'false', placeholder: 'ssh-ed25519 AAAA… you@laptop' });
+
+  const run = async (what, type, args, after) => {
+    busy = what;
+    render();
+    try {
+      const said = await request(type, args);
+      if (typeof said === 'string') toast(said);
+      after?.();
+    } catch (e) {
+      toast(e.message, true);
+    }
+    busy = null;
+    try { st = await request('remoteAccess.state'); } catch { /* keep what's shown */ }
+    if (!$('#modalHost').hidden && $('#modalHost .remote-access')) render();
+  };
+
+  const code = (text) => h('code', { class: 'remote-access-code' }, text);
+  const copy = (text) => h('button', { class: 'btn', onclick: () => navigator.clipboard.writeText(text).then(() => toast('Copied.'), (e) => toast(e.message, true)) }, 'Copy');
+
+  function serverPart() {
+    if (st.entra) {
+      return [h('p', {}, `This PC is signed in with ${st.account}, a Microsoft Entra ID (work or school) account. Windows' SSH server can't sign those in with a key, which is all LlamaTree uses, so your other computers can't connect to this one. A PC signed in with a local or Microsoft account can be one.`)];
+    }
+    const on = st.installed && st.running;
+    const parts = [h('div', { class: 'remote-access-status' }, h('span', { class: 'dot' + (on ? ' on' : '') }), on
+      ? `On: OpenSSH Server is running${st.automatic ? ' and starts with Windows' : ' (it won’t start again after a restart)'}.`
+      : st.installed ? 'Off: OpenSSH Server is installed, but not running.' : 'Off.')];
+    if (on) {
+      parts.push(h('p', {}, 'On your other computer, add a session with ', h('b', {}, 'Computer'), ' set to ', code(`${st.login}@${st.computer}`), ' (or this PC’s address in place of its name).'));
+      if (st.addresses.length) parts.push(h('ul', { class: 'remote-access-list' }, st.addresses.map((a) =>
+        h('li', {}, code(a.address), ` on ${a.network}`, a.tailscale ? ' (Tailscale: reachable from your other networks too)' : ''))));
+      if (st.passwordSignIn) parts.push(h('p', { class: 'remote-access-warn' }, 'Password sign-in is on, so anyone who can reach this PC can try passwords. LlamaTree only needs keys. ',
+        h('button', { class: 'btn', disabled: !!busy, onclick: () => run('Turning off password sign-in…', 'remoteAccess.enable', { keysOnly: true, publicNetworks: false }) }, 'Turn off password sign-in')));
+      if (st.defaultShell) parts.push(h('p', { class: 'remote-access-warn' }, `OpenSSH Server runs commands in ${st.defaultShell} (its DefaultShell setting). LlamaTree needs cmd, its default: remove that setting for LlamaTree to connect.`));
+    } else {
+      parts.push(h('p', {}, 'Turning it on installs Windows’ own OpenSSH Server (from Windows Update; it can take a few minutes), starts it now and with Windows, and opens it in the firewall. Windows may ask for your permission once. Your sessions here keep running in your desktop session, and your other computers show them beside their own.'));
+      parts.push(h('label', { class: 'check-field' }, h('input', { type: 'checkbox', checked: keysOnly, onchange: (e) => { keysOnly = e.target.checked; } }), 'Keys only: turn off password sign-in (recommended)'));
+      parts.push(h('label', { class: 'check-field' }, h('input', { type: 'checkbox', checked: publicNetworks, onchange: (e) => { publicNetworks = e.target.checked; } }), 'Also on networks Windows calls public (a cloud VM’s, say)'));
+    }
+    // Rules of its own that Turn off doesn't touch (one you made, say): they open port 22 whatever this dialog says.
+    if (st.otherRules?.length) {
+      const names = st.otherRules.map((n) => `“${n}”`).join(', ');
+      parts.push(h('p', { class: 'remote-access-warn' }, on
+        ? `Other firewall rules let port 22 in too (${names}), on whatever networks they’re set for. Turn off leaves them on.`
+        : `Other firewall rules still let port 22 in (${names}). Nothing answers while OpenSSH Server is off, but if it’s started some other way, they let other computers reach it. Remove them in Windows Defender Firewall if you don’t need them.`));
+    }
+    // The keys that can sign in as you.
+    parts.push(h('div', { class: 'remote-access-head' }, 'Computers that can connect'));
+    parts.push(st.keys.length
+      ? h('ul', { class: 'remote-access-list' }, st.keys.map((k) => h('li', {}, k.comment || 'A key with no name', ' ',
+        // Its fingerprint's start, which tells apart keys with the same name (ssh-keygen -lf shows it whole).
+        h('code', { class: 'remote-access-code', title: k.fingerprint }, k.fingerprint.replace(/^SHA256:/, '').slice(0, 12) + '…'), ' ',
+        h('button', { class: 'btn', disabled: !!busy, onclick: () => run('Removing the key…', 'remoteAccess.removeKey', { fingerprint: k.fingerprint }) }, 'Remove'))))
+      : h('p', {}, st.admin ? 'None added here yet.' : 'None yet.', ' Paste another computer’s public key below (on it: the one line of ~/.ssh/id_ed25519.pub, or Copy in this dialog there).'));
+    if (st.admin) parts.push(h('p', { class: 'remote-access-note' }, 'Keys added some other way aren’t listed: Windows keeps an administrator’s where only administrators can read them.'));
+    parts.push(keyBox);
+    parts.push(h('div', {}, h('button', { class: 'btn', disabled: !!busy, onclick: () => {
+      if (!keyBox.value.trim()) { toast('Paste the other computer’s public key first.', true); return; }
+      run('Adding the key…', 'remoteAccess.addKey', { key: keyBox.value }, () => { keyBox.value = ''; });
+    } }, 'Add key'), st.admin ? h('span', { class: 'remote-access-note' }, ' Windows may ask for permission: an administrator’s keys are kept where only administrators can change them.') : null));
+    return parts;
+  }
+
+  function myKeyPart() {
+    const parts = [h('div', { class: 'remote-access-head' }, 'This computer’s key'),
+      h('p', {}, 'For connecting from this computer to another: add this on that one.')];
+    if (st.myKey) {
+      parts.push(h('div', { class: 'remote-access-key' }, code(st.myKey.text), copy(st.myKey.text)));
+    } else {
+      parts.push(h('p', {}, 'This computer has no SSH key yet. ',
+        h('button', { class: 'btn', disabled: !!busy, onclick: async () => {
+          try { st.myKey = await request('remoteAccess.myKey.make'); render(); } catch (e) { toast(e.message, true); }
+        } }, 'Make one')));
+    }
+    return parts;
+  }
+
+  function render() {
+    const on = st.installed && st.running;
+    openModal('Let my other computers connect', [
+      h('div', { class: 'remote-access' }, ...serverPart(), ...myKeyPart()),
+    ], [
+      busy ? h('span', { class: 'remote-access-note' }, busy) : null,
+      h('div', { class: 'spacer' }),
+      !st.entra && on ? h('button', { class: 'btn', disabled: !!busy, onclick: () => run('Turning it off…', 'remoteAccess.disable', {}) }, 'Turn off') : null,
+      !st.entra && !on ? h('button', { class: 'btn primary', disabled: !!busy, onclick: () => run('Turning it on… (installing OpenSSH Server can take a few minutes)', 'remoteAccess.enable', { keysOnly, publicNetworks }) }, 'Turn on') : null,
+      h('button', { class: 'btn' + (on || st.entra ? ' primary' : ''), onclick: closeModal }, 'Close'),
+    ]);
+  }
+  render();
+}
+
+/** The one question, along the top where tips go, until it's answered. */
+function renderCountAsk(bar) {
+  bar.hidden = false;
+  bar.dataset.kind = 'count';
+  bar.dataset.color = 'accent';
+  bar.style.setProperty('--notice', '');
+  bar.replaceChildren(
+    h('span', { class: 'notice-kind' }, iconEl('info'), 'A question'),
+    h('span', { class: 'notice-text' }, "May we count you? Once an hour, one request with a random id that stays the same, the app's version, your operating system and how many projects and sessions are open. Never their names or what's in them. With the IP address the request comes from, that shows when this copy is running (we don't keep the address). ",
+      h('a', { class: 'notice-inline-link', href: '#', onclick: (e) => { e.preventDefault(); showCountDialog(); } }, 'What it sends')),
+    h('span', { class: 'notice-actions' },
+      h('button', { class: 'btn primary', onclick: () => setCount(true) }, 'Yes, count me'),
+      h('button', { class: 'btn', onclick: () => setCount(false) }, 'No thanks')),
+  );
+  bar.oncontextmenu = null;
+}
 const NOTICE_KINDS = { tip: { icon: 'bulb', label: 'Tip' }, offer: { icon: 'gift', label: 'Offer' }, news: { icon: 'info', label: 'News' } };
 
 async function checkNotices() {
@@ -5902,16 +7231,17 @@ function noticeText(text) {
 const noticeAllowed = (n) => !notices.dismissed.has(n.id) && (n.kind === 'news' || (notices.tips && !notices.waiting));
 
 function renderNotice() {
+  const bar = $('#noticeBar');
+  if (count.enabled === null) { renderCountAsk(bar); return; }   // the question about the count comes before any tip
   // The one showing (or asked for again) stays until it's closed or leaves the feed; otherwise the first allowed.
   const n = notices.list.find((x) => x.id === notices.shown?.id && !notices.dismissed.has(x.id)) ?? notices.list.find(noticeAllowed);
   notices.shown = n ?? null;
-  const bar = $('#noticeBar');
   bar.hidden = !n;
   if (!n) { bar.replaceChildren(); return; }
   const kind = NOTICE_KINDS[n.kind] ?? NOTICE_KINDS.tip;
   bar.dataset.kind = n.kind;
   // A named colour has its tone in the stylesheet; a #rrggbb of the notice's own is mixed with the theme there too.
-  const own = n.color?.startsWith('#');
+  const own = !!cssColor(n.color);
   bar.dataset.color = own ? 'own' : n.color || 'accent';
   bar.style.setProperty('--notice', own ? n.color : '');
   fill(bar,
@@ -5950,7 +7280,7 @@ function showNoticesDialog() {
   const rows = notices.list.map((n) => {
     const kind = NOTICE_KINDS[n.kind] ?? NOTICE_KINDS.tip;
     const closed = notices.dismissed.has(n.id);
-    const own = n.color?.startsWith('#');
+    const own = !!cssColor(n.color);
     return h('div', { class: 'notice-row' + (closed ? ' closed' : ''), 'data-color': own ? 'own' : n.color || 'accent', style: own ? `--notice:${n.color}` : null },
       h('div', { class: 'notice-row-head' },
         h('span', { class: 'notice-kind' }, iconEl(kind.icon), kind.label),
@@ -6294,14 +7624,20 @@ function versionMenu(x, y) {
         if (updates.auto) checkForUpdates();
       } },
     ]),
+    ...(canShareThisComputer() ? [{ icon: 'server', label: 'Let my other computers connect…', action: showRemoteAccessDialog }, '-'] : []),
     { icon: 'bulb', label: 'Show tips and offers', checked: notices.tips, action: () => setShowTips(!notices.tips) },
     { icon: 'gift', label: 'Tips and offers…', action: showNoticesDialog },
+    '-',
+    { icon: 'info', label: 'Count me among the users', checked: count.enabled === true, action: () => setCount(count.enabled !== true) },
+    { label: [h('span', { class: 'menu-indent' }), 'What the count sends…'], action: showCountDialog },
     '-',
     { header: 'Closing the window with sessions running' },
     ...[['ask', 'Ask each time'], ['keep', 'Keep them running'], ['stop', 'Stop them']].map(([value, label]) =>
       ({ label, checked: closeChoice() === value, action: () => store.set('closeChoice', value) })),
     { label: machine ? `Quit and stop all sessions on ${machine.remote}` : 'Quit and stop all sessions', action: () => request('app.close', { stop: true }) },
     '-',
+    // The app's log: what went wrong that nobody was told (see AppLog), for when something seems off.
+    { icon: 'folder', label: machine ? `Open the log folder on ${machine.remote}` : 'Open the log folder', action: () => request('logs.openFolder') },
     { icon: 'info', label: `LlamaTree ${updates.current ?? ''}`.trim() + ' · release notes',
       action: () => request('openUrl', { uri: 'https://github.com/LlamachantTechnology/LlamaTree/releases' }) },
   ]);
@@ -6341,7 +7677,9 @@ function themeMenu(x, y) {
     ...themes.list.map((t) => ({ icon: themeSwatch(t), label: t.name, checked: theme.pref === t.id, kbd: t.builtIn ? '' : 'Yours', action: () => setThemePref(t.id) })),
     themes.problems.length > 0 && { icon: 'warn', label: `${themes.problems.length} theme${themes.problems.length === 1 ? '' : 's'} not loaded`, kbd: 'Why?', action: () => toast(themes.problems.join('\n'), true) },
     '~',
+    own?.floor && { label: `Show ${own.name}’s own floor`, checked: floor.on, action: () => setThemeFloors(!floor.on) },
     { icon: 'save', label: 'Save as a new theme…', action: showSaveThemeDialog },
+    { icon: 'bag', label: 'Get themes…', action: () => openGallery('themes') },
     { icon: 'folder', label: 'Open the themes folder', action: () => request('themes.openFolder') },
     '-',
     { header: 'Accent colour' },
@@ -6353,8 +7691,9 @@ function themeMenu(x, y) {
         kbd: 'Change…', action: showAccentDialog },
     '-',
     { header: 'Status dots' },
-    { icon: h('span', { class: 'menu-dot', 'data-dots': dotStyle.id }, h('span', { class: 'dot attention' })),   // the style in use, waiting for you
-      label: DOT_STYLES.find((d) => d.id === dotStyle.id).name, kbd: 'Change…', action: showDotStyleDialog },
+    { icon: h('span', { class: 'menu-dot', 'data-dots': shownDotStyle() }, h('span', { class: 'dot attention' })),   // the style in use, waiting for you
+      label: shownDotStyle() === 'theme' ? `${themeLook().name}’s own` : DOT_STYLES.find((d) => d.id === dotStyle.id).name,
+      kbd: 'Change…', action: showDotStyleDialog },
     '-',
     ...navLayoutItems(),
     '-',
@@ -6369,7 +7708,8 @@ function themeMenu(x, y) {
       ? { icon: 'shield', label: 'Permissions', kbd: `${relayWaiting()} waiting for your answer`, action: () => openPermissions('session') }
       : { icon: 'shield', label: 'Permissions', kbd: 'Plugins and sessions', action: () => openPermissions() },
     plugins.problems.length > 0 && { icon: 'warn', label: `${plugins.problems.length} couldn't be loaded`, kbd: 'Why?', action: () => toast(plugins.problems.join('\n'), true) },
-    { icon: 'folder', label: plugins.list.length ? 'Open the plugins folder' : 'Add a plugin: open the plugins folder', action: () => request('plugins.openFolder') },
+    { icon: 'bag', label: 'Get plugins…', action: () => openGallery('plugins') },
+    { icon: 'folder', label: 'Open the plugins folder', action: () => request('plugins.openFolder') },
   ]);
 }
 
@@ -6423,42 +7763,67 @@ function themeSnapshot(title) {
     ...(look?.grid ? { grid: true } : {}),
     ...(look?.rain ? { rain: true } : {}),
     ...(look?.cursor ? { cursor: look.cursor } : {}),
+    ...(veilOwn(look) !== null ? { terminalBackground: Math.round(veilAmount()) } : {}),   // as you have it now
     accent: { line: value('accent'), strong: value('accent-strong') },
-    colors: Object.fromEntries(themes.names.colors.map((n) => [n, value(n)]).filter(([, v]) => v)),
+    // A status colour of its own only where it differs from the one it would take (status-ok is ok's, and so on), so
+    // changing ok in the file changes the dots too.
+    colors: Object.fromEntries(themes.names.colors.map((n) => [n, value(n)])
+      .filter(([n, v]) => v && !(n.startsWith('status-') && v === value(n.slice(7))))),
     terminal: Object.fromEntries(themes.names.terminal.filter((n) => terminal[n]).map((n) => [n, terminal[n]])),
     diff: Object.fromEntries(themes.names.diff.filter((n) => diff[n]).map((n) => [n, diff[n]])),
+    ...(look?.dots ? { dots: dotsFile(look.dots) } : {}),
+  };
+}
+
+/** A theme's dots as its file has them (ThemeDots reads them into states of shapes with a kind). */
+function dotsFile(dots) {
+  const shape = (s) => ({ [s.kind]: s.kind === 'path' ? s.path : s.numbers, fill: s.fill, stroke: s.stroke, width: s.width, opacity: s.opacity });
+  return {
+    ...(dots.about ? { about: dots.about } : {}),
+    size: dots.size,
+    ...Object.fromEntries(Object.entries(dots.states ?? {}).map(([state, d]) =>
+      [state, { image: { viewBox: d.image.viewBox, shapes: d.image.shapes.map(shape) }, motion: d.motion }])),
   };
 }
 
 /**
  * Status dots: each style as a card showing every state moving, picked like the accent colour: each click previews it
- * on the whole app, and Cancel puts back what was there. The cards sit outside #app, so each shows its own style.
+ * on the whole app, and Cancel puts back what was there. The cards sit outside #app, so each shows its own style. A
+ * theme with dots of its own has a card of its own first; picking another while it's on puts its own aside, for it only.
  */
 function showDotStyleDialog() {
-  const before = dotStyle.id;
+  const look = themeLook();
+  const own = look?.dots ? { id: 'theme', name: `${look.name}’s own`, about: look.dots.about ?? `The status dots ${look.name} comes with.` } : null;
+  const before = { id: dotStyle.id, aside: !!own && dotStyle.notThemes.has(look.id) };
   const states = [['running', 'Idle'], ['working', 'Working'], ['attention', 'Waiting for you'], ['asking', 'Needs your answer'], ['exited', 'Not running']];
-  const cards = DOT_STYLES.map((d) => h('button', { class: 'dot-style', 'data-dots': d.id, onclick: () => pick(d.id) },
+  const cards = (own ? [own, ...DOT_STYLES] : DOT_STYLES).map((d) => h('button', { class: 'dot-style', 'data-dots': d.id, onclick: () => pick(d.id) },
     h('span', { class: 'dot-style-name' }, d.name),
     h('span', { class: 'dot-style-states' }, states.map(([cls, label]) => h('span', { class: 'dot-style-state' }, h('span', { class: 'dot ' + cls }), label))),
     h('span', { class: 'dot-style-about' }, d.about)));
 
+  const aside = (on) => { if (on) dotStyle.notThemes.add(look.id); else dotStyle.notThemes.delete(look.id); };
   function pick(id) {
-    dotStyle.id = id;
+    if (id !== 'theme') dotStyle.id = id;
+    if (own) aside(id !== 'theme');
     applyDotStyle();   // preview on the whole app
     for (const c of cards) c.classList.toggle('selected', c.dataset.dots === id);
   }
+  const save = () => {
+    store.set('dotStyle', dotStyle.id);
+    store.set('dotStyleNotThemes', [...dotStyle.notThemes]);
+  };
   let saved = false;
   openModal('Status dots', [
     h('div', { class: 'dot-style-grid' }, cards),
     h('div', { class: 'field help' }, 'With Windows’ animation effects turned off, the dots stand still and their shapes tell the states apart.'),
   ], [
     h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
-    h('button', { class: 'btn primary', onclick: () => { saved = true; store.set('dotStyle', dotStyle.id); closeModal(); } }, 'OK'),
+    h('button', { class: 'btn primary', onclick: () => { saved = true; save(); closeModal(); } }, 'OK'),
   ]);
   $('#modalHost .modal').classList.add('wide');
   // Cancel, Esc or a click outside: put back the style from before.
-  onModalClose = () => { if (!saved) { dotStyle.id = before; applyDotStyle(); } };
-  pick(before);
+  onModalClose = () => { if (!saved) { dotStyle.id = before.id; if (own) aside(before.aside); applyDotStyle(); } };
+  pick(shownDotStyle(look));
 }
 
 /**
@@ -6480,7 +7845,7 @@ function showAccentDialog() {
   const swatches = PROJECT_COLORS.map((c) => h('button', { class: 'swatch', style: `--swatch:${c}`, title: c, onclick: () => pick(c) }));
   // The theme's own suggestions, by name, first.
   const theirs = suggestedAccents().map((a) => h('button', { class: 'swatch-auto', title: a.color, 'data-colour': a.color, onclick: () => pick(a.color) },
-    h('span', { class: 'accent-dot', style: `background:${a.color}` }), a.name));
+    h('span', { class: 'accent-dot', style: cssColor(a.color) && `background:${a.color}` }), a.name));
   const note = h('div', { class: 'field help' });
   custom.addEventListener('input', () => pick(custom.value));
 
@@ -6528,6 +7893,7 @@ setTimeout(() => { if (updates.auto) checkForUpdates(); }, 15_000);
 setInterval(() => { if (updates.auto) checkForUpdates(); }, UPDATE_EVERY_MS);
 setTimeout(checkNotices, 5_000);
 setInterval(checkNotices, NOTICES_EVERY_MS);
+setTimeout(loadCount, 3_000);   // the question about the count, if it hasn't been answered, before the first tip
 
 // ------------------------------------------------------------------ scrolling tab rows
 
@@ -6569,21 +7935,26 @@ function makeScrollable(row, extraClass = '') {
  * be re-rendered freely. With `outside`, a tab can also be dragged out below the row: `outside.over(id, x, y)` shows
  * where it would land and returns that place (or null), `outside.over(null)` hides it, and `outside.drop(id, place)`
  * puts it there. `fixed(id)` items stay where they are: only dragged out, and never a place to drop beside. `axis: 'y'`
- * is for a list down the page (the bar down the left) rather than a row across it.
+ * is for a list down the page (the bar down the left) rather than a row across it. With `into`, an item can also be
+ * dropped onto something anywhere on the page, in this row or not: `into.at(id, x, y)` gives the element under the
+ * pointer it would go into, or null, and `into.drop(id, el)` puts it there. An element `into.where(id, el)` says is
+ * where the item already is isn't marked, and dropping there does nothing (rather than a move beside the nearest item).
  *
  * Built on pointer events rather than HTML5 drag and drop: in WebView2 an HTML5 drag runs through the operating
  * system's drag loop, which AllowExternalDrop = false (set so dropped files can't navigate the page) also blocks.
  */
-function enableTabDrag(row, { item, canDrag = () => true, onDrop, outside = null, fixed = () => false, axis = 'x' }) {
+function enableTabDrag(row, { item, canDrag = () => true, onDrop, outside = null, into = null, fixed = () => false, axis = 'x' }) {
   const THRESHOLD = 8;   // pixels the pointer must move before a press becomes a drag (a hurried click can move ~5)
   let press = null;      // { id, el, x, y, pointerId } from pointerdown until pointerup
   let dragging = false;
   let place = null;      // where outside.over says a drop below the row lands
+  let onto = null;       // the element into.at says a drop goes into
   const down = axis === 'y';
   const along = (e) => (down ? e.clientY : e.clientX);                         // the pointer's place along the row
   const span = (r) => (down ? [r.top, r.bottom] : [r.left, r.right]);         // a box's extent along it
 
   const clear = () => row.querySelectorAll('.drop-before, .drop-after').forEach((el) => el.classList.remove('drop-before', 'drop-after'));
+  const clearOnto = () => { onto?.classList.remove('drop-into'); onto = null; };
 
   /** The item nearest the pointer (other than the dragged one), and which side of it the drop lands on. */
   const targetAt = (at) => {
@@ -6600,6 +7971,7 @@ function enableTabDrag(row, { item, canDrag = () => true, onDrop, outside = null
 
   const finish = () => {
     clear();
+    clearOnto();
     if (place != null) outside.over(null);
     place = null;
     press?.el.classList.remove('dragging');
@@ -6623,9 +7995,9 @@ function enableTabDrag(row, { item, canDrag = () => true, onDrop, outside = null
     // than letting plain mouse movement start a drag that eats the next click.
     if ((e.buttons & 1) === 0) { if (dragging) finish(); else press = null; return; }
     if (!dragging) {
-      // Along the row only, unless a tab can be dragged out of it: then down counts too (the row loses the pointer once it's
-      // out, so a drag must start before then).
-      const moved = outside ? Math.hypot(e.clientX - press.x, e.clientY - press.y) : Math.abs(along(e) - (down ? press.y : press.x));
+      // Along the row only, unless a tab can be dragged out of it or onto something elsewhere: then any way counts (the row
+      // loses the pointer once it's out, so a drag must start before then).
+      const moved = outside || into ? Math.hypot(e.clientX - press.x, e.clientY - press.y) : Math.abs(along(e) - (down ? press.y : press.x));
       if (moved < THRESHOLD) return;
       dragging = true;
       row.setPointerCapture(e.pointerId);   // keep receiving moves even when the pointer leaves the row
@@ -6633,6 +8005,11 @@ function enableTabDrag(row, { item, canDrag = () => true, onDrop, outside = null
       document.body.classList.add('tab-dragging');
     }
     const r = row.getBoundingClientRect();
+    if (into) {
+      const el = into.at(press.id, e.clientX, e.clientY);
+      if (el !== onto) { clearOnto(); onto = el; if (onto && !into.where(press.id, onto)) onto.classList.add('drop-into'); }
+      if (onto) { clear(); return; }
+    }
     if (outside) {
       place = e.clientY > r.bottom + 6 ? outside.over(press.id, e.clientX, e.clientY) : (place != null && outside.over(null), null);
       if (place != null) { clear(); return; }
@@ -6661,13 +8038,14 @@ function enableTabDrag(row, { item, canDrag = () => true, onDrop, outside = null
     }
     const t = targetAt(along(e));
     const id = press.id;
-    const out = place;
+    const out = place, dest = onto;
     finish();
     // The click that follows this pointerup would also switch tabs; swallow it.
     const swallow = (c) => { c.stopPropagation(); c.preventDefault(); };
     window.addEventListener('click', swallow, { capture: true, once: true });
     setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 0);
-    if (out != null) outside.drop(id, out);
+    if (dest) { if (!into.where(id, dest)) into.drop(id, dest); }
+    else if (out != null) outside.drop(id, out);
     else if (t) onDrop(id, t.el.dataset.id, t.before);
   });
 
@@ -6808,6 +8186,15 @@ function pluginMenuSight(p, s, scopeKey = null) {
 /**
  * The plugin's frame, made on first use and kept until its tab closes, so switching tabs doesn't reload it. (Moving it
  * to another place in the page does: dragging its side panel tab to another group starts it again.)
+ *
+ * Only the plugin's own page speaks for it. The frame can navigate itself (a link followed, say), and the page it lands
+ * on would otherwise get the plugin's messages and grants: the app page's frame-src keeps the frame on plugin addresses
+ * (see index.html and LocalSite), and this keeps it on the page it was opened at. A page we load into the frame is
+ * trusted from its load on (what it sends before then is held until that load, see pluginMessage). A later load in
+ * the same window that we didn't start is a page the frame went to by itself: what it sent is dropped, nothing more is
+ * sent to it, and the plugin's page is put back, starting again. (A frame put back into the page, moved to another
+ * group, gets a new window, which loads the plugin's page afresh.) A plugin is one page: following a link to another
+ * of its own pages also brings it back to its page.
  */
 function pluginFrame(p) {
   let f = pluginFrames.get(p.id);
@@ -6818,9 +8205,20 @@ function pluginFrame(p) {
   url.searchParams.set('placement', pluginPlacement(p));
   // No allow-same-origin: the page gets an opaque origin, so it can't reach this page, and has no storage to share.
   const frame = h('iframe', { class: 'plugin-frame', sandbox: 'allow-scripts allow-forms allow-modals', referrerpolicy: 'no-referrer', title: p.title, src: url.href });
-  f = { frame, ready: false, queue: [], badge: null, title: null };
+  // window: the frame's window when its page last loaded; opened: a load of its page is on its way (we started it);
+  // page: counts the page's loads, so an answer for a page that has gone isn't given to the next; early: what it sent
+  // before its load; strikes: times in a row it left its page straight after loading.
+  f = { frame, url: url.href, ready: false, queue: [], badge: null, title: null,
+    window: null, opened: true, page: 0, early: [], loadedAt: 0, strikes: 0, stopped: false };
   const entry = f;
   frame.addEventListener('load', () => {
+    if (entry.stopped) return;
+    const w = frame.contentWindow;
+    if (!entry.opened && w === entry.window) { pluginLeftPage(p, entry); return; }
+    entry.opened = false;
+    entry.window = w;
+    entry.page++;
+    entry.loadedAt = performance.now();
     entry.ready = true;
     postPluginTheme(frame);
     if (pluginHandover.has(p.id)) {   // it was just moved: the state it sent along, back to it
@@ -6829,9 +8227,36 @@ function pluginFrame(p) {
       postToPlugin(frame, { type: 'llamatree:state', placement: pluginPlacement(p), state });
     }
     for (const m of entry.queue.splice(0)) postToPlugin(frame, m);
+    for (const data of entry.early.splice(0)) if (pluginFrames.get(p.id) === entry && entry.ready) pluginMessage(p.id, entry, data);
   });
   pluginFrames.set(p.id, f);
   return f;
+}
+
+/** Starts the plugin's page again in its frame (a load we started, so the page is trusted once it has loaded). */
+function restartPlugin(f) {
+  f.ready = false;
+  f.stopped = false;
+  f.opened = true;
+  f.early.length = 0;
+  f.frame.src = f.url;
+}
+
+/**
+ * The plugin's frame loaded a page we didn't open: it went somewhere by itself. What it sent is dropped and its page
+ * put back. One that keeps leaving its page as soon as it's back is stopped until its tab is opened again.
+ */
+function pluginLeftPage(p, f) {
+  f.ready = false;
+  f.early.length = 0;
+  f.strikes = performance.now() - f.loadedAt < 3000 ? f.strikes + 1 : 1;
+  if (f.strikes > 3) {
+    f.stopped = true;
+    f.frame.src = 'about:blank';
+    toast(`${p.title} kept leaving its page, so it has been stopped. Close its tab and open it again to start it again.`, true);
+    return;
+  }
+  restartPlugin(f);
 }
 
 function sendToPlugin(p, message) {
@@ -6843,6 +8268,8 @@ function sendToPlugin(p, message) {
 // Plugins written before the rename listen for 'claude-terminals:<name>': each message also goes under that
 // name, and what they send under it is taken as 'llamatree:<name>'.
 const OLD_PLUGIN_PREFIX = 'claude-terminals:';
+// To '*': the frame is sandboxed without allow-same-origin, so its page's origin is opaque ("null"), which postMessage
+// can't name. What makes it the plugin's page is that it's only sent once that page has loaded (see pluginFrame).
 function postToPlugin(frame, message) {
   const w = frame.contentWindow;
   if (!w) return;
@@ -6904,16 +8331,16 @@ function showPlugin(tab) {
   const p = pluginById(tab.pluginId);
   if (!p) { toast(`The plugin "${tab.pluginId}" isn't in the plugins folder any more.`, true); closeDoc(tab.key); return; }
   const host = $('#pluginDoc');
-  const { frame } = pluginFrame(p);
-  if (frame.parentNode !== host) host.append(frame);
+  const pf = pluginFrame(p), { frame } = pf;
+  if (frame.parentNode !== host) { pf.ready = false; host.append(frame); }   // put in the page, it loads its page afresh
   for (const f of host.children) f.hidden = f !== frame;
   frame.focus();
 }
 
 /** A side panel plugin, open in its group. */
 function showDockPlugin(g, t) {
-  const { frame } = pluginFrame(pluginById(pluginOfTab(t)));
-  if (frame.parentNode !== g.frames) g.frames.append(frame);
+  const pf = pluginFrame(pluginById(pluginOfTab(t))), { frame } = pf;
+  if (frame.parentNode !== g.frames) { pf.ready = false; g.frames.append(frame); }
   for (const f of g.frames.children) f.hidden = f !== frame;
 }
 
@@ -7003,13 +8430,15 @@ const PLUGIN_ACCESS = {
   },
   ask: {
     verb: 'ask Claude about your sessions', title: 'Ask Claude about your sessions',
-    about: 'Put questions about the sessions it sees to Claude, run once each time with your own sign-in, over their conversations. Claude runs with no tools, so it can’t change anything; the plugin sees the answers. Needs “See your sessions” too.',
+    about: 'Put questions about the sessions it sees to Claude, run once each time with your own sign-in, over their conversations. Claude runs with no tools, so it can’t read files, run commands or change anything. Without Claude Code installed, Codex answers instead, and Codex can read your files. The plugin sees the answers. Needs “See your sessions” too.',
     dialog: (p) => [
       h('p', {}, `${p.title} is a plugin, from ${plugins.folder}\\${p.id}. It asks to put questions about your sessions to Claude:`),
       h('ul', {},
-        h('li', {}, 'each question runs Claude (or a session’s own agent) once, headless, with your own sign-in, the way Suggest a commit message does, and counts against your usage;'),
+        h('li', {}, 'each question runs Claude Code once (Codex sessions too), headless, with your own sign-in, the way Suggest a commit message does, and counts against your usage;'),
         h('li', {}, 'the question goes with the sessions’ conversations: your prompts, what the agent answered and the tools it used;'),
-        h('li', {}, 'the agent runs with no tools and saves no conversation, so it can’t change anything.')),
+        h('li', {}, 'Claude runs with no tools or MCP servers and saves no conversation: it sees only what is sent to it, and can’t read a file, run a command or change anything;'),
+        h('li', {}, h('strong', {}, 'without Claude Code installed, Codex answers instead. '),
+          'It runs read-only, so it can’t change anything, but it can read any file you can (your SSH keys, say), and a plugin could ask it to and see what it read.')),
       h('p', {}, 'The plugin sees the answers. Allow only a plugin you trust. You can change your answer any time in Permissions, on the palette menu.'),
     ],
   },
@@ -7090,7 +8519,7 @@ function setPluginAccess(id, kind, to) {
   sendGrant('plugins.grant', { id, kind, state: to });
   // Taken away: the page starts over, so it no longer holds what it was shown.
   const f = pluginFrames.get(id);
-  if (was === 'allow' && to !== 'allow' && f) { f.ready = false; f.frame.src = f.frame.src; }
+  if (was === 'allow' && to !== 'allow' && f) restartPlugin(f);
   checkPluginSight();
   permissionsChanged();
 }
@@ -7103,7 +8532,7 @@ function forgetPlugin(id) {
   sendGrant('plugins.forget', { id });
   // Taken away: the page starts over, so it no longer holds what it was shown.
   const f = pluginFrames.get(id);
-  if (had && f) { f.ready = false; f.frame.src = f.frame.src; }
+  if (had && f) restartPlugin(f);
   checkPluginSight();
   permissionsChanged();
 }
@@ -7150,7 +8579,7 @@ function checkPluginSight() {
     const before = pluginSaw.get(p.id);
     pluginSaw.set(p.id, now);
     const f = pluginFrames.get(p.id);
-    if (before && f && [...before].some((sid) => !now.has(sid))) { f.ready = false; f.frame.src = f.frame.src; }
+    if (before && f && [...before].some((sid) => !now.has(sid))) restartPlugin(f);
   }
 }
 
@@ -7263,6 +8692,258 @@ function askPluginAccess(p, kind) {
 }
 
 // ---- the Permissions view: what each plugin may do, by plugin or by session
+
+// ------------------------------------------------------------------ Get plugins and Get themes
+// The plugins and themes the LlamaTree-Plugins and LlamaTree-Themes repositories publish, in a tab like Permissions. The
+// host reads their catalogs only when this tab asks (see GalleryService), and installing puts a plugin in the plugins
+// folder, or a theme in the themes folder, as if you'd put it there yourself: a plugin still asks before it sees anything.
+
+const GALLERY_KEY = 'gallery';
+function isGalleryTab(t) { return t?.kind === 'gallery'; }   // a declaration: tab code above may run first
+/** by: 'plugins' or 'themes'; each catalog as the host last answered, those being read, why one couldn't be, and the ids being installed or removed. */
+const gallery = { by: store.get('galleryBy', 'plugins'), plugins: null, themes: null, loading: new Set(), error: {}, busy: new Set() };
+
+/** Opens Get plugins (by 'plugins') or Get themes ('themes'). */
+function openGallery(by = null) {
+  if (by) { gallery.by = by; store.set('galleryBy', by); }
+  if (!docs.tabs.some((t) => t.key === GALLERY_KEY)) docs.tabs.push({ key: GALLERY_KEY, kind: 'gallery', preview: false, scrollTop: null });
+  activateDoc(GALLERY_KEY);
+  if (!gallery[gallery.by]) loadGallery(gallery.by);
+  else galleryChanged();
+}
+
+function showGallery(tab) {
+  renderGallery();
+  if (tab.scrollTop != null) $('#galleryBody').scrollTop = tab.scrollTop;
+}
+
+const galleryChanged = () => { if (isGalleryTab(shownDoc())) renderGallery(); };
+
+function setGalleryBy(by) {
+  gallery.by = by;
+  store.set('galleryBy', by);
+  if (!gallery[by]) loadGallery(by);
+  galleryChanged();
+  renderDocTabs();   // its tab says which
+}
+
+/** Asks the host for a catalog and where each of its entries stands here; `refresh` reads it from GitHub again. */
+async function loadGallery(by, refresh = false) {
+  if (gallery.loading.has(by)) return;
+  gallery.loading.add(by);
+  delete gallery.error[by];
+  galleryChanged();
+  try { gallery[by] = await request(by === 'plugins' ? 'gallery.plugins' : 'gallery.themes', { refresh }); }
+  catch (e) { gallery.error[by] = e.message; }
+  finally { gallery.loading.delete(by); galleryChanged(); }
+}
+
+/** Runs an install or removal for `id`, with its card's buttons off meanwhile, then reads where everything stands again. */
+async function galleryDo(by, id, work) {
+  if (gallery.busy.has(id)) return;
+  gallery.busy.add(id);
+  galleryChanged();
+  try { await work(); }
+  catch (e) { toast(e.message, true); }
+  finally {
+    gallery.busy.delete(id);
+    await loadGallery(by);
+  }
+}
+
+/** A plugin's page closes before its folder is replaced or removed (its files can't be swapped under it); says whether it had a tab open. */
+function closePluginEverywhere(id) {
+  const hadTab = docs.tabs.some((t) => t.key === pluginKey(id));
+  if (hadTab) closeDoc(pluginKey(id));
+  if (groupOfTab('plugin:' + id)) closeDockPlugin('plugin:' + id, false);
+  closePluginFrame(id);
+  return hadTab;
+}
+
+function installPlugin(e) {
+  const updating = e.state === 'update';
+  galleryDo('plugins', e.id, async () => {
+    const reopen = updating && closePluginEverywhere(e.id);
+    await request('gallery.installPlugin', { id: e.id });
+    closedPanelPlugins.delete(e.id);   // a side panel plugin takes its place there, even if you'd closed an older copy
+    rememberClosedPanelPlugins();
+    await loadPlugins();
+    if (reopen) openPlugin(e.id);
+    toast(updating ? `${e.title} is updated to ${e.version}.`
+      : `${e.title} is installed: it's under Plugins in the palette menu${e.placement === 'panel' ? ', and in the side panel' : ''}.${e.access.length ? ' It asks you before it sees anything.' : ''}`);
+  });
+}
+
+function removePlugin(e) {
+  confirmDialog(`Remove ${e.title}?`, 'Its folder is deleted from your plugins folder, and what you allowed it is forgotten. You can install it again from here.', 'Remove', true,
+    () => galleryDo('plugins', e.id, async () => {
+      closePluginEverywhere(e.id);
+      await request('gallery.removePlugin', { id: e.id });
+      await loadPlugins();
+      toast(`${e.title} is removed.`);
+    }));
+}
+
+/** Tries on a theme from Get themes before it's installed: it's on screen until you install it, stop, pick a theme or close the tab. */
+function previewTheme(e) {
+  themePreview = { ...e.theme, previewOf: e.id };
+  applyTheme();
+  galleryChanged();
+}
+
+function stopThemePreview() {
+  if (!themePreview) return;
+  themePreview = null;
+  applyTheme();
+  galleryChanged();
+}
+
+function installTheme(e) {
+  const updating = e.state === 'update';
+  galleryDo('themes', e.id, async () => {
+    await request('gallery.installTheme', { id: e.id });
+    themePreview = null;
+    await loadThemes();
+    if (!updating || theme.pref === e.id) setThemePref(e.id);
+    toast(updating ? `${e.theme.name} is updated to ${e.version}.` : `${e.theme.name} is installed and on. Switch back any time from the palette menu.`);
+  });
+}
+
+function removeTheme(e) {
+  confirmDialog(`Remove ${e.theme.name}?`, `${e.id}.json is deleted from your themes folder.${theme.pref === e.id ? ' The app goes back to System.' : ''} You can install it again from here.`, 'Remove', true,
+    () => galleryDo('themes', e.id, async () => {
+      await request('gallery.removeTheme', { id: e.id });
+      await loadThemes();
+      toast(`${e.theme.name} is removed.`);
+    }));
+}
+
+function renderGallery() {
+  const by = gallery.by;
+  fill($('#galleryBy'), [['plugins', 'Plugins'], ['themes', 'Themes']].map(([b, label]) =>
+    h('button', { class: 'seg-btn' + (by === b ? ' active' : ''), role: 'tab', 'aria-selected': String(by === b), onclick: () => setGalleryBy(b) }, label)));
+  const previewing = themePreview && gallery.themes?.themes.find((e) => e.id === themePreview.previewOf);
+  fill($('#galleryTools'),
+    previewing && h('span', { class: 'gallery-previewing' }, iconEl('theme'), `Trying on ${previewing.theme.name}`),
+    previewing && h('button', { class: 'tb-btn text', onclick: stopThemePreview }, 'Stop'),
+    h('button', { class: 'tb-btn text', title: `Open your ${by} folder`, onclick: () => request(by === 'plugins' ? 'plugins.openFolder' : 'themes.openFolder') }, 'Open the folder'),
+    h('button', { class: 'icon-btn', title: 'Read the catalog from GitHub again', disabled: gallery.loading.has(by), onclick: () => loadGallery(by, true) }, iconEl('refresh')));
+
+  const data = gallery[by];
+  const repo = data?.repository ?? `https://github.com/LlamachantTechnology/LlamaTree-${by === 'plugins' ? 'Plugins' : 'Themes'}`;
+  const intro = h('p', { class: 'gallery-intro dim' },
+    by === 'plugins'
+      ? 'Plugins add tabs, side panels, menu items and buttons. Each runs sandboxed on an address of its own, and asks you before it sees anything beyond its own page. '
+      : 'A theme is colours and effects, only data: it can’t run anything. Try one on before you install it. ',
+    h('button', { class: 'link-btn', onclick: () => request('openUrl', { uri: repo }) }, by === 'plugins' ? 'LlamaTree-Plugins' : 'LlamaTree-Themes'),
+    ' on GitHub has their source, and how to add your own.');
+
+  let body;
+  if (gallery.error[by] && !gallery.loading.has(by)) {
+    body = h('div', { class: 'perms-empty' }, h('p', {}, `The catalog couldn't be read: ${gallery.error[by]}`),
+      h('button', { class: 'btn', onclick: () => loadGallery(by, true) }, 'Try again'));
+  } else if (!data) {
+    body = h('p', { class: 'perms-empty' }, 'Reading the catalog…');
+  } else {
+    const list = by === 'plugins' ? data.plugins : data.themes;
+    body = !list.length ? h('p', { class: 'perms-empty' }, 'Nothing has been published yet.')
+      : h('div', { class: 'gallery-grid' }, list.map(by === 'plugins' ? galleryPluginCard : galleryThemeCard));
+  }
+  fill($('#galleryBody'), intro, body,
+    data?.problems?.length > 0 && h('p', { class: 'gallery-problems dim' }, `${data.problems.length} left out: ${data.problems.join(' ')}`));
+}
+
+/** The words on a card for what can't be done with it, or null when its buttons say it. */
+function galleryNote(e, what) {
+  if (e.state === 'needs-app') return `Needs LlamaTree ${e.minAppVersion} or later: update LlamaTree first.`;
+  if (e.state === 'yours') return `A ${what} of your own is called ${e.id}${what === 'theme' ? '.json' : ''}, so this one can't be installed beside it.`;
+  return null;
+}
+
+function galleryPluginCard(e) {
+  const busy = gallery.busy.has(e.id);
+  const have = e.state === 'installed' || e.state === 'update';
+  const asks = e.access.map((k) => PLUGIN_ACCESS[k]?.title ?? k);
+  const note = galleryNote(e, 'plugin');
+  return h('section', { class: 'gallery-card' + (have ? ' have' : '') },
+    h('header', {},
+      e.icon ? h('img', { class: 'gallery-icon', src: e.icon, alt: '', draggable: 'false' }) : h('span', { class: 'gallery-icon' }, iconEl('plug')),
+      h('div', { class: 'gallery-name' }, h('b', {}, e.title),
+        h('span', { class: 'dim' }, [e.version, e.author && `by ${e.author}`].filter(Boolean).join(' · '))),
+      have && h('span', { class: 'chip gallery-have', title: `Version ${e.installed} is in your plugins folder` }, iconEl('markAllow'), e.state === 'update' ? `${e.installed} installed` : 'Installed')),
+    h('p', { class: 'gallery-about' }, e.description || 'No description.'),
+    h('ul', { class: 'gallery-facts dim' },
+      h('li', {}, e.placement === 'panel' ? 'Shows in the side panel' : 'Shows in a tab'),
+      h('li', { title: asks.length ? 'It asks you before it’s given any of these' : '' },
+        asks.length ? `Asks to ${asks.map((a) => a.toLowerCase()).join(', ')}` : 'Asks for nothing beyond its own page')),
+    note && h('p', { class: 'gallery-note' }, note),
+    h('footer', {},
+      (e.state === 'install' || e.state === 'update') && h('button', { class: 'btn primary', disabled: busy, onclick: () => installPlugin(e) },
+        busy ? 'Installing…' : e.state === 'update' ? `Update to ${e.version}` : 'Install'),
+      have && pluginById(e.id) && h('button', { class: 'btn', disabled: busy, onclick: () => openPlugin(e.id) }, 'Open'),
+      have && h('button', { class: 'btn', disabled: busy, onclick: () => removePlugin(e) }, 'Remove'),
+      h('span', { class: 'spacer' }),
+      h('button', { class: 'link-btn', onclick: () => request('openUrl', { uri: `${gallery.plugins.repository}/tree/main/plugins/${e.id}` }) }, 'Source')));
+}
+
+/**
+ * A small picture of a theme: its tabs, its status dots and a terminal in some of its colours. A monochrome theme is
+ * drawn in your accent colour, as it would be.
+ */
+function themeThumb(t) {
+  const made = t.monochrome ? monochromeLook(accentColour(), t.base === 'light') : {};
+  const c = { ...made.colors, ...t.colors }, term = { ...made.terminal, ...t.terminal };
+  const dark = t.base !== 'light';
+  const accentLine = (t.accent ?? made.accent)?.line ?? accentColour();
+  const chrome = c.chrome ?? (dark ? '#1f1f1f' : '#f3f3f3');
+  const text = c.text ?? (dark ? '#cccccc' : '#1e1e1e');
+  const bg = term.background ?? c['terminal-bg'] ?? (dark ? '#181818' : '#ffffff');
+  const fg = term.foreground ?? text;
+  const DOTS = { ok: '#3fb950', working: '#2f81f7', attention: '#d29922', asking: '#a371f7' };
+  const line = (...parts) => h('div', {}, parts.map(([s, color]) => h('span', { style: `color:${color}` }, s)));
+  return h('div', { class: 'theme-thumb', style: `background:${chrome};color:${text}` + (t.font ? `;font-family:'${t.font}'` : '') },
+    h('div', { class: 'tt-bar' },
+      h('span', { class: 'tt-tab', style: `border-color:${accentLine};color:${c['text-strong'] ?? text}` }, 'All sessions'),
+      h('span', { class: 'tt-tab', style: `color:${c['text-dim'] ?? text}` }, 'Git Changes'),
+      h('span', { class: 'spacer' }),
+      Object.keys(DOTS).map((s) => h('i', { class: 'tt-dot', style: `background:${c['status-' + s] ?? c[s] ?? DOTS[s]}` }))),
+    h('div', { class: 'tt-term', style: `background:${bg};color:${fg}` },
+      line(['❯ ', term.green ?? DOTS.ok], ['git status', fg]),
+      line(['  modified: ', term.yellow ?? DOTS.attention], ['app.js', term.red ?? '#f85149']),
+      line(['● ', accentLine], ['Claude ', fg], ['is working…', term.cyan ?? '#39c5cf']),
+      line(['▍', term.cursor ?? fg])));
+}
+
+function galleryThemeCard(e) {
+  const busy = gallery.busy.has(e.id);
+  const t = e.theme;
+  const have = e.state === 'installed' || e.state === 'update' || e.state === 'built-in';
+  const on = theme.pref === e.id && !themePreview;
+  const trying = themePreview?.previewOf === e.id;
+  const note = galleryNote(e, 'theme');
+  const effects = [t.glow && 'a glow', t.grid && 'the Grid', t.rain && 'digital rain', t.cursor === 'light-cycle' && 'a light cycle', t.dots && 'status dots of its own', t.monochrome && 'your accent colour throughout'].filter(Boolean);
+  return h('section', { class: 'gallery-card' + (have ? ' have' : '') + (trying ? ' trying' : '') },
+    themeThumb(t),
+    h('header', {},
+      h('div', { class: 'gallery-name' }, h('b', {}, t.name),
+        h('span', { class: 'dim' }, [e.version, t.base === 'light' ? 'light' : 'dark', e.author && `by ${e.author}`].filter(Boolean).join(' · '))),
+      on ? h('span', { class: 'chip gallery-have' }, iconEl('markAllow'), 'On')
+        : e.state === 'built-in' ? h('span', { class: 'chip' }, 'Comes with LlamaTree')
+        : have && h('span', { class: 'chip gallery-have', title: `Version ${e.installed} is in your themes folder` }, iconEl('markAllow'), e.state === 'update' ? `${e.installed} installed` : 'Installed')),
+    e.description && h('p', { class: 'gallery-about' }, e.description),
+    effects.length > 0 && h('ul', { class: 'gallery-facts dim' }, h('li', {}, 'With ' + effects.join(', '))),
+    t.floor && h('p', { class: 'gallery-facts dim', title: 'Its floor is its own code. It runs sandboxed: no network, no storage, nothing of this window, and it’s told only the window’s size, the theme’s colours and how many sessions are in each state.' },
+      'Draws a floor of its own: its own code, run sandboxed, with no network and nothing of your sessions but how many there are.'),
+    note && h('p', { class: 'gallery-note' }, note),
+    h('footer', {},
+      (e.state === 'install' || e.state === 'update') && h('button', { class: 'btn primary', disabled: busy, onclick: () => installTheme(e) },
+        busy ? 'Installing…' : e.state === 'update' ? `Update to ${e.version}` : 'Install and use'),
+      e.state === 'install' && h('button', { class: 'btn', disabled: busy, onclick: () => trying ? stopThemePreview() : previewTheme(e) }, trying ? 'Stop trying' : 'Try it on'),
+      have && !on && h('button', { class: 'btn', disabled: busy, onclick: () => { themePreview = null; setThemePref(e.id); galleryChanged(); } }, 'Use'),
+      (e.state === 'installed' || e.state === 'update') && h('button', { class: 'btn', disabled: busy, onclick: () => removeTheme(e) }, 'Remove'),
+      h('span', { class: 'spacer' }),
+      h('button', { class: 'link-btn', onclick: () => request('openUrl', { uri: `${gallery.themes.repository}/blob/main/themes/${e.id}.json` }) }, 'Source')));
+}
 
 const PERMS_KEY = 'permissions';
 function isPermsTab(t) { return t?.kind === 'permissions'; }   // a declaration: tab code above may run first
@@ -7436,6 +9117,7 @@ function permsByPlugin() {
     return h('div', { class: 'perms-empty' },
       h('p', {}, plugins.list.length ? 'None of your plugins asks for anything beyond its own page.' : 'You have no plugins.'),
       h('p', { class: 'dim' }, 'A plugin names what it wants in its plugin.json’s "access"; it shows here, and asks you the first time it needs it.'),
+      h('button', { class: 'btn primary', onclick: () => openGallery('plugins') }, 'Get plugins…'), ' ',
       h('button', { class: 'btn', onclick: () => request('plugins.openFolder') }, 'Open the plugins folder'));
   }
   return [
@@ -7698,18 +9380,33 @@ function relayNotify(s) {
   const names = [...(relay.from[s.id] ?? [])].map((id) => `"${relayName(id)}"`);
   const text = `[LlamaTree] ${n === 1 ? 'A message has' : `${n} messages have`} come from ${names.length ? names.join(' and ') : 'another session'}. Read ${n === 1 ? 'it' : 'them'} with the read_messages tool, and answer with send_message: the sender doesn't see what you write here.`;
   s.term.paste(text);
-  setTimeout(() => pressEnter(s), 150);
-  setTimeout(() => resendNotice(s, 3), 1500);
+  enterAfterTyping(s, () => noticeInPrompt(s));
 }
 
+const isCodex = (s) => agentOf(s.command)?.id === 'codex';
+
 /**
- * An Enter the agent missed (it was redrawing, or still starting) leaves the notice in its prompt: Enter is pressed
- * again, a few times at most, unless you've typed into the session since (then what's in the prompt is yours to send).
+ * Presses Enter to send what was just typed into a session's prompt, and again (a few times at most) if the agent
+ * missed it, unless you've typed into the session since (then what's in the prompt is yours to send).
+ *
+ * Claude Code takes a paste in one piece, so Enter can follow at once; it can still miss one while redrawing or
+ * starting, which `inPrompt` (text still in its prompt) tells. Codex on Windows gets no bracketed paste: it guesses a
+ * paste from keys arriving close together, and an Enter within ~120ms of the last one becomes a newline in its prompt
+ * rather than sending it. ConPTY hands a paste over key by key, so Codex gets longer, and Enter again while it hasn't
+ * started work: a newline at the end of the prompt changes nothing, and Enter on an empty prompt does nothing.
  */
-function resendNotice(s, tries) {
-  if (!s.running || performance.now() - s.act.lastIn < 1500 || !noticeInPrompt(s)) return;
+function enterAfterTyping(s, inPrompt) {
+  const typedAt = s.act.lastIn;
+  const codex = isCodex(s);
+  setTimeout(() => pressEnter(s), codex ? 600 : 150);
+  const unsent = codex ? () => !s.asking && s.act.state !== 'working' : inPrompt;
+  if (unsent) setTimeout(() => resendEnter(s, typedAt, unsent, 3), 1500);
+}
+
+function resendEnter(s, typedAt, unsent, tries) {
+  if (!s.running || s.act.lastIn !== typedAt || !unsent()) return;
   pressEnter(s);
-  if (tries > 1) setTimeout(() => resendNotice(s, tries - 1), 1500);
+  if (tries > 1) setTimeout(() => resendEnter(s, typedAt, unsent, tries - 1), 1500);
 }
 
 /** Whether Claude's prompt (the box between the last two rules on the screen) still holds a notice. */
@@ -7833,9 +9530,9 @@ function controlPrompt(id, text, tries = 0) {
     return;
   }
   // The host refuses control characters already; this keeps a paste from ever carrying keys of its own.
-  text = text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '');
+  text = typeable(text, '\n\t');
   s.term.paste(text);
-  setTimeout(() => pressEnter(s), 150);
+  enterAfterTyping(s);
 }
 
 /** The tile's mark for a session another started: who, opening the starter. */
@@ -7975,8 +9672,8 @@ const pluginSessionInfo = (s) => ({
  *                          `index`, its number among the prompts, is the fallback): Claude's full-screen mode keeps no
  *                          terminal scrollback, so the conversation is where a prompt can be jumped to. { index }
  * With "ask" access (and "sessions"):
- *   ask { question, ids, history } → { answer, writer, sessions }: an agent run headless (the sessions' own, or Claude)
- *                          answers the question from the conversations of the sessions named; history is earlier
+ *   ask { question, ids, history } → { answer, writer, sessions }: Claude run headless with no tools (or Codex read-only
+ *                          when Claude isn't installed; writer names it) answers the question from the conversations of the sessions named; history is earlier
  *                          [{ question, answer }] of the same chat, so a follow-up makes sense
  * Nothing lets a plugin type into a session: what it has to say reaches an agent as a message from it ("message").
  */
@@ -8048,17 +9745,27 @@ async function pluginRequest(p, m) {
 }
 
 // What a plugin asks for its own tab, and its requests. Only its own frame is listened to, so it can't speak for
-// another plugin (and the host keeps each plugin's frame on its own address).
+// another plugin (and the host keeps each plugin's frame on its own address), and only while its own page is in it
+// (see pluginFrame): what comes before its page has loaded waits for that load, and goes if the load isn't its page.
 addEventListener('message', (e) => {
   const id = [...pluginFrames].find(([, f]) => f.frame.contentWindow === e.source)?.[0];
   if (!id || typeof e.data?.type !== 'string') return;
-  const old = e.data.type.startsWith(OLD_PLUGIN_PREFIX);
-  const m = old ? { ...e.data, type: 'llamatree:' + e.data.type.slice(OLD_PLUGIN_PREFIX.length) } : e.data;
   const f = pluginFrames.get(id);
+  if (f.stopped) return;
+  if (!f.ready) { if (f.early.length < 100) f.early.push(e.data); return; }
+  pluginMessage(id, f, e.data);
+});
+
+function pluginMessage(id, f, data) {
+  const old = data.type.startsWith(OLD_PLUGIN_PREFIX);
+  const m = old ? { ...data, type: 'llamatree:' + data.type.slice(OLD_PLUGIN_PREFIX.length) } : data;
   if (m.type === 'llamatree:request') {
-    const p = pluginById(id), frame = f.frame;
-    // Answered under the name it asked by, once.
-    const reply = (answer) => frame.contentWindow?.postMessage({ type: (old ? OLD_PLUGIN_PREFIX : 'llamatree:') + 'response', requestId: m.requestId, ...answer }, '*');
+    const p = pluginById(id), frame = f.frame, page = f.page;
+    // Answered under the name it asked by, once, and only to the page that asked: not one loaded since.
+    const reply = (answer) => {
+      if (pluginFrames.get(id) !== f || !f.ready || f.page !== page) return;
+      frame.contentWindow?.postMessage({ type: (old ? OLD_PLUGIN_PREFIX : 'llamatree:') + 'response', requestId: m.requestId, ...answer }, '*');
+    };
     pluginRequest(p, m).then((result) => reply({ result: result ?? null }), (err) => reply({ error: err.message }));
     return;
   }
@@ -8074,7 +9781,7 @@ addEventListener('message', (e) => {
     f.title = t || null;
   } else return;
   renderPluginTab(id);
-});
+}
 
 // Side panel plugins kept from last time show once the folder has been read.
 loadPlugins().then(() => renderGit());
@@ -8085,7 +9792,7 @@ loadThemes();
 // ------------------------------------------------------------------ boot
 
 $('#btnGrid').innerHTML = icon('grid');
-$('#btnGit').innerHTML = icon('git');
+$('#btnGit').innerHTML = icon('panel');
 $('#btnGitMenu').innerHTML = icon('chevD');
 $('#btnAdd').innerHTML = icon('plus') + '<span>New Session</span>';
 $('#gitRefresh').innerHTML = icon('refresh');
@@ -8101,6 +9808,8 @@ $('#btnGitMenu').addEventListener('click', sidePanelMenu);
 // Not addEventListener('click', showAddDialog): the click event would arrive as its `mode` argument.
 $('#btnAdd').addEventListener('click', () => showAddDialog());
 $('#btnAddEmpty').addEventListener('click', () => showAddDialog());
+$('#btnResumeEmpty').addEventListener('click', () => showAddDialog('resume'));
+$('#btnOpenPicked').addEventListener('click', () => openWelcomePicked());
 
 makeScrollable($('#projectTabs'));
 makeScrollable($('#sessionTabs'));
@@ -8115,9 +9824,29 @@ function moveId(ids, id, targetId, before) {
   return rest;
 }
 
-// Session tabs: dropping into another project's group moves the session into that project, at that spot.
+/** Moves a session into another project (UNKNOWN: none), last among that project's sessions. */
+function moveToProject(s, projectId) {
+  const ids = [...state.sessions.filter((x) => x !== s).map((x) => x.id), s.id];
+  state.sessions = ids.map((x) => state.byId.get(x));
+  post({ type: 'reorder', ids });
+  s.project = projectId === UNKNOWN ? null : projectId;   // shown at once; the host's reply confirms it
+  request('updateSession', { id: s.id, project: s.project ?? '' }).catch((e) => toast(e.message, true));
+  applyProjectFilter();
+  if (state.hiddenProjects.has(projectId)) {
+    toast(`"${s.name}" moved to ${projectName(projectId)}, which is hidden; show it to see the session.`);
+  }
+}
+
+// Session tabs: dropping into another project's group moves the session into that project, at that spot. Dropping one
+// on a project (its tab or row, or its group's name in the tab row), Unknown included, moves it there too, even when
+// none of that project's sessions are showing to drop beside.
 const sessionDrag = {
   item: '.session-tab',
+  into: {
+    at: (id, x, y) => document.elementFromPoint(x, y)?.closest('.project-tab[data-id], .session-group-label[data-project]') ?? null,
+    where: (id, el) => (el.dataset.id ?? el.dataset.project) === groupOf(state.byId.get(id)),
+    drop: (id, el) => moveToProject(state.byId.get(id), el.dataset.id ?? el.dataset.project),
+  },
   onDrop: (id, targetId, before) => {
     const s = state.byId.get(id), target = state.byId.get(targetId);
     const ids = moveId(state.sessions.map((x) => x.id), id, targetId, before);
@@ -8190,6 +9919,9 @@ const navLayoutItems = () => [
   { header: 'Layout' },
   ...NAV_LAYOUTS.map((l) => ({ label: l.label, checked: state.navLayout === l.id, action: () => setNavLayout(l.id) })),
   // With the sessions down the left, their branches can go (a row each, rather than two).
+  // Across the top, projects can be tabs (a click shows only that one) rather than filters to tick.
+  state.navLayout === 'top' && '-',
+  state.navLayout === 'top' && { label: 'Projects as tabs', checked: state.projectTabs, action: () => setProjectTabs(!state.projectTabs) },
   state.navLayout === 'left' && '-',
   state.navLayout === 'left' && { label: 'Show branches', checked: state.navBranches, action: () => setNavBranches(!state.navBranches) },
 ].filter(Boolean);
@@ -8328,7 +10060,7 @@ $('#docTabs').addEventListener('contextmenu', (e) => {
 });
 
 // While split, the side you click or tab into has your attention (see attend).
-for (const id of ['#diffDoc', '#convDoc', '#pluginDoc', '#permsDoc']) {
+for (const id of ['#diffDoc', '#convDoc', '#pluginDoc', '#permsDoc', '#galleryDoc']) {
   for (const type of ['pointerdown', 'focusin']) $(id).addEventListener(type, () => attend(docs.side), true);
 }
 for (const type of ['pointerdown', 'focusin']) $('#termPane').addEventListener(type, () => attend('terminal'), true);

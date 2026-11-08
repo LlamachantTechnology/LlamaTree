@@ -11,13 +11,21 @@ From the palette button at the top right, choose *System*, *Light*, *Dark* or on
 
 **Accent colour:** by default the app uses your Windows accent colour for tabs, buttons and highlights, and follows it when you change it. To pick another, use *Accent colour › Change…* under the palette button: Windows accent, the original purple, eight swatches or any custom colour, previewed as you click (Cancel or <kbd>Esc</kbd> puts back what you had). Shades are chosen so white text and the background stay readable in both themes, so a very light or dark colour is toned where needed.
 
+**Terminal background:** how solid the terminals are over the window's floor. Matrix lets its rain show through the terminals' text, which some find hard to read, and Tron can let its Grid show through. Under a theme that allows it, a small slider sits in the terminal's bottom-right corner, always on the open terminal and on a tile while the pointer is over it: drag it from see-through to solid and every terminal follows. What you set is remembered for that theme alone; dragging it back to the theme's own amount forgets yours. A theme that doesn't allow it keeps the terminals solid, with no slider.
+
 ### Built-in themes
 
 A theme is a JSON file of colours. The app comes with three:
 
-- **Nerds**: everything in shades of your accent colour on near-black, like an old monochrome screen, in a monospaced face with a faint glow. Pick green under *Accent colour* for a phosphor terminal, amber for an old amber one; the whole app recolours as you click. Status, Git's changes and the terminal's colours differ by how light or strong their shade is rather than by hue, and the status dots still differ in shape.
-- **Tron**: the Grid, near-black ruled with light-lines in your accent colour (cyan for the original, red for Ares), with amber for what needs you, mint for what went well and red for what went wrong, in Bahnschrift with a glow and a light cycle riding beside the cursor; the terminals and diffs dress to match. Like Nerds it's built from the accent colour, but keeps those signal colours, Git's change colours and the terminal's own sixteen.
+- **Nerds**: everything in shades of your accent colour on near-black, like an old monochrome screen, in a monospaced face with a faint glow. Pick green under *Accent colour* for a phosphor terminal, amber for an old amber one; the whole app recolours as you click. Git's changes and the terminal's colours differ by how light or strong their shade is rather than by hue. The status dots are the exception: idle, working, waiting and asking keep their own teal, blue, amber and pink, toned to the screen, so they're easy to tell apart at a glance.
+- **Tron**: the Grid, near-black ruled with light-lines in your accent colour (cyan for the original, or Redline), with amber for what needs you, mint for what went well and red for what went wrong, in Bahnschrift with a glow and a light cycle riding beside the cursor; the terminals and diffs dress to match. Like Nerds it's built from the accent colour, but keeps those signal colours, Git's change colours and the terminal's own sixteen.
 - **Matrix**: green phosphor on black in a monospaced face, with glyphs raining down the window's floor and, dimmed, behind the terminals' text; red for a question.
+
+They're also published in [LlamaTree-Themes](https://github.com/LlamachantTechnology/LlamaTree-Themes), where they're changed: when a newer version of one is out, *Get themes…* offers **Update**, and that copy takes the place of the one the app came with.
+
+### More themes
+
+*Get themes…* under the palette button lists the themes in [LlamaTree-Themes](https://github.com/LlamachantTechnology/LlamaTree-Themes), each with a small picture of it. **Try it on** puts it on the whole app until you install it, stop, or close the tab; **Install and use** writes it to your themes folder and switches to it. When a newer version is published its card offers **Update**, and **Remove** takes it out again. A theme of your own with the same file name is never replaced.
 
 ### Your own theme
 
@@ -40,23 +48,131 @@ A theme can set three colours or all of them:
 
 - **`base`** (`dark` or `light`) fills in every colour the theme leaves out. It's also what Claude and plugins are told, so Claude runs in its dark or light colours.
 - **`monochrome`:** `true` builds every colour from the accent colour, as [Nerds](../src/LlamaTree/wwwroot/themes/nerds.json) does; colours the theme sets itself still win.
-- **`colors`:** the app's own: `chrome`, `chrome-2`, `chrome-3` (backgrounds, darkest last), `panel`, `panel-2`, `hover`, `hover-strong`, `border`, `border-soft`, `border-strong`, `text`, `text-dim`, `text-faint`, `text-strong`, `focus`, `select`, `select-inactive`, `terminal-bg`, `editor-bg`, the status colours `ok`, `working`, `attention`, `asking`, `danger`, `danger-fill`, Git's `st-m`, `st-a`, `st-d`, `st-r`, `st-u` (modified, added, deleted, renamed, untracked), `graph`, `ref-bg`, `ref-fg`, `ref-head-bg`, `ref-head-fg`, `ref-tag-bg`, `ref-tag-fg`, and `info-bg`, `info-border`, `error-bg`, `error-border`, `pv-warn-bg`, `pv-warn-border`, `ico-folder`, `ico-file`, `scroll-thumb`, `scroll-thumb-hover`, `tab-border-shown`, `tab-border-hover`, `tick`, `tick-active`, `tick-hot`, `card-bg`, `card-border`, `bubble`, `code-fg`, `code-bg`, `well`, `table-head`, `link`, `update-fg`. Colours are `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()` or `rgba()`.
+- **`colors`:** the app's own: `chrome`, `chrome-2`, `chrome-3` (backgrounds, darkest last), `panel`, `panel-2`, `hover`, `hover-strong`, `border`, `border-soft`, `border-strong`, `text`, `text-dim`, `text-faint`, `text-strong`, `focus`, `select`, `select-inactive`, `terminal-bg`, `editor-bg`, the status colours `ok`, `working`, `attention`, `asking`, `danger`, `danger-fill`, the status dots' own `status-ok`, `status-working`, `status-attention`, `status-asking` (for the dots, session tabs and tiles only; each is its status colour if left out), Git's `st-m`, `st-a`, `st-d`, `st-r`, `st-u` (modified, added, deleted, renamed, untracked), `graph`, `ref-bg`, `ref-fg`, `ref-head-bg`, `ref-head-fg`, `ref-tag-bg`, `ref-tag-fg`, and `info-bg`, `info-border`, `error-bg`, `error-border`, `pv-warn-bg`, `pv-warn-border`, `ico-folder`, `ico-file`, `scroll-thumb`, `scroll-thumb-hover`, `tab-border-shown`, `tab-border-hover`, `tick`, `tick-active`, `tick-hot`, `card-bg`, `card-border`, `bubble`, `code-fg`, `code-bg`, `well`, `table-head`, `link`, `update-fg`. Colours are `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()` or `rgba()`.
 - **`terminal`:** xterm.js's names: `background`, `foreground`, `cursor`, `cursorAccent`, `selectionBackground`, `selectionForeground`, `selectionInactiveBackground`, the sixteen `black` … `white` and `brightBlack` … `brightWhite`, and `overviewRulerBorder`, `scrollbarSliderBackground`, `scrollbarSliderHoverBackground`, `scrollbarSliderActiveBackground`.
 - **`diff`:** `background`, `foreground`, `lineNumber`, `lineNumberActive`, `selection`, `cursor`, `lineHighlightBorder`, `insertedLine`, `insertedText`, `removedLine`, `removedText`, `insertedGutter`, `removedGutter`, `insertedOverview`, `removedOverview`, `diagonalFill`, `scrollbar`, and the syntax colours `comment`, `keyword`, `string`, `number`, `type`; `#rrggbb` or `#rrggbbaa` only.
-- **`accents`** suggests accent colours, offered first in the *Accent colour* dialog while the theme is on: up to eight `{ "name": "Ares", "color": "#ff3b3b" }`, each a short name and a `#rrggbb`. Tron suggests its own cyan and Ares' red; Nerds green phosphor, amber and paper white. They're only suggestions: any accent still works.
+- **`accents`** suggests accent colours, offered first in the *Accent colour* dialog while the theme is on: up to eight `{ "name": "Redline", "color": "#ff3b3b" }`, each a short name and a `#rrggbb`. Tron suggests its own cyan and Redline; Nerds green phosphor, amber and paper white. They're only suggestions: any accent still works.
 - **`accent`** replaces the accent colour while the theme is on: `line` for lines and highlights, `strong` for fills with white text. Leave it out to keep the one picked in *Accent colour*.
 - **`font`** is a font family for the app's own text (not the terminals'); **`glow`** makes text glow faintly in the accent colour.
 - **`grid`:** `true` rules the window's floor in faint lines of the accent colour, with a glow at the horizon, behind the title bar, tabs and panels and under the terminals' text, as the Tron themes do; editors, menus and cards keep their own backgrounds.
-- **`rain`:** `true` has glyphs rain down the window's floor in the accent colour, as Matrix does, behind the title bar, tabs and panels and, dimmed, under the terminals' text; editors, menus and cards keep their own backgrounds. With Windows' reduce-motion setting on, the rain stands still.
+- **`rain`:** `true` has glyphs rain down the window's floor in the accent colour, as Matrix does, behind the title bar, tabs and panels and, dimmed, under the terminals' text (Matrix sets `terminalBackground` to 42 for this); editors, menus and cards keep their own backgrounds. With Windows' reduce-motion setting on, the rain stands still.
+- **`terminalBackground`:** a whole number from 0 (see-through) to 100 (solid): how solid the terminals start over the window's floor, and that you may change it with the slider in each terminal's corner. Matrix has `42`, so its rain shows through; Tron has `100`, solid until you slide it. Leave it out to keep the terminals solid, with no slider.
 - **`cursor`:** `"light-cycle"` puts a light cycle beside the terminals' cursor, as in the Tron themes: it rides a little to the right of the cursor (which stays a blinking bar in the cursor colour, so you can see where you're typing and whether the terminal has focus; the cycle dims while it hasn't), glows in that colour and leaves a ribbon of light fading behind it as it moves, turning at right angles when it changes line. Leave it out for the plain cursor. With Windows' reduce-motion setting on, the glow stays and the ribbon doesn't.
+- **`cycle`:** the light cycle's own picture and how it glows, for a theme with `"cursor": "light-cycle"` (see [below](#a-light-cycle-of-its-own)).
+- **`dots`:** status dots of its own: a picture for each state, and how it moves (see [below](#status-dots-of-its-own)).
+- **`floor`:** a floor of the theme's own: a script that draws the window's floor (see [below](#a-floor-of-its-own)).
 
-A theme is only data: the app takes the names above and checks each value, so it can't restyle anything else or load anything. A file it can't use, or a value it leaves out, is listed under *Why?* in the palette menu.
+A theme is only data: the app takes the names above and checks each value, so it can't restyle anything else or load anything. Its one piece of code, a `floor`, runs sandboxed, apart from the app (below). A file it can't use, or a value it leaves out, is listed under *Why?* in the palette menu.
+
+### A light cycle of its own
+
+A theme with `"cursor": "light-cycle"` can draw its own cycle, and say how it glows and the ribbon it leaves. Everything is optional: whatever's left out stays as Tron's.
+
+```json
+"cursor": "light-cycle",
+"cycle": {
+  "image": {
+    "viewBox": [0, 0, 32, 16],
+    "shapes": [
+      { "polygon": [2, 8, 8, 4, 24, 4, 30, 8, 24, 12, 8, 12], "stroke": "accent", "fill": "#00313a", "width": 1.4 },
+      { "circle": [20, 8, 2.2], "fill": "#ffffff", "stroke": "none" },
+      { "path": "M10 4 L6 0 M10 12 L6 16", "stroke": "accent" }
+    ]
+  },
+  "size": 3, "offset": 20, "glow": 10,
+  "trail": { "width": 4, "glow": 14, "fade": 2000, "at": 0.5, "colour": "#ff8800" }
+}
+```
+
+- **`image`:** the picture, side on and facing right. `viewBox` is `[x, y, width, height]` of its own coordinates, and it's fitted to the cells it rides in. `shapes` are up to 64 of:
+  - `circle` `[cx, cy, r]`, `ellipse` `[cx, cy, rx, ry]`, `rect` `[x, y, width, height]` or `line` `[x1, y1, x2, y2]`;
+  - `polyline` or `polygon` `[x, y, x, y, …]`;
+  - `path`: SVG path data (commands and numbers, starting with `M`), up to 4,000 characters.
+
+  Each can have a `fill` and a `stroke` (none and the cursor's colour if left out), a stroke `width` (0 to 8) and an `opacity` (0 to 1).
+- **Colours** are `"cursor"` (the terminal's cursor colour), `"accent"`, one of the page's colours by name (`working`, `danger`…), a `#rgb`, `#rrggbb` or `#rrggbbaa`, or `"none"`.
+- **`size`:** how many cells wide it's drawn, 1 to 6 (3), one row high.
+- **`offset`:** how far right of the cursor it rides, in pixels, 0 to 60 (25), so it doesn't cover what you're typing.
+- **`glow`:** how far its glow reaches, in pixels, 0 to 20 (6).
+- **`trail`:** the ribbon: its `width` in pixels, 1 to 6 (2); how far its `glow` reaches, 0 to 20 (10); how long it takes to `fade`, in milliseconds, 200 to 3,000 (800); how far down the row it runs, `at` from 0 (top) to 1 (bottom) (0.69, Tron's wheels); and its `colour` (`"cursor"`). `"trail": false` leaves no ribbon.
+
+The picture is only shapes and numbers: the app checks each one and draws the picture itself, so a picture can't carry a script, a link or a style the way an SVG file can. A shape it can't use is left out, and a number out of range keeps Tron's, with why under *Why?* in the palette menu. The picture is clipped to its cells, so it can't paint over what the terminal shows.
+
+### Status dots of its own
+
+A theme can draw the status dots itself: a small picture for each state a session can be in, and how each one moves. While the theme is on, its dots are a card of their own in *Status dots…* (as "Forest's own"), used until you pick another style there for that theme ([more](sessions.md#status-dots)).
+
+```json
+"dots": {
+  "about": "Brackets round a cursor, as on a text screen.",
+  "size": 10,
+  "working": {
+    "image": { "viewBox": [0, 0, 10, 10], "shapes": [{ "path": "M5 1 A4 4 0 1 1 1 5", "width": 1.6 }] },
+    "motion": "spin"
+  },
+  "waiting": {
+    "image": { "viewBox": [0, 0, 10, 10], "shapes": [{ "rect": [1, 1, 8, 8], "fill": "status", "stroke": "none" }] },
+    "motion": "blink"
+  },
+  "asking": {
+    "image": { "viewBox": [0, 0, 10, 10], "shapes": [{ "polygon": [5, 0.5, 9.5, 9, 0.5, 9], "fill": "status", "stroke": "none" }] },
+    "motion": "hop"
+  }
+}
+```
+
+- **The states:** `idle`, `working`, `waiting` (done while you were away), `asking` (needs your answer) and `stopped` (not running). Draw as many as you like; a state left out is a plain, still dot in its colour (idle and stopped as in every style).
+- **`image`:** a picture, as the light cycle's is (`viewBox` and up to 64 `shapes`, [above](#a-light-cycle-of-its-own)), fitted into the dot's square. A shape's colours are `"status"` (the colour of the state it shows, which is what a stroke is if left out), `"accent"`, one of the page's colours by name, a `#rgb`, `#rrggbb` or `#rrggbbaa`, or `"none"`.
+- **`motion`:** `none` (if left out), `spin`, `pulse` (fades and comes back), `breathe` (shrinks and swells), `blink`, `beat`, `hop` or `shake`. With Windows' reduce-motion setting on, every dot stands still, so give each state a shape of its own as well as a colour.
+- **`size`:** how big the pictures are drawn, in pixels, 6 to 14 (10), centred where the 8px dot is. Larger ones reach past it without taking room, so a tab keeps its width.
+- **`about`:** a sentence for its card in *Status dots…*, up to 200 characters.
+
+Only the colours? `status-ok`, `status-working`, `status-attention` and `status-asking` under `colors` change the dots in every style, and the session tabs and tiles that show a status, without touching the other places those colours are used.
+
+### A floor of its own
+
+A theme can draw the window's floor itself, the way Matrix's rain does: an animated scene behind the title bar, tabs and panels, and under the terminals as far as `terminalBackground` lets it show. `floor` is the script, as one string in the theme's file, of up to 256K characters:
+
+```js
+let stars = [];
+floor({
+  fps: 30,                        // how often draw is called: 30 if left out, 60 at most
+  layout(ctx, info) {             // at the start, and when the window's size changes
+    stars = Array.from({ length: 200 }, () => ({ x: Math.random() * info.width, y: Math.random() * info.height }));
+  },
+  draw(ctx, now, info) {          // each frame: now is in milliseconds
+    ctx.fillStyle = info.colors.chrome;
+    ctx.fillRect(0, 0, info.width, info.height);
+    ctx.fillStyle = info.colors.accent;
+    for (const s of stars) ctx.fillRect(s.x, (s.y + now / 50) % info.height, 1.5, 1.5);
+  },
+});
+```
+
+`ctx` is a [2D canvas context](https://developer.mozilla.org/docs/Web/API/OffscreenCanvasRenderingContext2D) the size of the window, in CSS pixels (the app scales it for the screen). `info` holds:
+
+- `width`, `height` and `dpr` (the screen's pixels per CSS pixel);
+- `still`: `true` while Windows' reduce-motion setting is on. `draw` is then called once (and again when anything in `info` changes) rather than every frame, so draw a picture that stands still;
+- `colors`: the theme's colours by name, with the accent colour picked: `accent`, `accent-strong`, `chrome`, `chrome-2`, `chrome-3`, `panel`, `panel-2`, `border`, `border-soft`, `border-strong`, `text`, `text-dim`, `text-faint`, `text-strong`, `ok`, `working`, `attention`, `asking`, `danger`, `terminal-bg`, `link`;
+- `sessions`: how many sessions are `working`, `waiting` (done while you were away), `asking` (needing your answer), `idle` and `stopped`, and the `total`. Only the counts: never a session's name, folder or anything it shows.
+
+**What a floor can't do.** A floor is someone else's code, so it never runs on the app's page. It runs in a web worker inside a sandboxed frame of its own, and:
+
+- **It has no network.** The frame allows no requests of any kind: no fetch, sockets, scripts, images or fonts from anywhere. Everything it draws is drawn by its own code.
+- **It sees nothing of the app.** Not the page, its storage, your sessions' names or output, files, or other themes and plugins. It has no storage of its own either. It's told only what's listed above.
+- **It can't take the pointer or the keyboard**, open windows, or navigate anywhere. It sits under everything.
+- **It's kept in check.** It's paused while the window is hidden. If it stops answering for a few seconds (a loop that never lets go) or its script fails, it's taken away and the app says so. The theme stays on without it.
+- **You can turn it off.** *Show <theme>'s own floor* in the palette menu, under the themes.
+
+*Get themes…* marks a theme with a floor on its card. A theme from LlamaTree-Themes with a floor has also been reviewed there before it's published.
 
 ## Plugins
 
 A plugin is a web page of your own, shown in a document tab (like a diff or the Project view) or in the side panel (beside Git Changes). The palette button lists your plugins under **Plugins**, each with the menu items it adds there; pick one to open it. Plugins can add items to a project's or a session's menu too, and a button to the title bar.
 
-**Open the plugins folder**, in the palette menu, opens the folder they live in: `plugins` in the app's data folder (`%APPDATA%\LlamaTree\plugins` on Windows). The folder is read each time the menu opens, so a plugin you add shows without restarting. The plugins themselves live in this repository under [`plugins/`](../plugins), one folder each with a release to download (its zip and checksum under [Releases](https://github.com/LlamachantTechnology/LlamaTree/releases), tagged `<id>-v<version>`): unzip it into that folder. [`plugins/CONTRIBUTING.md`](../plugins/CONTRIBUTING.md) says how one is written, checked and released.
+**Get plugins…**, in the palette menu, lists the plugins in [LlamaTree-Plugins](https://github.com/LlamachantTechnology/LlamaTree-Plugins): what each does, where it shows and what it asks to see. **Install** downloads its release, checks it against the SHA-256 in the catalog and puts it in your plugins folder; it still asks you before it sees anything (see [Permissions](#permissions)). A card offers **Update** when a newer version is published, and **Remove** deletes its folder and forgets what you allowed it. A plugin of your own with the same folder name is never replaced.
+
+**Open the plugins folder**, in the palette menu, opens the folder they live in: `plugins` in the app's data folder (`%APPDATA%\LlamaTree\plugins` on Windows). The folder is read each time the menu opens, so a plugin you add shows without restarting.
 
 ### plugin.json
 
@@ -86,7 +202,7 @@ plugins\
 - **The folder's name** is the plugin's id and its address: `https://counter.plugin.local/index.html`. Use letters, digits and hyphens.
 - **`title`** is its name on the menu and its tab (the folder's name if left out). **`description`** is shown when you hover its tab.
 - **`icon`** is shown beside its name there and in Permissions: an image file in its folder (SVG, PNG, ICO, GIF, JPEG or WebP, up to 64 KB). Without one it has its title bar button's icon, if it has a button, or the app's plugin icon.
-- **`entry`** is its page, a file inside the folder (`index.html` if left out). Its scripts, styles and images load from the same folder with relative paths.
+- **`entry`** is its page, a file inside the folder (`index.html` if left out). Its scripts, styles and images load from the same folder with relative paths. A plugin is that one page: its frame never shows a page from anywhere else, and if the page goes to another address (a link, even to another of its own files, or a reload), the app puts its page back, starting again.
 - **`placement`:** `"tab"` (the default) opens it as a document tab; `"panel"` gives it a tab in the side panel, which is there as soon as the app has read the plugin, without opening it first, and which you can drag to another group like the others. Close it with a middle-click or its right-click menu; it then stays out of the panel until you open it again from the palette, a menu or its button.
 - **`menu`:** up to 8 items. Picking one opens the plugin and sends it the item's `command`, with what was clicked. **`where`** names the menus it's on, one or a list (the palette menu if left out):
   - `"palette"`: under the plugin's name in the palette menu;
@@ -168,7 +284,7 @@ When a message comes for it, the app sends `message` `{ unread, from, fromName }
 
 A plugin with `"access": ["sessions", "ask"]` can also put a question about your sessions to an agent. You're asked separately before it may, because each question runs Claude once, headless, with your own sign-in, the way [Suggest](git.md#suggest) does, and counts against your usage.
 
-The agent is the sessions' own when they all share one that can answer this way (Codex, say), otherwise Claude. It runs with no tools and saves no conversation, so it can't change anything. The question goes with the conversations of the sessions named: your prompts, what the agent answered and the tools it used, each session's newest turns first within a fixed budget, so an old or long conversation is cut short at the top. The plugin sees the answers. **Stop it asking Claude about your sessions** in the palette menu takes it away again.
+The agent is Claude Code, even for Codex sessions: it runs with no tools or MCP servers and saves no conversation, so it sees only what it's sent and can't read a file, run a command or change anything. Without Claude Code installed, Codex answers instead. It runs read-only, so it can't change anything, but Codex has no way to run without tools: it can read any file you can, such as your SSH keys, and a plugin could ask it to and see what it read. With neither installed, asking fails. The question goes with the conversations of the sessions named: your prompts, what the agent answered and the tools it used, each session's newest turns first within a fixed budget, so an old or long conversation is cut short at the top. The plugin sees the answers. **Stop it asking Claude about your sessions** in the palette menu takes it away again.
 
 | Request | Answer |
 |---|---|
@@ -193,7 +309,7 @@ The most specific rule decides: one for that very session, then the session's ru
 
 **Reset.** A plugin's card in By plugin has **Reset** once you've answered anything about it: it forgets what it may do, its projects and the sessions hidden from it, so it asks again. A session's card in By session has **Reset** once it has rules of its own: they're cleared, and All sessions' rules decide.
 
-**Where your answers are kept.** Your answers about plugins (what each may do, its projects, the sessions you hid) are kept in `plugin-grants.json` next to `sessions.json`, where both the page and the message relay read them. Each answer that allows something remembers the plugin's `plugin.json`: if that file changes, what you allowed is asked again, and Permissions marks the plugin **Changed since you allowed it**.
+**Where your answers are kept.** Your answers about plugins (what each may do, its projects, the sessions you hid) are kept in `plugin-grants.json` next to `sessions.json`, where both the page and the message relay read them. Each answer that allows something remembers the plugin's `plugin.json`: if that file changes, what you allowed is asked again, and Permissions marks the plugin **Changed since you allowed it**. Access you allowed in a version that didn't yet remember `plugin.json` is asked again the same way, once, since there's no telling whether the plugin's files were swapped since; what you refused it, its projects and the sessions you hid from it are kept. Answers are checked against the plugins folder when LlamaTree starts, before any message goes by them; a server's plugin is allowed nothing until LlamaTree has read it from its server.
 
 ### What a plugin can't do
 

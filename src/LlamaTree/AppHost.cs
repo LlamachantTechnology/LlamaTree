@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using LlamaTree.Git;
 using LlamaTree.Panels;
+using LlamaTree.Gallery;
 using LlamaTree.Plugins;
 using LlamaTree.Relay;
 using LlamaTree.Sessions;
@@ -36,12 +37,32 @@ internal sealed partial class AppHost
     private volatile bool webReady;   // read by sessions' output threads too
     private bool shutDown;
     private UpdateInfo? update;
+    /// <summary>
+    /// The count of users (see <see cref="TelemetryService"/>): one request an hour, if you've said yes. Started when the
+    /// page is first ready, it looks 20 seconds later (so it never competes with the start) and then every ten minutes.
+    /// </summary>
+    private readonly System.Threading.Timer countTimer;
+    private bool countStarted;
 
     /// <summary>The window title: shown in the taskbar, Alt+Tab and the Dock.</summary>
     public static string Title => $"LlamaTree {UpdateService.CurrentVersion}";
 
     /// <summary>Whether any session's program is running.</summary>
     public bool AnyRunning => sessions.Values.Any(s => s.IsRunning);
+
+    /// <summary>
+    /// Sessions the first window starts straight away rather than when each is first opened (see
+    /// <see cref="SessionInfo.StartWithApp"/>): told to that window's page once, so a later window doesn't start one you stopped.
+    /// </summary>
+    private readonly HashSet<string> startWithApp = [];
+
+    /// <summary>Keeps <see cref="SessionInfo.WasRunning"/>, saving it when it changes.</summary>
+    private void NoteRunning(TerminalSession s, bool running)
+    {
+        if (s.Info.WasRunning == running || !sessions.ContainsKey(s.Id)) return;
+        s.Info.WasRunning = running;
+        SaveSessions();
+    }
 
     /// <summary>A session started or ended (on the app thread).</summary>
     public event Action? RunningChanged;
@@ -96,6 +117,7 @@ internal sealed partial class AppHost
             if (Interlocked.Exchange(ref flushQueued, 1) == 0) RunOnUi(() => { flushQueued = 0; FlushOutput(); });
         }, null, 16, 16);
         conversationTimer = new System.Threading.Timer(_ => RunOnUi(FollowConversations), null, 10_000, 10_000);
+        countTimer = new System.Threading.Timer(_ => RunOnUi(() => _ = TelemetryService.PingIfDueAsync(CountUsage())), null, Timeout.Infinite, Timeout.Infinite);
 
         var tidied = false;
         foreach (var info in SessionStore.Load())
@@ -109,6 +131,9 @@ internal sealed partial class AppHost
             }
             tidied |= TidyConversation(info);
             AddSessionRuntime(info);
+            if (info.StartsWithApp) startWithApp.Add(info.Id);
+            // Any other isn't running until it's opened, and isn't in use if the app closes before then.
+            else if (info.WasRunning) (info.WasRunning, tidied) = (false, true);
         }
         ApplyResumeAfterUpdate();
         foreach (var s in sessions.Values.Where(s => TerminalSession.NeedsOwnConversation(s.Info)))
@@ -383,6 +408,7 @@ internal sealed partial class AppHost
             }
             if (app.sessions.GetValueOrDefault(id) is not { } s) return;
             app.CatchUpConversation(s);
+            app.NoteRunning(s, false);
             if (!s.Stop()) return;
             app.FlushOutput();
             app.Post(new { type = "exited", id, code = (int?)null });
@@ -445,7 +471,7 @@ internal sealed partial class AppHost
         type = "plugins.grants",
         grants = grants.Snapshot().ToDictionary(x => x.Key, x => new
         {
-            allowed = x.Value.Allowed, denied = x.Value.Denied, projects = x.Value.Projects, hidden = x.Value.Hidden, changed = x.Value.Changed,
+            allowed = grants.Allowed(x.Key), denied = x.Value.Denied, projects = x.Value.Projects, hidden = x.Value.Hidden, changed = x.Value.Changed,
         }),
     };
 
@@ -476,6 +502,9 @@ internal sealed partial class AppHost
     /// <summary>Themes of your own (see <see cref="Themes.ThemeCatalog"/>); the app's own are in wwwroot/themes.</summary>
     private static string ThemeFolder => Path.Combine(SessionStore.AppDataFolder, "themes");
     private static string BuiltInThemeFolder => Path.Combine(AppContext.BaseDirectory, "wwwroot", "themes");
+
+    /// <summary>Where Get plugins unpacks a plugin before it goes in the plugins folder (beside it, so it moves rather than copies).</summary>
+    private static string GalleryStaging => Path.Combine(SessionStore.AppDataFolder, "downloads");
     private readonly Dictionary<string, PluginInfo> plugins = [];
 
     /// <summary>
@@ -505,6 +534,9 @@ internal sealed partial class AppHost
         panelStore.KeepOwners(order);
         panelStore.Changed += change => RunOnUi(() => Post(PanelsMessage(change)));
         relay.Policy.KeepSessions(order);
+        // Check the answers against the plugins folder before anything goes by them; servers' plugins join at the first
+        // plugins.list, and until then are allowed nothing (PluginGrants.State).
+        grants.Reconcile(PluginCatalog.Load(PluginFolder).Plugins);
         relay.Gate = grants.RelayGate;
         relay.SetPeers(RelayPeers());
         // Answers about plugins change which plugins take part in messages, so the peers are read again too.
@@ -529,8 +561,11 @@ internal sealed partial class AppHost
             await Task.Delay(1500);
             Post(new { type = "typePrompt", id, text = prompt });
         });
+        // A session's token is in its --mcp-config file: only this user may read it (folders from before were 0755).
+        PrivateFiles.Tighten(SessionStore.AppDataFolder);
+        PrivateFiles.Tighten(PanelConfigFolder, "mcp-*.json");
         try { panelServer = PanelServer.TryStart(mcp); }
-        catch (Exception) { /* sessions start without panels */ }
+        catch (Exception ex) { AppLog.Error("Panels couldn't start (sessions start without them): " + AppLog.Describe(ex)); }
         // Shown among another computer's sessions: its window answers the sessions' tool calls while it's attached.
         if (panelServer != null) panelServer.ForwardToolCall = (session, m) => Remote != null ? window.ForwardToolCall(session, m) : null;
     }
@@ -554,9 +589,9 @@ internal sealed partial class AppHost
         if (s.Agent?.PanelsFromFile != true) return link;   // configured on its command line, if at all
         try
         {
-            Directory.CreateDirectory(PanelConfigFolder);
+            PrivateFiles.CreateDirectory(PanelConfigFolder);
             var path = Path.Combine(PanelConfigFolder, $"mcp-{s.Id}.json");
-            File.WriteAllText(path, panelServer.ConfigJson(s.Id));
+            PrivateFiles.WriteAllText(path, panelServer.ConfigJson(s.Id));   // 0600: it holds the session's token
             return link with { ConfigFile = path };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -624,6 +659,7 @@ internal sealed partial class AppHost
         shutDown = true;
         flushTimer.Dispose();
         conversationTimer.Dispose();
+        countTimer.Dispose();
         foreach (var s in sessions.Values) CatchUpConversation(s);   // so each reopens where it was
         foreach (var s in sessions.Values) s.Dispose();
         panelServer?.Dispose();
@@ -683,6 +719,13 @@ internal sealed partial class AppHost
             FlushOutput();
             Post(new { type = "exited", id = session.Id, code });
             RunningChanged?.Invoke();
+            // Quit on its own (/exit): no longer in use. Not straight away: signing out ends the sessions' programs
+            // too, perhaps before this app, and those still count as running when it closed.
+            if (code == 0)
+                _ = Task.Delay(TimeSpan.FromSeconds(10)).ContinueWith(_ => RunOnUi(() =>
+                {
+                    if (generation == session.Generation && !session.IsRunning) NoteRunning(session, false);
+                }), TaskScheduler.Default);
         });
         s.StatusChanged += (session, status) => RunOnUi(() => Post(StatusMessage(session, status)));
         sessions[info.Id] = s;
@@ -731,6 +774,8 @@ internal sealed partial class AppHost
             running = x.Item2,
             server = x.Info.Server,
             startedBy = x.Info.StartedBy,
+            startWithApp = x.Info.StartWithApp,
+            autoStart = startWithApp.Contains(x.Info.Id),   // start now, rather than when first opened
         }),
         servers = ServersState(),
     };
@@ -758,6 +803,12 @@ internal sealed partial class AppHost
         behind = st.Behind,
         staged = st.Staged,
         unstaged = st.Unstaged,
+        // The repository's own settings that can run programs, for the question above Git Changes; null when there are none.
+        trust = st.Trust == null ? null : new
+        {
+            repo = st.Trust.Repo, hash = st.Trust.Hash, trusted = st.Trust.Trusted,
+            keys = st.Trust.Keys.Select(k => new { key = k.Key, value = k.Value, where = k.Where }),
+        },
     };
 
     private void FlushOutput()
@@ -802,7 +853,8 @@ internal sealed partial class AppHost
         }
         catch (Exception ex)
         {
-            if (reqId != null) Post(new { type = "reply", reqId, ok = false, error = ex.Message });
+            // A code lets the page tell a refusal it can do something about (trust the repository) from a failure.
+            if (reqId != null) Post(new { type = "reply", reqId, ok = false, error = ex.Message, code = ex is RepoTrustRequiredException ? "needsTrust" : null });
         }
     }
 
@@ -814,6 +866,7 @@ internal sealed partial class AppHost
             case "ready":
                 window.PostJson(AccentMessage());   // first: with Windows' app mode the page knows its theme before sessions start
                 Post(SessionList());
+                startWithApp.Clear();   // told to this window's page, the first: a later one starts none of them
                 // Sessions that ran on while no window was open: what they showed, and a redraw at the page's size.
                 foreach (var s in order.Where(sessions.ContainsKey).Select(id => sessions[id]).Where(s => s.IsRunning))
                 {
@@ -828,7 +881,14 @@ internal sealed partial class AppHost
                     Post(new { type = "newConversations", ids = newConversations });
                     newConversations.Clear();
                 }
+                // A damaged sessions.json (or another of the app's files) that was set aside, told once.
+                foreach (var text in Platform.JsonFile.TakeProblems()) Post(new { type = "fileProblem", text });
                 foreach (var s in sessions.Values) _ = s.RefreshStatusAsync();
+                if (!countStarted)
+                {
+                    countStarted = true;
+                    countTimer.Change(TimeSpan.FromSeconds(20), TimeSpan.FromMinutes(10));
+                }
                 return null;
 
             case "start":
@@ -837,6 +897,7 @@ internal sealed partial class AppHost
                 tails[s.Id].Clear();
                 var prompted = s.FirstPromptOnce != null;   // starts on a prompt: its first output is work, not start-up
                 s.Start(Int(msg, "cols"), Int(msg, "rows"), OptStr(msg, "theme"), PanelLinkFor(s));
+                NoteRunning(s, true);
                 RunningChanged?.Invoke();
                 return new { prompted };
             }
@@ -870,6 +931,7 @@ internal sealed partial class AppHost
                 tails[s.Id].Clear();
                 var prompted = s.FirstPromptOnce != null;
                 s.Start(Int(msg, "cols"), Int(msg, "rows"), OptStr(msg, "theme"), PanelLinkFor(s));
+                NoteRunning(s, true);
                 RunningChanged?.Invoke();
                 return new { prompted };
             }
@@ -895,6 +957,7 @@ internal sealed partial class AppHost
                 // Stopping disposes the process without raising Exited, so tell the page itself (code null = stopped).
                 var s = Get(msg);
                 CatchUpConversation(s);
+                NoteRunning(s, false);
                 if (s.Stop())
                 {
                     FlushOutput();
@@ -910,7 +973,7 @@ internal sealed partial class AppHost
                     .Select(item => (Dir: Str(item, "directory"), Name: Str(item, "name"), Command: Str(item, "command"), Project: ProjectId(item),
                         Prompt: OptStr(item, "prompt")?.Trim() is { Length: > 0 and <= PanelSpec.MaxPrompt } p ? p : null,
                         Conversation: OptStr(item, "conversation") is { } conv && TerminalSession.IsConversationId(conv) ? conv : null,
-                        Within: OptStr(item, "within")))
+                        Within: OptStr(item, "within"), StartWithApp: SessionInfo.StartWithAppValue(OptStr(item, "startWithApp"))))
                     .ToList();
                 // All or nothing: check every folder before adding any. Adding as we went left the earlier sessions
                 // added but unsaved and unshown after a failure, and a retry then added them a second time.
@@ -937,6 +1000,7 @@ internal sealed partial class AppHost
                         Command = string.IsNullOrWhiteSpace(item.Command) ? "claude" : item.Command.Trim(),
                         Project = item.Project,
                         Within = item.Within,   // as resolved and checked above; checked again at each start
+                        StartWithApp = item.StartWithApp,
                     };
                     TidyConversation(info);   // a "claude --resume X" typed as the command: conversation X
                     if (item.Conversation != null && TerminalSession.CanTrackConversation(info.Command))
@@ -983,6 +1047,7 @@ internal sealed partial class AppHost
                     s.Info.Command = TerminalSession.StripContinue(s.Info.Command);
                 }
                 if (msg.TryGetProperty("project", out _)) s.Info.Project = ProjectId(msg);
+                if (msg.TryGetProperty("startWithApp", out _)) s.Info.StartWithApp = SessionInfo.StartWithAppValue(OptStr(msg, "startWithApp"));
                 SaveSessions();
                 Post(SessionList());
                 return null;
@@ -1158,8 +1223,9 @@ internal sealed partial class AppHost
                 return null;
             case "plugins.grants.import":
             {
-                // Answers the page kept itself before they were kept here; taken only into an empty store.
-                if (!msg.TryGetProperty("grants", out var g) || g.ValueKind != JsonValueKind.Object) return null;
+                // Answers the page kept itself before they were kept here; taken only into an empty store. Never from a
+                // --remote window: what its page kept is about the plugins on that computer, not this one's of the same id.
+                if (Remote != null || !msg.TryGetProperty("grants", out var g) || g.ValueKind != JsonValueKind.Object) return null;
                 List<string> List(JsonElement e, string name) => e.TryGetProperty(name, out var a) && a.ValueKind == JsonValueKind.Array
                     ? a.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToList() : [];
                 grants.Import(g.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.Object).ToDictionary(p => p.Name, p => new PluginGrant(
@@ -1184,7 +1250,7 @@ internal sealed partial class AppHost
                 // A new worktree of the session's repository, on a new branch; the page then adds a session there.
                 var root = GitDir(msg);
                 var path = Str(msg, "path").Trim();
-                var result = await GitService.AddWorktreeAsync(root, path, Str(msg, "branch").Trim(), OptStr(msg, "base")?.Trim());
+                var result = NeedsTrust(await GitService.AddWorktreeAsync(root, path, Str(msg, "branch").Trim(), OptStr(msg, "base")?.Trim()));
                 if (!result.Ok) throw new InvalidOperationException(string.IsNullOrWhiteSpace(result.Error) ? "git couldn't create the worktree." : result.Error.Trim());
                 return Path.GetFullPath(path);
             }
@@ -1197,17 +1263,27 @@ internal sealed partial class AppHost
                 // The Project view's rows for the session's repository: every worktree, how far each is from the base
                 // branch, and what's changed in it.
                 return await GitService.GetWorktreeOverviewAsync(GitDir(msg));
+            case "worktree.contents":
+            {
+                // For Remove worktree's confirmation: what is changed in it, and the ignored files git would delete with it.
+                var root = Str(msg, "root").Trim();
+                if (!Directory.Exists(root)) throw new InvalidOperationException("The repository folder is gone.");
+                return await GitService.GetWorktreeContentsAsync(root, Str(msg, "path").Trim())
+                    ?? throw new InvalidOperationException("Couldn't read what is in the worktree.");
+            }
             case "worktree.remove":
             {
                 // The repository is named rather than a session: the page has already removed the sessions in the
                 // worktree (a process with its folder as working directory would keep it), and it may have been the
-                // only one. Their processes can take a moment to let go of the folder, hence the retries.
+                // only one. Their processes can take a moment to let go of the folder, hence the retries. Ignored files
+                // are deleted only when the page says the person was shown them and agreed (deleteIgnored).
                 var root = Str(msg, "root").Trim();
                 if (!Directory.Exists(root)) throw new InvalidOperationException("The repository folder is gone.");
+                var deleteIgnored = Bool(msg, "deleteIgnored");
                 GitResult result = null!;
                 for (var attempt = 0; attempt < 6; attempt++)
                 {
-                    result = await GitService.RemoveWorktreeAsync(root, Str(msg, "path").Trim());
+                    result = await GitService.RemoveWorktreeAsync(root, Str(msg, "path").Trim(), deleteIgnored);
                     if (result.Ok || !result.Error.Contains("failed to delete", StringComparison.OrdinalIgnoreCase) && !result.Error.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)) break;
                     await Task.Delay(500);
                 }
@@ -1254,6 +1330,9 @@ internal sealed partial class AppHost
                         }),
                 };
             }
+            case "agents.installed":
+                // The agents a session here could start (their program is on the sessions' PATH), for the welcome screen.
+                return await Task.Run(() => Agents.All.Where(HeadlessAgent.CanStart).Select(a => a.Id).ToList());
             case "conversations":
             {
                 // Every agent's, latest first; only one agent's when the page asks for it (a session switching conversation).
@@ -1378,6 +1457,77 @@ internal sealed partial class AppHost
                 Directory.CreateDirectory(ThemeFolder);
                 OpenFolder(ThemeFolder);
                 return null;
+            case "logs.openFolder":
+                // The app's log (see AppLog): the host's, and the window's beside it. A server's window browses the server's.
+                OpenFolder(AppLog.CreateFolder(AppLog.Current?.Folder ?? AppLog.DefaultFolder));
+                return null;
+
+            // ---- Get plugins and Get themes (see GalleryService): the catalogs, read only when the page asks
+            case "gallery.plugins":
+            {
+                var (offered, problems) = await GalleryService.PluginsAsync(Bool(msg, "refresh"));
+                var (here, _) = PluginCatalog.Load(PluginFolder);
+                return new
+                {
+                    repository = GalleryService.PluginsRepository, appVersion = Updates.UpdateService.CurrentVersion.ToString(), problems,
+                    plugins = offered.Select(p =>
+                    {
+                        var have = here.FirstOrDefault(h => h.Id == p.Id);
+                        var haveOne = have != null || Directory.Exists(Path.Combine(PluginFolder, p.Id));
+                        return new
+                        {
+                            id = p.Id, title = p.Title, description = p.Description, version = p.Version, minAppVersion = p.MinAppVersion, placement = p.Placement,
+                            access = p.Access, inbox = p.Inbox, icon = p.Icon, author = p.Author, installed = have?.Version,
+                            state = GalleryService.StateOf(p.Version, p.MinAppVersion, haveOne, have?.Version),
+                        };
+                    }),
+                };
+            }
+            case "gallery.themes":
+            {
+                var (offered, problems) = await GalleryService.ThemesAsync(Bool(msg, "refresh"));
+                var (here, _) = Themes.ThemeCatalog.Load(BuiltInThemeFolder, ThemeFolder);
+                return new
+                {
+                    repository = GalleryService.ThemesRepository, appVersion = Updates.UpdateService.CurrentVersion.ToString(), problems,
+                    themes = offered.Select(t =>
+                    {
+                        var have = here.FirstOrDefault(h => h.Id == t.Id);
+                        var haveOne = have != null || File.Exists(Path.Combine(ThemeFolder, t.Id + ".json"));
+                        return new
+                        {
+                            id = t.Id, version = t.Version, minAppVersion = t.MinAppVersion, description = t.Description, author = t.Author, theme = t.Theme,
+                            installed = have?.Version, state = GalleryService.StateOf(t.Version, t.MinAppVersion, haveOne, have?.Version, have?.BuiltIn == true),
+                        };
+                    }),
+                };
+            }
+            case "gallery.installPlugin":
+            {
+                var id = Str(msg, "id");
+                var (offered, _) = await GalleryService.PluginsAsync(false);
+                var p = offered.FirstOrDefault(x => x.Id == id) ?? throw new InvalidOperationException("That plugin isn't in the catalog any more.");
+                await GalleryService.InstallPluginAsync(p, PluginFolder, GalleryStaging);
+                return null;
+            }
+            case "gallery.removePlugin":
+            {
+                var id = Str(msg, "id");
+                await Task.Run(() => GalleryService.RemovePlugin(PluginFolder, id));
+                grants.Forget(id);   // installed again, it asks again
+                return null;
+            }
+            case "gallery.installTheme":
+            {
+                var id = Str(msg, "id");
+                var (offered, _) = await GalleryService.ThemesAsync(false);
+                var t = offered.FirstOrDefault(x => x.Id == id) ?? throw new InvalidOperationException("That theme isn't in the catalog any more.");
+                GalleryService.InstallTheme(t, ThemeFolder, BuiltInThemeFolder);
+                return null;
+            }
+            case "gallery.removeTheme":
+                GalleryService.RemoveTheme(ThemeFolder, Str(msg, "id"));
+                return null;
 
             // ---- git
             case "git.refresh":
@@ -1392,6 +1542,16 @@ internal sealed partial class AppHost
                 if (!await s.SelectRepositoryAsync(Str(msg, "root")))
                     throw new InvalidOperationException("That repository isn't in the session's folder any more. Refresh and try again.");
                 SaveSessions();
+                return null;
+            }
+            case "git.trust":
+            {
+                // Trust (or stop trusting) the repository's own settings, as the page showed them: if they've changed
+                // since (hash), nothing is trusted and the page asks again with the new ones.
+                if (!await RepoTrust.SetAsync(GitDir(msg), Bool(msg, "trusted"), OptStr(msg, "hash")))
+                    throw new InvalidOperationException("The repository's settings changed after they were shown. Look at them again before trusting it.");
+                // Every worktree of the repository shares the answer, so every session's Git Changes follows.
+                foreach (var x in sessions.Values) _ = x.RefreshStatusAsync();
                 return null;
             }
             case "git.diff":
@@ -1412,6 +1572,7 @@ internal sealed partial class AppHost
                 var result = type == "git.stage"
                     ? await GitService.StageAsync(GitDir(msg), paths)
                     : await GitService.UnstageAsync(GitDir(msg), paths);
+                NeedsTrust(result);
                 await s.RefreshStatusAsync();
                 if (!result.Ok) throw new InvalidOperationException(result.Error);
                 return null;
@@ -1440,7 +1601,7 @@ internal sealed partial class AppHost
             case "git.commit":
             {
                 var s = Get(msg);
-                var result = await GitService.CommitAsync(GitDir(msg), Str(msg, "message"), msg.GetProperty("all").GetBoolean());
+                var result = NeedsTrust(await GitService.CommitAsync(GitDir(msg), Str(msg, "message"), msg.GetProperty("all").GetBoolean()));
                 await s.RefreshStatusAsync();
                 if (!result.Ok) throw new InvalidOperationException(string.IsNullOrEmpty(result.Error) ? result.Text : result.Error);
                 return result.Text.Trim();
@@ -1455,6 +1616,7 @@ internal sealed partial class AppHost
                 // The branch picker: switch to a local branch, or to a remote one's local branch (made if needed).
                 var s = Get(msg);
                 var result = await GitService.CheckoutBranchAsync(GitDir(msg), Str(msg, "branch"), Bool(msg, "remote"), Bool(msg, "stash"));
+                if (result.NeedsTrust) throw new RepoTrustRequiredException(result.Message);
                 await s.RefreshStatusAsync();
                 if (!result.Ok) throw new InvalidOperationException(result.Message);
                 return result.Message;
@@ -1466,6 +1628,7 @@ internal sealed partial class AppHost
                 var s = Get(msg);
                 var result = await GitService.CreateBranchAsync(GitDir(msg), Str(msg, "branch").Trim(), OptStr(msg, "base"),
                     Bool(msg, "checkout"), Bool(msg, "stash"));
+                if (result.NeedsTrust) throw new RepoTrustRequiredException(result.Message);
                 await s.RefreshStatusAsync();
                 if (!result.Ok) throw new InvalidOperationException(result.Message);
                 return result.Message;
@@ -1474,6 +1637,15 @@ internal sealed partial class AppHost
                 return UpdateService.CurrentVersion.ToString();
             case "notices.check":
                 return (await NoticeService.CheckAsync()).Select(n => new { id = n.Id, kind = n.Kind, text = n.Text, linkLabel = n.LinkLabel, linkUrl = n.LinkUrl, color = n.Color });
+            case "count.state":
+                // Whether you've said yes to being counted (null: not asked yet), for the question along the top and the version menu.
+                return CountMessage(TelemetryService.Load());
+            case "count.set":
+            {
+                var state = TelemetryService.SetEnabled(Bool(msg, "enabled"));
+                if (state.Enabled == true) _ = TelemetryService.PingIfDueAsync(CountUsage());   // this hour's, now that there's a yes
+                return CountMessage(state);
+            }
             case "update.check":
             {
                 // The page decides when to ask (at start, then every 15 minutes, or from the menu).
@@ -1530,7 +1702,7 @@ internal sealed partial class AppHost
                 var host = await PullRequestService.GetHostAsync(root, branch);
                 if (host == null) return null;
                 PullRequestInfo? pr = null;
-                try { pr = await PullRequestService.FindAsync(root, host, branch); }
+                try { pr = await PullRequestService.FindAsync(host, branch); }
                 catch (Exception) { /* offline, timed out or refused: just no chip */ }
                 return new
                 {
@@ -1554,6 +1726,7 @@ internal sealed partial class AppHost
                     "git.pull" => await GitService.PullAsync(dir),
                     _ => await GitService.PushAsync(dir),
                 };
+                NeedsTrust(result);
                 await s.RefreshStatusAsync();   // ahead/behind and history follow
                 // git reports progress and results on stderr; stdout carries the rest (e.g. pull's file summary).
                 var text = string.Join('\n', new[] { result.Error, result.Text.Trim() }.Where(t => !string.IsNullOrWhiteSpace(t)));
@@ -1645,11 +1818,20 @@ internal sealed partial class AppHost
         return new SessionBrief(s.Id, name.Length > 0 ? name : s.Id, project, s.Info.Directory, status, agent, conv);
     }
 
+    /// <summary>A command refused until the repository is trusted becomes the error the page asks about.</summary>
+    private static GitResult NeedsTrust(GitResult result) => result.NeedsTrust ? throw new RepoTrustRequiredException(result.Error) : result;
+
     private string GitDir(JsonElement msg)
     {
         var s = Get(msg);
         return s.RepoRoot ?? s.Info.Directory;
     }
+
+    /// <summary>The count's state for the page: enabled is null until you've answered.</summary>
+    private static object CountMessage(CountState s) => new { enabled = s.Enabled, lastSent = s.LastSent?.ToString("yyyy-MM-dd'T'HH:00'Z'") };
+
+    /// <summary>What the count says about use: how many projects and sessions are open. Read on the UI thread.</summary>
+    private CountUsage CountUsage() => new(projects.Count, sessions.Count);
 
     private static string Str(JsonElement e, string name) =>
         e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";

@@ -1,3 +1,4 @@
+using LlamaTree.Platform;
 using LlamaTree.Plugins;
 
 namespace LlamaTree.Hosting;
@@ -8,10 +9,14 @@ namespace LlamaTree.Hosting;
 /// server sends is checked as it would be from anyone: names can't reach out of their folder; a file to open is taken
 /// only when this computer asked to open one (<see cref="ExpectFile"/>); and the number and size of transfers, files
 /// and plugins are capped, so a server can't fill this computer's disk or hold its files open. Called on the window's
-/// (or this computer's host's) UI thread.
+/// (or this computer's host's) UI thread. <paramref name="server"/> is how the server is reached (user@server, or a Host
+/// from the SSH config), recorded on Linux as where a file to open came from (see <see cref="MarkFromInternet"/>). What's
+/// refused is logged (see <see cref="AppLog"/>): why, never what was in it.
 /// </summary>
-internal sealed class ServerCopies(string folder)
+internal sealed class ServerCopies(string folder, string? server = null)
 {
+    private void Refused(string what) => AppLog.Warn($"{server ?? "a server"}: {what}");
+
     private readonly Dictionary<string, Incoming> files = [];
     private readonly Dictionary<string, long> pluginBytes = [];
 
@@ -37,8 +42,11 @@ internal sealed class ServerCopies(string folder)
     /// <summary>How long an asked-for file may take to start coming.</summary>
     private static readonly TimeSpan ExpectFor = TimeSpan.FromMinutes(2);
 
-    /// <summary>When this computer asked to open each file it's still waiting for (oldest first).</summary>
-    private readonly Queue<DateTime> expected = new();
+    /// <summary>
+    /// Each file this computer is still waiting for (oldest first): when it asked, and the name of what it asked to open
+    /// (made safe), or null when the request didn't name a path.
+    /// </summary>
+    private readonly List<(DateTime At, string? Name)> expected = [];
     private bool tidied;
 
     private sealed record Incoming(FileStream Stream, string Path)
@@ -51,49 +59,125 @@ internal sealed class ServerCopies(string folder)
 
     /// <summary>
     /// This computer has asked the server to open something (a file, a path link…): a file may come for it, starting
-    /// within <see cref="ExpectFor"/>. A file the server sends unasked is refused.
+    /// within <see cref="ExpectFor"/>. A file the server sends unasked is refused. <paramref name="path"/> is the path the
+    /// request named, as sent to the server: the file that comes for it must have its name (see <see cref="FilePart"/>).
     /// </summary>
-    public void ExpectFile()
+    public void ExpectFile(string? path = null)
     {
         Prune();
-        if (expected.Count < 16) expected.Enqueue(DateTime.UtcNow);
+        if (expected.Count < 16) expected.Add((DateTime.UtcNow, string.IsNullOrWhiteSpace(path) ? null : ServerFiles.SafeName(path)));
     }
 
-    private void Prune()
-    {
-        while (expected.Count > 0 && DateTime.UtcNow - expected.Peek() > ExpectFor) expected.Dequeue();
-    }
+    private void Prune() => expected.RemoveAll(e => DateTime.UtcNow - e.At > ExpectFor);
 
     /// <summary>
     /// A part of a file to open. Returns its path here once the last part has come, else null. A file nobody asked
-    /// for, one past the number on their way at once, one whose parts come out of order, and one that grows too big
-    /// are dropped.
+    /// for, one whose name isn't that of a file asked for, one past the number on their way at once, one whose parts
+    /// come out of order, and one that grows too big are dropped. The name it's kept under is the one asked for (made
+    /// safe), as the file system really made it; and it's marked as having come from the internet (see
+    /// <see cref="MarkFromInternet"/>), so the system and the apps that open it treat it as they would a download.
     /// </summary>
     public string? FilePart(string token, string name, string data, int index, bool last)
     {
-        if (token.Length is 0 or > 64 || !token.All(char.IsAsciiLetterOrDigit) || token.Contains('/')) return null;
+        if (token.Length is 0 or > 64 || !token.All(char.IsAsciiLetterOrDigit) || token.Contains('/'))
+        {
+            if (index == 0) Refused("a file to open was refused: its token isn't one.");
+            return null;
+        }
         if (index == 0)
         {
             Drop(token);
             Prune();
-            if (expected.Count == 0 || files.Keys.Count(k => !k.Contains('/')) >= MaxOpenTransfers) return null;
-            expected.Dequeue();
+            if (files.Keys.Count(k => !k.Contains('/')) >= MaxOpenTransfers)
+            {
+                Refused($"a file to open was refused: {MaxOpenTransfers} were already on their way.");
+                return null;
+            }
+            // The oldest request for a file of this name; else the oldest that named none.
+            var safe = ServerFiles.SafeName(name);
+            var asked = expected.FindIndex(e => e.Name == safe);
+            if (asked < 0) asked = expected.FindIndex(e => e.Name == null);
+            if (asked < 0)
+            {
+                Refused(expected.Count == 0
+                    ? "a file to open was refused: nothing here asked to open one."
+                    : "a file to open was refused: nothing here asked to open a file of that name.");
+                return null;
+            }
+            safe = expected[asked].Name ?? safe;
+            expected.RemoveAt(asked);
             Tidy();
             var dir = Path.Combine(folder, "opened", token);
             Directory.CreateDirectory(dir);
-            var path = Path.Combine(dir, ServerFiles.SafeName(name));
-            files[token] = new Incoming(new FileStream(path, FileMode.Create, FileAccess.Write), path);
+            var path = Path.Combine(dir, safe);
+            var stream = new FileStream(path, FileMode.Create, FileAccess.Write);
+            // What's opened, and judged by its name, is the file the system made, whatever the name given said.
+            if (OperatingSystem.IsWindows() && Terminal.Native.FinalPathOf(stream.SafeFileHandle) is { } made)
+                path = Path.Combine(dir, Path.GetFileName(made));
+            files[token] = new Incoming(stream, path);
         }
         var done = Append(token, data, index, last, ServerFiles.MaxFile, out _);
-        if (done != null) ReadOnly(done);
+        if (done != null)
+        {
+            MarkFromInternet(done, OriginUrl(server, Path.GetFileName(done)));
+            ReadOnly(done);
+        }
         return done;
     }
+
+    /// <summary>
+    /// Where a file to open came from, as Linux records it: llamatree-server://&lt;server&gt;/&lt;name&gt;, the server as
+    /// it's reached without the user name (user@server); one that isn't a host name is kept, escaped, in the path instead.
+    /// </summary>
+    internal static string OriginUrl(string? server, string name)
+    {
+        var host = server?[(server.LastIndexOf('@') + 1)..] ?? "";
+        return Uri.CheckHostName(host) != UriHostNameType.Unknown
+            ? $"llamatree-server://{host}/{Uri.EscapeDataString(name)}"
+            : $"llamatree-server:///{Uri.EscapeDataString(host.Length > 0 ? host : "server")}/{Uri.EscapeDataString(name)}";
+    }
+
+    /// <summary>
+    /// The file is marked as from the internet, as a browser marks a download, while it can still be written (Linux
+    /// lets only those who may write a file set its user attributes). Where it can't be marked (a file system without the place for it: FAT,
+    /// some network drives, tmpfs...), the copy is kept all the same.
+    /// <list type="bullet">
+    /// <item>Windows: the Mark of the Web, a Zone.Identifier stream with ZoneId 3. SmartScreen checks it before it runs,
+    /// and Office and others open it protected.</item>
+    /// <item>macOS: the com.apple.quarantine attribute (see <see cref="QuarantineValue"/>). Gatekeeper checks it before
+    /// it runs, and asks before it's first opened.</item>
+    /// <item>Linux: user.xdg.origin.url, <paramref name="origin"/> (freedesktop.org's attribute for where a file was
+    /// downloaded from). Nothing enforces it, but it's there for file managers and the person to see.</item>
+    /// </list>
+    /// </summary>
+    internal static void MarkFromInternet(string path, string? origin = null)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows()) File.WriteAllText(path + ":Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3\r\n");
+            else if (OperatingSystem.IsMacOS()) ExtendedAttributes.TrySet(path, "com.apple.quarantine", QuarantineValue(DateTimeOffset.UtcNow));
+            else if (origin != null) ExtendedAttributes.TrySet(path, "user.xdg.origin.url", origin);
+        }
+        catch (Exception) { /* never a reason to lose the copy */ }
+    }
+
+    /// <summary>
+    /// macOS's quarantine value, "flags;time;agent;event". Flags 0081: 0x0080, still in quarantine (macOS adds 0x0040
+    /// once the person has approved it), and 0x0001, downloaded (QTN_FLAG_DOWNLOAD); not 0x0002 (QTN_FLAG_SANDBOX, written
+    /// by a sandboxed app), which this isn't. The time as hex seconds since 1970; this app as the agent; and no event id,
+    /// as nothing is added to the system's QuarantineEvents database.
+    /// </summary>
+    internal static string QuarantineValue(DateTimeOffset at) => $"0081;{at.ToUnixTimeSeconds():x8};LlamaTree;";
 
     /// <summary>A plugin's copy starts afresh (its folder here is emptied). Past <see cref="MaxPlugins"/>, refused.</summary>
     public void PluginBegin(string id)
     {
         if (!PluginCatalog.IsValidId(id)) return;
-        if (!pluginBytes.ContainsKey(id) && pluginBytes.Count >= MaxPlugins) return;
+        if (!pluginBytes.ContainsKey(id) && pluginBytes.Count >= MaxPlugins)
+        {
+            Refused($"plugin {id} was refused: it has {MaxPlugins} here already.");
+            return;
+        }
         PluginGone(id);
         pluginBytes[id] = 0;
     }
@@ -108,35 +192,87 @@ internal sealed class ServerCopies(string folder)
         try { Directory.Delete(PluginFolder(id), true); } catch (DirectoryNotFoundException) { } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
+    /// <summary>
+    /// Every plugin's copy but <paramref name="keep"/>'s is dropped, on the disk too: those from an earlier run (whose
+    /// sizes this one never counted) and any half sent. Done as the server's host says who it is, before it sends its
+    /// plugins again, so the disk only ever holds what's counted against the limits above.
+    /// </summary>
+    public void ClearPluginsExcept(IReadOnlySet<string> keep)
+    {
+        foreach (var id in pluginBytes.Keys.Where(id => !keep.Contains(id)).ToList()) PluginGone(id);
+        var plugins = new DirectoryInfo(Path.Combine(folder, "plugins"));
+        if (!plugins.Exists) return;
+        try
+        {
+            foreach (var entry in plugins.GetFileSystemInfos())
+            {
+                if (keep.Contains(entry.Name)) continue;
+                try
+                {
+                    if (entry is DirectoryInfo d) d.Delete(true);
+                    else entry.Delete();
+                }
+                catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
     /// <summary>A part of one of a plugin's files, at <paramref name="relative"/> in its folder ('/' between folders).</summary>
     public void PluginPart(string id, string relative, string data, int index, bool last)
     {
         if (!PluginCatalog.IsValidId(id) || !pluginBytes.ContainsKey(id)) return;
         var parts = relative.Split('/');
         var invalid = Path.GetInvalidFileNameChars();
-        if (relative.Length > 400 || parts.Any(p => p.Length == 0 || p == "." || p == ".." || p.Any(c => invalid.Contains(c) || c is '\\' or ':' || char.IsControl(c)))) return;   // the same on every system
+        if (relative.Length > 400 || parts.Any(p => p.Length == 0 || p == "." || p == ".." || p.Any(c => invalid.Contains(c) || c is '\\' or ':' || char.IsControl(c))))   // the same on every system
+        {
+            if (index == 0) Refused($"a file of plugin {id} was refused: its name can't be used.");
+            return;
+        }
         var root = PluginFolder(id);
         var path = Path.GetFullPath(Path.Combine([root, .. parts]));
-        if (!path.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.Ordinal)) return;
+        if (!path.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            if (index == 0) Refused($"a file of plugin {id} was refused: it's outside the plugin's folder.");
+            return;
+        }
         var key = id + "/" + relative;
         if (index == 0)
         {
             Drop(key);
-            if (files.Keys.Count(k => k.Contains('/')) >= MaxOpenTransfers) return;
+            if (files.Keys.Count(k => k.Contains('/')) >= MaxOpenTransfers)
+            {
+                Refused($"a file of plugin {id} was refused: {MaxOpenTransfers} were already on their way.");
+                return;
+            }
             // Counted as it starts, empty or not: too many files is none of the plugin.
             pluginFiles[id] = pluginFiles.GetValueOrDefault(id) + 1;
             if (pluginFiles[id] > MaxPluginFiles || pluginFiles.Values.Sum() > MaxAllPluginFiles)
             {
+                Refused($"plugin {id} was dropped: it has more files than a plugin may ({MaxPluginFiles}, {MaxAllPluginFiles} in all).");
                 PluginGone(id);
                 return;
             }
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            files[key] = new Incoming(new FileStream(path, FileMode.Create, FileAccess.Write), path);
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                files[key] = new Incoming(new FileStream(path, FileMode.Create, FileAccess.Write), path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A file where it needs a folder, or a folder where it needs a file: that file isn't taken.
+                Refused($"a file of plugin {id} was refused: it collides with another of its files or folders ({ex.GetType().Name}).");
+                return;
+            }
         }
         Append(key, data, index, last, MaxPluginBytes, out var written);
         pluginBytes[id] += written;
         // More than a plugin, or all of a server's, should be: none of it.
-        if (pluginBytes[id] > MaxPluginBytes || pluginBytes.Values.Sum() > MaxAllPluginBytes) PluginGone(id);
+        if (pluginBytes[id] > MaxPluginBytes || pluginBytes.Values.Sum() > MaxAllPluginBytes)
+        {
+            Refused($"plugin {id} was dropped: it's bigger than a plugin may be ({MaxPluginBytes >> 20} MB, {MaxAllPluginBytes >> 20} MB in all).");
+            PluginGone(id);
+        }
     }
 
     /// <summary>
@@ -167,6 +303,7 @@ internal sealed class ServerCopies(string folder)
         }
         catch (Exception ex) when (ex is FormatException or InvalidDataException or IOException)
         {
+            Refused($"a file on its way was dropped: {(ex is InvalidDataException ? "a part out of order, or more than it may be" : ex.GetType().Name)}.");
             Drop(key);
             return null;
         }

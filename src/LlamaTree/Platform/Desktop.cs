@@ -7,7 +7,7 @@ namespace LlamaTree.Platform;
 /// Handing files, folders and links to the desktop (Explorer, Finder, the Linux file manager and browser), and reading
 /// files or an image off the clipboard on macOS and Linux (Windows reads its clipboard in its window, see MainForm).
 /// </summary>
-internal static class Desktop
+internal static partial class Desktop
 {
     /// <summary>Opens a link, file or folder with what the desktop opens it with.</summary>
     public static void OpenExternal(string target)
@@ -34,47 +34,129 @@ internal static class Desktop
     /// Opens a changed file the way the file manager would, except that anything the desktop would run (scripts,
     /// executables) is opened for editing instead: "Open" must never execute a file Claude just wrote.
     /// </summary>
-    public static void OpenFileForViewing(string path)
+    /// <param name="fromServer">
+    /// The file is a copy of a server's (see ServerCopies), and the server chose what's in it: only types known to be
+    /// shown, not run or acted on (<see cref="IsViewable"/>), go to their app; anything else that's text opens in a text
+    /// editor, and the rest is shown in its folder.
+    /// </param>
+    public static void OpenFileForViewing(string path, bool fromServer = false)
     {
+        // Judged by what the path really is: a link named notes.txt can point at anything, and Windows drops dots and
+        // spaces from the end of a name, so "run.cmd ." is the file run.cmd.
+        var real = PathText.FinalPath(path) is { } f ? PathText.Plain(f) : path;
         if (OperatingSystem.IsMacOS())
         {
             // So many Mac types do something when opened (.terminal, .webloc, .command, .prefPane, .mobileconfig...) that
             // only types known to be shown, not run, go to their app; everything else opens in the default text
-            // editor. Judged by what the path really is: a link named notes.txt can point at anything.
-            var real = PathText.FinalPath(path) ?? path;
-            if (!IsRunnable(real) && MacViewable.Contains(Path.GetExtension(real))) Run("/usr/bin/open", real);
+            // editor.
+            if (!IsRunnable(real) && (fromServer ? IsViewable(real) : MacViewable.Contains(Path.GetExtension(real)))) Run("/usr/bin/open", real);
             else Run("/usr/bin/open", "-t", real);
+            return;
+        }
+        if (fromServer)
+        {
+            switch (ServerFileOpening(real))
+            {
+                case ServerOpen.App:
+                    OpenExternal(real);
+                    break;
+                case ServerOpen.TextEditor when OperatingSystem.IsWindows():
+                    Run(Path.Combine(Environment.SystemDirectory, "notepad.exe"), real);
+                    break;
+                case ServerOpen.TextEditor:
+                    OpenInTextEditor(real);
+                    break;
+                default:
+                    ShowInFolder(real);
+                    break;
+            }
+            return;
+        }
+        if (!IsRunnable(real))
+        {
+            OpenExternal(real);
             return;
         }
         if (!OperatingSystem.IsWindows())
         {
-            var real = PathText.FinalPath(path) ?? path;
-            if (!IsRunnable(real))
-            {
-                OpenExternal(real);
-                return;
-            }
-            // The desktop's text editor for plain text; failing that, the folder it's in rather than the file itself.
-            if (Capture("xdg-mime", ["query", "default", "text/plain"])?.Trim() is { Length: > 0 } desktopFile &&
-                desktopFile.EndsWith(".desktop", StringComparison.Ordinal) && Run("gtk-launch", desktopFile[..^8], path))
-                return;
-            OpenExternal(Path.GetDirectoryName(path) ?? path);
-            return;
-        }
-        if (!IsRunnable(path))
-        {
-            OpenExternal(path);
+            OpenInTextEditor(real);
             return;
         }
         try
         {
-            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true, Verb = "edit" });
+            Process.Start(new ProcessStartInfo(real) { UseShellExecute = true, Verb = "edit" });
         }
         catch (System.ComponentModel.Win32Exception)
         {
             // No "edit" verb for this type (e.g. .exe, .py).
-            Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "notepad.exe")) { ArgumentList = { path } });
+            Run(Path.Combine(Environment.SystemDirectory, "notepad.exe"), real);
         }
+    }
+
+    /// <summary>How a server's copy is opened (Windows and Linux, see <see cref="OpenFileForViewing"/>).</summary>
+    internal enum ServerOpen { App, TextEditor, Folder }
+
+    /// <summary>
+    /// A server's copy goes to its app only when it's a type known to be shown, not run; else text goes to a text
+    /// editor (Notepad on Windows, never the type's own "edit" verb), and anything else is shown in its folder.
+    /// </summary>
+    internal static ServerOpen ServerFileOpening(string real) =>
+        IsViewable(real) && !IsRunnable(real) ? ServerOpen.App
+        : LooksLikeText(real) ? ServerOpen.TextEditor
+        : ServerOpen.Folder;
+
+    /// <summary>Linux: the desktop's text editor for plain text; failing that, the folder it's in rather than the file itself.</summary>
+    private static void OpenInTextEditor(string path)
+    {
+        if (Capture("xdg-mime", ["query", "default", "text/plain"])?.Trim() is { Length: > 0 } desktopFile &&
+            desktopFile.EndsWith(".desktop", StringComparison.Ordinal) && Run("gtk-launch", desktopFile[..^8], path))
+            return;
+        OpenExternal(Path.GetDirectoryName(path) ?? path);
+    }
+
+    /// <summary>
+    /// Whether the start of the file reads as text (no NUL bytes): a file that isn't is no use in a text editor, so it's
+    /// shown in its folder instead. A file that can't be read isn't text.
+    /// </summary>
+    internal static bool LooksLikeText(string path)
+    {
+        try
+        {
+            using var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var buffer = new byte[8192];
+            var n = f.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
+            return Array.IndexOf(buffer, (byte)0, 0, n) < 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Types that every desktop's usual app shows without running anything or acting on what's in them: pictures, PDFs,
+    /// and plain text. What a server sends is opened in its app only when it's one of these (see
+    /// <see cref="OpenFileForViewing"/>). Left out on purpose: web pages and anything a browser renders (.html, .htm,
+    /// .mht, .svg, .xml with a stylesheet), which run script; Office files, which can carry macros or links; .csv, which
+    /// Excel reads formulas from; and source in languages the desktop may run (.js, .py, .ps1...).
+    /// </summary>
+    private static readonly HashSet<string> ViewableExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".ico", ".heic",
+        ".pdf",
+        ".txt", ".text", ".md", ".markdown", ".log", ".json", ".yaml", ".yml", ".toml", ".diff", ".patch",
+        ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".java", ".kt", ".go", ".rs", ".swift", ".css", ".scss", ".less", ".sql",
+    };
+
+    /// <summary>
+    /// Whether a file of this name is a type known to be shown, not run (<see cref="ViewableExtensions"/>). A name ending
+    /// in a dot or space never is: Windows makes such a file under another name, with another extension.
+    /// </summary>
+    internal static bool IsViewable(string path)
+    {
+        var name = Path.GetFileName(path);
+        if (name.Length == 0 || name[^1] == '.' || char.IsWhiteSpace(name[^1])) return false;
+        return ViewableExtensions.Contains(Path.GetExtension(name));
     }
 
     /// <summary>Opens the folder a file or folder is in, with it selected (Explorer, Finder, or the Linux file manager).</summary>
@@ -101,11 +183,19 @@ internal static class Desktop
         OpenExternal(Path.GetDirectoryName(PathText.TrimEnd(path)) ?? path);
     }
 
-    // Script and interpreter types that Windows' own unsafe-type list (AssocIsDangerous) may not cover.
+    // Script and interpreter types that Windows' own unsafe-type list (AssocIsDangerous) may not cover, and types that
+    // act when opened: search and library descriptions that reach out to a share, Office add-ins and macro-enabled
+    // documents, troubleshooting packs, remote-desktop and Java Web Start files, installers and HTML applications. Web
+    // pages (.html, .svg, .mht...) aren't here: a page Claude made opens in the browser, which sandboxes its script. A
+    // server's copy of one is never handed to the browser anyway (see IsViewable).
     private static readonly HashSet<string> ScriptExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".ps1", ".psm1", ".py", ".pyw", ".pyz", ".sh", ".bash", ".rb", ".pl", ".jar",
-        ".appinstaller", ".appx", ".appxbundle", ".msix", ".msixbundle", ".application", ".appref-ms",
+        ".ps1", ".psm1", ".psd1", ".py", ".pyw", ".pyz", ".sh", ".bash", ".rb", ".pl", ".jar",
+        ".appinstaller", ".ms-appinstaller", ".appx", ".appxbundle", ".msix", ".msixbundle", ".application", ".appref-ms", ".vsto",
+        ".msi", ".msp", ".mst", ".lnk", ".url", ".website", ".scf", ".pif", ".cpl", ".inf", ".reg", ".chm", ".gadget", ".wsc", ".sct",
+        ".search-ms", ".searchconnector-ms", ".library-ms", ".settingcontent-ms", ".diagcab", ".rdp", ".jnlp", ".iqy", ".slk",
+        ".xll", ".xla", ".xlam", ".ppa", ".ppam", ".docm", ".dotm", ".xlsm", ".xltm", ".xlsb", ".pptm", ".potm", ".ppsm", ".sldm",
+        ".hta",
     };
 
     // macOS: types its own apps (Preview, TextEdit, QuickTime, Pages...) or an editor show without running anything.
@@ -153,6 +243,8 @@ internal static class Desktop
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return true; }   // can't tell: don't run it
             return ext.Length > 1 && UnixRunnableExtensions.Contains(ext);
         }
+        // Windows drops dots and spaces from the end of a name, so "run.cmd ." and "run.exe  ." are run.cmd and run.exe.
+        ext = Path.GetExtension(Path.GetFileName(path).TrimEnd('.', ' '));
         if (ext.Length <= 1) return false;
         var pathExt = Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC";
         return ScriptExtensions.Contains(ext)
@@ -178,19 +270,169 @@ internal static class Desktop
 
     // ---------------------------------------------------------------- clipboard (macOS, Linux)
 
-    /// <summary>Where an image pasted into a terminal is saved, as a file the agent can attach. Saved images go after a week.</summary>
-    public static string PastedImageFolder { get; } = Path.Combine(Path.GetTempPath(), "LlamaTree", "pasted-images");
+    /// <summary>
+    /// A new file for an image pasted into a terminal, to hand the agent; week-old ones are cleared out first. Kept where
+    /// only you can reach: on Linux the session's runtime folder ($XDG_RUNTIME_DIR, gone at logout) when there's a sound
+    /// one, else the app's local data folder. Never the shared temp folder, where another account could make the folder
+    /// first (or a link in its place) to read the pictures or have the clear-out delete files elsewhere. Throws
+    /// <see cref="IOException"/> when no such folder can be had: the paste fails rather than writing somewhere unsafe.
+    /// </summary>
+    public static string NewPastedImagePath() =>
+        NewPastedImagePath(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"), AppProfile.CustomFolder ?? AppProfile.LocalFolder, DateTime.Now);
 
-    /// <summary>A new file in <see cref="PastedImageFolder"/> for a pasted image, clearing out week-old ones first.</summary>
-    public static string NewPastedImagePath()
+    internal static string NewPastedImagePath(string? runtimeFolder, string dataFolder, DateTime now)
     {
-        Directory.CreateDirectory(PastedImageFolder);
-        foreach (var old in new DirectoryInfo(PastedImageFolder).EnumerateFiles("*.png").Where(f => f.LastWriteTimeUtc < DateTime.UtcNow.AddDays(-7)))
+        foreach (var folder in PastedImageFolders(runtimeFolder, dataFolder))
         {
-            try { old.Delete(); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            if (!MakePrivateFolder(folder)) continue;
+            ClearOldPastedImages(folder, now.ToUniversalTime().AddDays(-7));
+            return Path.Combine(folder, $"image-{now:yyyyMMdd-HHmmss-fff}.png");
         }
-        return Path.Combine(PastedImageFolder, $"image-{DateTime.Now:yyyyMMdd-HHmmss-fff}.png");
+        throw new IOException("The pasted image wasn't saved: its folder isn't one only you can use (it's a link, or another account's).");
     }
+
+    /// <summary>Where pasted images may go, best first: the runtime folder's (macOS and Linux, when it's sound), then the data folder's.</summary>
+    internal static IEnumerable<string> PastedImageFolders(string? runtimeFolder, string dataFolder) => PrivateFolders(runtimeFolder, dataFolder, "pasted-images");
+
+    private static IEnumerable<string> PrivateFolders(string? runtimeFolder, string dataFolder, string name)
+    {
+        if (!OperatingSystem.IsWindows() && runtimeFolder is { Length: > 0 } && Path.IsPathFullyQualified(runtimeFolder) && IsPrivate(runtimeFolder, OthersAny))
+            yield return Path.Combine(runtimeFolder, "LlamaTree", name);
+        yield return Path.Combine(dataFolder, name);
+    }
+
+    /// <summary>
+    /// A new file for one dropped on a terminal whose path the window can't tell (macOS and Linux, where the web view
+    /// gives the page a dropped file's contents but not its path; a picture dragged from a browser): it's saved, and
+    /// the copy's path pasted. Kept as pasted images are (see <see cref="NewPastedImagePath()"/>), in a folder of its
+    /// own, named for the time and then the dropped file (made safe), so the agent still sees what it was.
+    /// </summary>
+    public static string NewDroppedFilePath(string name) =>
+        NewDroppedFilePath(name, Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"), AppProfile.CustomFolder ?? AppProfile.LocalFolder, DateTime.Now);
+
+    internal static string NewDroppedFilePath(string name, string? runtimeFolder, string dataFolder, DateTime now)
+    {
+        foreach (var folder in PrivateFolders(runtimeFolder, dataFolder, "dropped-files"))
+        {
+            if (!MakePrivateFolder(folder)) continue;
+            ClearOld(folder, DroppedFileName(), now.ToUniversalTime().AddDays(-7));
+            var stamp = $"{now:yyyyMMdd-HHmmss-fff}";
+            var safe = SafeFileName(name);
+            var path = Path.Combine(folder, $"{stamp}-{safe}");
+            for (var i = 2; Path.Exists(path); i++) path = Path.Combine(folder, $"{stamp}-{i}-{safe}");
+            return path;
+        }
+        throw new IOException("The dropped file wasn't saved: its folder isn't one only you can use (it's a link, or another account's).");
+    }
+
+    /// <summary>A file name made from what the page says a dropped file was called: no folders, nothing a file system refuses, not too long.</summary>
+    internal static string SafeFileName(string name)
+    {
+        var bad = Path.GetInvalidFileNameChars().Concat(['/', '\\', ':', '*', '?', '"', '<', '>', '|']).ToHashSet();
+        var safe = new string(name.Select(c => bad.Contains(c) || char.IsControl(c) ? '_' : c).ToArray()).Trim().TrimEnd('.', ' ');   // Windows drops trailing dots
+        if (safe.Length > 100)
+        {
+            var ext = Path.GetExtension(safe);
+            safe = ext.Length is > 1 and <= 16 ? safe[..(100 - ext.Length)] + ext : safe[..100];
+        }
+        return safe.Length > 0 ? safe : "file";
+    }
+
+    /// <summary>The names dropped files are saved under (see <see cref="NewDroppedFilePath(string)"/>): the only files their clear-out deletes.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^\d{8}-\d{6}-\d{3}-.")]
+    private static partial System.Text.RegularExpressions.Regex DroppedFileName();
+
+    /// <summary>The names pasted images are given (see <see cref="NewPastedImagePath()"/>): the only files the clear-out deletes.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^image-\d{8}-\d{6}-\d{3}\.png$")]
+    private static partial System.Text.RegularExpressions.Regex PastedImageName();
+
+    private const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+    private const UnixFileMode OthersWrite = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
+    private const UnixFileMode OthersAny = OthersWrite | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute;
+
+    /// <summary>
+    /// Makes <paramref name="folder"/> and its parent if they're missing (0700 on macOS and Linux) and checks both are
+    /// yours: real folders, not links; and, on macOS and Linux, owned by you and writable by no one else. The folder is
+    /// then made 0700. False if they aren't yours, and nothing should be written there.
+    /// </summary>
+    internal static bool MakePrivateFolder(string folder)
+    {
+        try
+        {
+            var parent = Path.GetDirectoryName(folder)!;
+            foreach (var f in new[] { parent, folder })   // the parent checked before anything's made in it
+            {
+                if (IsLink(f)) return false;   // not made through, or checked through
+                if (OperatingSystem.IsWindows()) Directory.CreateDirectory(f);
+                else if (!Directory.Exists(f)) Directory.CreateDirectory(f, OwnerOnly);
+                if (!IsPrivate(f, OthersWrite)) return false;
+            }
+            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(folder, OwnerOnly);   // yours, but others could read it: closed up
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// A real folder (not a link or other reparse point) that's yours: on macOS and Linux owned by you, and with none of
+    /// <paramref name="refused"/> in its mode.
+    /// </summary>
+    private static bool IsPrivate(string folder, UnixFileMode refused)
+    {
+        try
+        {
+            if (IsLink(folder) || !Directory.Exists(folder)) return false;
+            if (OperatingSystem.IsWindows()) return true;
+            var mode = File.GetUnixFileMode(folder);
+            if ((mode & refused) != 0) return false;
+            // Only a file's owner may change its mode: setting it to what it is changes nothing, and fails for anyone else's.
+            File.SetUnixFileMode(folder, mode);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>A symbolic link (dangling or not), junction or other reparse point: not looked through.</summary>
+    private static bool IsLink(string path)
+    {
+        var info = new FileInfo(path);   // for a folder too: neither looks through a link
+        if (info.LinkTarget != null) return true;
+        var attributes = info.Attributes;   // all bits set (-1) when nothing's there
+        return (int)attributes != -1 && attributes.HasFlag(FileAttributes.ReparsePoint);
+    }
+
+    /// <summary>
+    /// Deletes the pasted images in <paramref name="folder"/> last written before <paramref name="before"/>: only files
+    /// of the app's own naming, never links, and nothing in folders within.
+    /// </summary>
+    internal static void ClearOldPastedImages(string folder, DateTime before) => ClearOld(folder, PastedImageName(), before);
+
+    /// <summary>As <see cref="ClearOldPastedImages"/>, for the files whose names match <paramref name="names"/>.</summary>
+    private static void ClearOld(string folder, System.Text.RegularExpressions.Regex names, DateTime before)
+    {
+        foreach (var entry in new DirectoryInfo(folder).EnumerateFileSystemInfos())
+        {
+            if (entry is not FileInfo file || !names.IsMatch(file.Name)) continue;
+            try
+            {
+                if (file.LinkTarget != null || file.Attributes.HasFlag(FileAttributes.ReparsePoint) || file.LastWriteTimeUtc >= before) continue;
+                file.Delete();
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>Creates a pasted image's or dropped file's file: a new one (never one that's there, or a link), readable only by you (0600 on macOS and Linux).</summary>
+    public static FileStream CreatePastedImage(string path) => new(path, OperatingSystem.IsWindows()
+        ? new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write }
+        : new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite });
 
     /// <summary>
     /// macOS and Linux: the files copied in Finder or the file manager, or the image on the clipboard saved as a PNG.
@@ -239,16 +481,24 @@ internal static class Desktop
 
     private static string[] MacClipboardFiles()
     {
-        var image = NewPastedImagePath();
-        var answer = Capture("/usr/bin/osascript", ["-l", "JavaScript", "-e", MacClipboardScript, image]);
+        // The image's path is needed before it's known whether there is one: with nowhere safe to put it, copied files
+        // still paste (an image is written nowhere, as "" can't be written to).
+        string? image = null;
+        try { image = NewPastedImagePath(); }
+        catch (IOException) { }
+        var answer = Capture("/usr/bin/osascript", ["-l", "JavaScript", "-e", MacClipboardScript, image ?? ""]);
         if (answer == null) return [];
         var lines = answer.TrimEnd('\n').Split('\n');
-        return lines[0] switch
+        switch (lines[0])
         {
-            "files" => lines[1..].Where(l => l.Length > 0).ToArray(),
-            "image" when File.Exists(image) => [image],
-            _ => [],
-        };
+            case "files":
+                return lines[1..].Where(l => l.Length > 0).ToArray();
+            case "image" when image != null && File.Exists(image):
+                if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(image, UnixFileMode.UserRead | UnixFileMode.UserWrite);   // written by the script: as the umask had it
+                return [image];
+            default:
+                return [];
+        }
     }
 
     private static string[] LinuxClipboardFiles()
@@ -273,7 +523,7 @@ internal static class Desktop
         var bytes = CaptureBytes(read[0], read[1..]);
         if (bytes is not { Length: > 0 }) return [];
         var path = NewPastedImagePath();
-        File.WriteAllBytes(path, bytes);
+        using (var file = CreatePastedImage(path)) file.Write(bytes);
         return [path];
     }
 

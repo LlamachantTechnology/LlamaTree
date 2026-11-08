@@ -6,13 +6,23 @@
 # With apt-get, dnf or zypper and administrator rights (root, or sudo: it asks for the password when there's a
 # terminal to ask in), it installs the .deb or .rpm, which brings WebKitGTK and libnotify with it. Otherwise it unpacks
 # the .tar.gz into ~/.local/share/LlamaTree with a `llamatree` command in ~/.local/bin; that copy updates itself too.
-# Each download is checked against the SHA-256 GitHub publishes for it, as the in-app updater does.
+# The download is installed only once it's shown to be the one we built, as the in-app updater checks it: it matches its
+# line in the release's SHA256SUMS, and SHA256SUMS.p7s is our signature of that list (checked with openssl), by a code
+# signing certificate issued to Llamachant Technology Ltd with its registration number and country, chaining to
+# Sectigo Public Code Signing Root R46, which is in this script. Not GitHub's word alone (its digest is checked too),
+# so someone who could only publish on GitHub can't swap the download. Releases before 1.3.1 have no SHA256SUMS, so
+# this installs 1.3.1 or later only.
 #
 #   LLAMATREE_INSTALL=tar      install for this user only, from the .tar.gz, even when a package could be installed
 #   LLAMATREE_INSTALL=package  install the package or stop: never fall back to the .tar.gz
+#   LLAMATREE_NO_LAUNCH=1      install only: don't open LlamaTree afterwards (for scripted installs). It's opened only
+#                              where there's a desktop (DISPLAY or WAYLAND_DISPLAY), never over SSH or as root.
 #   LLAMATREE_UPDATE_URL       a stand-in for the GitHub API's latest release, for tests (downloads may then be local)
+#   LLAMATREE_INSECURE_SKIP_SIGNATURE=1
+#                              where there's no openssl to check the signature with, install on GitHub's digest alone
+#                              (not recommended: install openssl instead). It changes nothing where openssl is there.
 #
-# POSIX sh, so it runs under `curl | sh` on dash, busybox and bash alike; needs curl or wget, and no jq.
+# POSIX sh, so it runs under `curl | sh` on dash, busybox and bash alike; needs curl or wget, openssl, and no jq.
 # Everything is inside main, called on the last line, so a download cut short runs nothing.
 
 set -eu
@@ -72,7 +82,148 @@ check_url() {
     die "The download address isn't a GitHub download, so it won't be used: $1"
 }
 
-# Downloads a release asset into $tmp and checks it against GitHub's digest. Prints the file's path.
+# Sectigo Public Code Signing Root R46 (SHA-1 CC:BB:F9:E1:48:5A:F6:3C:E4:7A:BF:8E:9E:64:8C:25:04:FC:31:9D, valid to
+# 2046), which our code signing certificate chains to: the certificate Publisher.cs in the app pins. It's the only
+# authority SHA256SUMS.p7s is checked against, never this system's own roots.
+r46_pem() {
+    cat <<'PEM'
+-----BEGIN CERTIFICATE-----
+MIIFeDCCA2CgAwIBAgIQSyw7AQGLrSq8jHtbPu2QVzANBgkqhkiG9w0BAQwFADBW
+MQswCQYDVQQGEwJHQjEYMBYGA1UEChMPU2VjdGlnbyBMaW1pdGVkMS0wKwYDVQQD
+EyRTZWN0aWdvIFB1YmxpYyBDb2RlIFNpZ25pbmcgUm9vdCBSNDYwHhcNMjEwMzIy
+MDAwMDAwWhcNNDYwMzIxMjM1OTU5WjBWMQswCQYDVQQGEwJHQjEYMBYGA1UEChMP
+U2VjdGlnbyBMaW1pdGVkMS0wKwYDVQQDEyRTZWN0aWdvIFB1YmxpYyBDb2RlIFNp
+Z25pbmcgUm9vdCBSNDYwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQCN
+55QSIgQkdC7/FiMCkoq2rjaFrEfUI5ErPtx94jGgUW+shJHjUoq14pbe0IdjJImK
+/+8Skzt9u7aKvb0Ffyeba2XTpQxpsbxJOZrxbW6q5KCDJ9qaDStQ6Utbs7hkNqR+
+Sj2pcaths3OzPAsM79szV+W+NDfjlxtd/R8SPYIDdub7P2bSlDFp+m2zNKzBenjc
+klDyZMeqLQSrw2rq4C+np9xu1+j/2iGrQL+57g2extmeme/G3h+pDHazJyCh1rr9
+gOcB0u/rgimVcI3/uxXP/tEPNqIuTzKQdEZrRzUTdwUzT2MuuC3hv2WnBGsY2HH6
+zAjybYmZELGt2z4s5KoYsMYHAXVn3m3pY2MeNn9pib6qRT5uWl+PoVvLnTCGMOgD
+s0DGDQ84zWeoU4j6uDBl+m/H5x2xg3RpPqzEaDux5mczmrYI4IAFSEDu9oJkRqj1
+c7AGlfJsZZ+/VVscnFcax3hGfHCqlBuCF6yH6bbJDoEcQNYWFyn8XJwYK+pF9e+9
+1WdPKF4F7pBMeufG9ND8+s0+MkYTIDaKBOq3qgdGnA2TOglmmVhcKaO5DKYwODzQ
+RjY1fJy67sPV+Qp2+n4FG0DKkjXp1XrRtX8ArqmQqsV/AZwQsRb8zG4Y3G9i/qZQ
+p7h7uJ0VP/4gDHXIIloTlRmQAOka1cKG8eOO7F/05QIDAQABo0IwQDAdBgNVHQ4E
+FgQUMuuSmv81lkgvKEBCcCA2kVwXheYwDgYDVR0PAQH/BAQDAgGGMA8GA1UdEwEB
+/wQFMAMBAf8wDQYJKoZIhvcNAQEMBQADggIBAHZlwuPXIkrXHYle/2lexhQCTXOm
+zc0oyrA36r+nySGqql/av/aDbNCA0QpcAKTL88w5D55BcYjVPOiKe4wXI/fKNHSR
+bAauUD8AWbImPDwXg1cDPi3RGj3UzwdUskMLUnKoiPXEF/Jv0Vil0WjkPZgIGO42
+9EhImvpUcPCI1HAWMEJJ0Nk/dUtFcdiuorthDoiFUFe5uhErNikfjyBynlyeidGC
+2kWNapnahHFrM6UQu3nwl/Z0gaA/V8eGjDCMDjiVrgHGHqvcqB9vL9f/dh6uF3Nt
+5bl1s2EGqJUzwk5vsjfylb6FVBK5yL1iQnb3Kvz1NzEDJlf+0ebb8BYCcoOMCLOE
+rKnkB/ihiMQTWlBHVEKm7dBBNCyYsT6iNKEMXb2s9395p79tDFYyhRtLl7jhrOSk
+PHHxo+FOY9b0Rrr1CwjhYzztolkvCtQsayOinqFN7tESzRgzUO1Bbst/PUFgC2ML
+ePV170MVtzYLEK/cXBipmNk22R3YhLMGioLjexskp0LO7g8+VlwyfexL3lYrOzu6
++XpY0FG2bNb2WKJSJHpEhqEcYD9J0/z6+YQcBcI0v+Lm8RkqmS9WVzWctfUHw0Yv
+3jg9GQ37o/HfE57nqXJYMa+96trX1m13MzOO9Kz9wb9Jh9JwBWd0Bqb2eEAtFgSR
+Dx/TFsS4ehcNJMmy
+-----END CERTIFICATE-----
+PEM
+}
+
+# Who we are, as Publisher.cs pins it: O=, serialNumber= (the registration number) and jurisdictionC=
+# (jurisdictionCountryName), as openssl names them.
+OUR_NAME="Llamachant Technology Ltd"
+OUR_NUMBER=2469513
+OUR_COUNTRY=CA
+
+# Whether a certificate (PEM) is ours: for code signing, and naming us by each of those fields, each there once (a field
+# in a multi-valued name never matches). Says why not, on stderr.
+is_ours() {   # certificate
+    subject=$(openssl x509 -in "$1" -noout -subject -nameopt RFC2253) || return 1
+    subject=${subject#subject=}
+    subject=${subject# }
+    # One field per line: split at the commas between fields (one inside a value comes escaped, as \,).
+    fields=$(printf '%s\n' "$subject" | awk '{
+        f = ""
+        for (i = 1; i <= length($0); i++) {
+            c = substr($0, i, 1)
+            if (c == "\\") { f = f c substr($0, i + 1, 1); i++ }
+            else if (c == ",") { print f; f = "" }
+            else f = f c
+        }
+        print f }')
+    for want in "O=$OUR_NAME" "serialNumber=$OUR_NUMBER" "jurisdictionC=$OUR_COUNTRY"; do
+        if [ "$(printf '%s\n' "$fields" | grep -c "^${want%%=*}=")" != 1 ] || ! printf '%s\n' "$fields" | grep -qxF "$want"; then
+            warn "SHA256SUMS is signed by someone else ($subject)."
+            return 1
+        fi
+    done
+    if ! openssl x509 -in "$1" -noout -text | awk '/X509v3 Extended Key Usage/ { getline; print }' | grep -q 'Code Signing'; then
+        warn "SHA256SUMS's signing certificate isn't for code signing ($subject)."
+        return 1
+    fi
+}
+
+# Whether $2 (SHA256SUMS.p7s) is our signature of $1 (SHA256SUMS), exactly as it is: a valid detached CMS signature,
+# with one signer, whose certificate chains to R46 and is_ours. Says why not, on stderr.
+#   -no-CApath (and -no-CAstore, where openssl has stores): R46 alone is trusted, not the system's roots.
+#   -purpose any: openssl's default purpose is S/MIME, which a code signing certificate isn't; is_ours checks it's
+#     for code signing instead.
+#   -no_check_time: the app judges the signature as of when it was signed, so a release stays installable after the
+#     certificate that signed it expires; here, as of no particular time.
+verify_sums() {   # sums signature
+    r46_pem >"$tmp/r46.pem"
+    rm -f "$tmp/signer.pem"
+    stores=-no-CApath
+    if openssl cms -help 2>&1 | grep -q -- '-no-CAstore'; then stores="$stores -no-CAstore"; fi
+    # shellcheck disable=SC2086 # $stores is one or two options
+    if ! openssl cms -verify -binary -inform DER -in "$2" -content "$1" -CAfile "$tmp/r46.pem" $stores \
+            -purpose any -no_check_time -signer "$tmp/signer.pem" -out /dev/null 2>"$tmp/openssl.log"; then
+        warn "SHA256SUMS.p7s isn't a valid signature of SHA256SUMS by a certificate from Sectigo Public Code Signing Root R46:"
+        head -n 3 "$tmp/openssl.log" >&2
+        return 1
+    fi
+    [ "$(grep -c 'BEGIN CERTIFICATE' "$tmp/signer.pem")" = 1 ] || { warn "SHA256SUMS.p7s must have exactly one signer."; return 1; }
+    is_ours "$tmp/signer.pem"
+}
+
+# The SHA-256 the signed SHA256SUMS ($1) gives for $2 ("<hash>  <name>", as sha256sum writes it), when it lists it once.
+signed_sum() {   # sums name
+    awk -v name="$2" 'substr($0, 65) == "  " name && substr($0, 1, 64) ~ /^[0-9a-f]+$/ { n++; h = substr($0, 1, 64) }
+        END { if (n == 1) print h }' "$1"
+}
+
+# Whether the file ($2) is the release's $1 by the signed SHA256SUMS ($signed_sums, once fetch_signed_sums has checked it).
+check_signed() {   # name file
+    [ -n "$signed_sums" ] || return 0   # LLAMATREE_INSECURE_SKIP_SIGNATURE, with no openssl
+    signed=$(signed_sum "$signed_sums" "$1")
+    [ -n "$signed" ] || die "The release's signed SHA256SUMS doesn't list $1, so it wasn't installed."
+    actual=$(sha256 "$2")
+    [ "$actual" = "$signed" ] ||
+        die "$1 doesn't match its checksum in the release's signed SHA256SUMS (got $actual, signed $signed), so it wasn't installed."
+}
+
+# Downloads the release's SHA256SUMS and SHA256SUMS.p7s into $tmp and checks the signature, setting $signed_sums.
+# Fails when the release has none (before 1.3.1), or the signature isn't ours.
+fetch_signed_sums() {
+    sums_url=$(json_field "$json" url SHA256SUMS)
+    sig_url=$(json_field "$json" url SHA256SUMS.p7s)
+    [ -n "$sums_url" ] && [ -n "$sig_url" ] ||
+        die "LlamaTree $version's release has no signed checksums (SHA256SUMS and SHA256SUMS.p7s), so its download can't be checked and won't be installed. See $RELEASES"
+    signed_sums=""
+    if ! have openssl; then
+        if [ "${LLAMATREE_INSECURE_SKIP_SIGNATURE-}" != 1 ]; then
+            warn "Checking that the download is ours needs openssl, which isn't installed here, so nothing was installed."
+            warn "Install it (Debian/Ubuntu: sudo apt-get install openssl; Fedora: sudo dnf install openssl; openSUSE: sudo zypper install openssl) and run this again."
+            die "Or, to install on GitHub's checksum alone, which anyone who can publish there could fake, run it with LLAMATREE_INSECURE_SKIP_SIGNATURE=1."
+        fi
+        warn "WARNING: openssl isn't installed, so the release's signature is NOT checked (LLAMATREE_INSECURE_SKIP_SIGNATURE=1)."
+        warn "WARNING: installing on GitHub's checksum alone."
+        return 0
+    fi
+    check_url "$sums_url"
+    check_url "$sig_url"
+    download "$sums_url" "$tmp/SHA256SUMS" || die "Couldn't download $sums_url"
+    download "$sig_url" "$tmp/SHA256SUMS.p7s" || die "Couldn't download $sig_url"
+    verify_sums "$tmp/SHA256SUMS" "$tmp/SHA256SUMS.p7s" ||
+        die "The release's checksums aren't signed by Llamachant Technology Ltd, so nothing was installed."
+    signed_sums="$tmp/SHA256SUMS"
+}
+
+# Downloads a release asset into $tmp and checks it against GitHub's digest and its line in the signed SHA256SUMS.
+# Prints the file's path.
 fetch_asset() {
     url=$(json_field "$json" url "$1")
     digest=$(json_field "$json" digest "$1")
@@ -86,6 +237,7 @@ fetch_asset() {
     download "$url" "$tmp/$1" || die "Couldn't download $url"
     actual=$(sha256 "$tmp/$1")
     [ "$actual" = "$expected" ] || die "$1 doesn't match the checksum GitHub publishes for it (got $actual, expected $expected), so it wasn't installed."
+    check_signed "$1" "$tmp/$1"
     printf '%s\n' "$tmp/$1"
 }
 
@@ -128,14 +280,19 @@ install_tar() {   # file
     app="$data/LlamaTree"
     bin="$HOME/.local/bin"
     mkdir -p "$data" "$bin"
+    # Unpacked beside $app, on the same filesystem, so the swap is two renames. The old copy waits in staging until
+    # the new one is in place, and until then cleanup puts it back (restore_previous).
     staging=$(mktemp -d "$data/.llamatree-install-XXXXXX")
-    tar -xzf "$1" -C "$staging"
+    previous="$staging/previous"
+    mkdir "$staging/new"
+    tar -xzf "$1" -C "$staging/new"
     unpacked=""
-    for d in "$staging"/LlamaTree-*; do [ -x "$d/LlamaTree" ] && unpacked="$d"; done
+    for d in "$staging"/new/LlamaTree-*; do [ -x "$d/LlamaTree" ] && unpacked="$d"; done
     [ -n "$unpacked" ] || die "The download isn't laid out as expected, so it wasn't installed."
-    if [ -e "$app" ]; then mv "$app" "$staging/previous"; fi
+    if [ -e "$app" ] || [ -L "$app" ]; then mv "$app" "$previous"; fi
     mv "$unpacked" "$app"
-    rm -rf "$staging"; staging=""
+    # The new copy is in place: from here the old one is only removed.
+    rm -rf "$staging"; staging=""; previous=""
 
     # A script rather than a link, as in the packages, so the app always starts from its own folder.
     printf '#!/bin/sh\nexec %s "$@"\n' "$(quote "$app/LlamaTree")" >"$bin/llamatree"
@@ -159,9 +316,56 @@ install_tar() {   # file
     fi
 }
 
+# After a failure or a signal mid-swap: when the old copy was moved aside and the new one never took its place, puts
+# the old one back. Fails only when that can't be done, and then staging must be kept.
+restore_previous() {
+    [ -n "${previous-}" ] || return 0
+    [ -e "$previous" ] || [ -L "$previous" ] || return 0
+    [ -e "$app" ] || [ -L "$app" ] && return 0   # the new copy got in: the old one can go
+    if mv "$previous" "$app"; then
+        warn "The previous installation was put back in $app."
+        return 0
+    fi
+    warn "Couldn't put the previous installation back. It's in $previous: move it to $app to use it again."
+    return 1
+}
+
+# Whether LlamaTree's window is open for this user: a LlamaTree process that isn't the session host (--host) or a
+# connection from another machine (--attach). Not knowing (no ps that takes -u) counts as not open; a second copy
+# started anyway only says it's already running and exits.
+app_open() {
+    ps -u "$(id -u)" -o comm= -o args= 2>/dev/null |
+        awk '$1 == "LlamaTree" && $0 !~ / --(host|attach)( |$)/ { found = 1 } END { exit !found }'
+}
+
+# Opens the app just installed ($1: the command), detached from this script and its terminal, so closing the terminal
+# leaves it open. Only where there's a desktop to show it on (not over SSH, or headless), not as root (under sudo, it
+# would be root's LlamaTree), not when it's already open, and not with LLAMATREE_NO_LAUNCH=1. Says how to start it
+# otherwise.
+launch() {   # command
+    if [ "${LLAMATREE_NO_LAUNCH-}" = 1 ] || [ -z "${DISPLAY-}${WAYLAND_DISPLAY-}" ] || [ "$(id -u)" = 0 ]; then
+        say "Start it from your applications menu, or run: llamatree"
+    elif app_open; then
+        say "LlamaTree is already open: close it and start it again to use this version."
+    else
+        if have setsid; then
+            setsid "$1" </dev/null >/dev/null 2>&1 &
+        else
+            nohup "$1" </dev/null >/dev/null 2>&1 &
+        fi
+        say "LlamaTree is opening. Later, start it from your applications menu, or run: llamatree"
+    fi
+}
+
+# Runs on any exit, and does its work once: a second Ctrl-C or TERM meanwhile can't cut the restore short.
 cleanup() {
+    trap '' HUP INT TERM
+    if [ -n "${staging-}" ]; then
+        restore_previous && rm -rf "$staging"
+        staging=""; previous=""
+    fi
     [ -n "${tmp-}" ] && rm -rf "$tmp"
-    [ -n "${staging-}" ] && rm -rf "$staging"
+    tmp=""
     return 0
 }
 
@@ -183,7 +387,9 @@ main() {
 
     tmp=$(mktemp -d "${TMPDIR:-/tmp}/llamatree-install.XXXXXX")
     staging=""
+    previous=""
     trap cleanup EXIT
+    trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
 
@@ -224,13 +430,14 @@ main() {
     fi
 
     say "Installing LlamaTree $version ($asset)."
+    fetch_signed_sums
     file=$(fetch_asset "$asset")
 
     if [ "$kind" = tar ]; then
         install_tar "$file"
         say ""
         say "LlamaTree $version is installed in $app."
-        say "Start it from your applications menu, or run: llamatree"
+        launch "$bin/llamatree"
         case ":$PATH:" in
             *":$bin:"*) ;;
             *) say ""
@@ -240,7 +447,8 @@ main() {
     else
         install_package "$kind" "$file" || die "The package didn't install. To install for this user only instead, run the installer with LLAMATREE_INSTALL=tar."
         say ""
-        say "LlamaTree $version is installed. Start it from your applications menu, or run: llamatree"
+        say "LlamaTree $version is installed."
+        launch llamatree
     fi
 }
 

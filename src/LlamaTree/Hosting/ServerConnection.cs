@@ -28,10 +28,16 @@ internal sealed class ServerConnection : IDisposable
     private int attempt;          // which connection attempt is current: a later one makes an earlier one's ending moot
 
     public ServerConnection(string target, Action<Action> runOnUi)
+        : this(target, runOnUi, Path.Combine(AppProfile.CustomFolder ?? AppProfile.LocalFolder, "servers", HostLink.RemoteKey(target)))
+    {
+    }
+
+    /// <summary>Keeping its copies of the server's files in <paramref name="copiesFolder"/> (the tests' own).</summary>
+    internal ServerConnection(string target, Action<Action> runOnUi, string copiesFolder)
     {
         Target = target;
         this.runOnUi = runOnUi;
-        copies = new ServerCopies(Path.Combine(AppProfile.CustomFolder ?? AppProfile.LocalFolder, "servers", HostLink.RemoteKey(target)));
+        copies = new ServerCopies(copiesFolder, target);
     }
 
     /// <summary>How the server is reached: user@server, or a Host from the SSH config.</summary>
@@ -108,29 +114,54 @@ internal sealed class ServerConnection : IDisposable
             runOnUi(() => Lost(mine, ssh.Failure, reached: false));
             return;
         }
-        var channel = new LinkChannel(ssh.Stream);
+        var channel = new LinkChannel(ssh.Stream) { Name = Target };
         var welcomed = false;
         channel.Received += (kind, json) =>
         {
             if (kind == LinkKind.Page)
             {
                 if (TakeReply(json)) return;
-                runOnUi(() => { if (link == channel) PageMessage?.Invoke(this, json); });
+                // Handled in turn on the app thread, which runs this computer's sessions too: a server sending faster
+                // than that is made to wait (it's no longer read), rather than this host filling up (see LinkChannel.Hold).
+                var done = channel.Hold(json.Length);
+                runOnUi(() =>
+                {
+                    try { if (link == channel) PageMessage?.Invoke(this, json); }
+                    catch (Exception ex) when (Survivable(ex)) { Dropped(json, ex); }   // that message is dropped; the connection carries on
+                    finally { done(); }
+                });
             }
             else if (kind == LinkKind.Window)
             {
+                var done = channel.Hold(json.Length);
                 runOnUi(() =>
                 {
-                    if (mine != attempt) return;
-                    if (WindowOp(channel, json) == "welcome") welcomed = true;
+                    try { if (mine == attempt && WindowOp(channel, json) == "welcome") welcomed = true; }
+                    finally { done(); }
                 });
             }
         };
         channel.Closed += () =>
         {
-            // ssh's last words say why, when the server never answered.
-            _ = (welcomed ? Task.FromResult("") : ssh.ErrorsAsync(TimeSpan.FromSeconds(2))).ContinueWith(t =>
-                runOnUi(() => Lost(mine, t.Result, welcomed)), TaskScheduler.Default);
+            // Ended here for what the server sent: that's why, and no reason to try it as Windows.
+            if (channel.CloseReason is { } reason) { runOnUi(() => Lost(mine, reason, welcomed, reason)); return; }
+            // Otherwise ssh's last words say why, when the server never answered.
+            _ = Task.Run(async () =>
+            {
+                var why = welcomed ? "" : await ssh.ErrorsAsync(TimeSpan.FromSeconds(2));
+                // It runs Windows, found just now: connected to again at once, with the bridge command for Windows.
+                var windows = !welcomed && await ssh.FoundWindowsAsync(why);
+                runOnUi(() =>
+                {
+                    if (windows && mine == attempt && !disposed)
+                    {
+                        pending = null;
+                        _ = ConnectAsync(++attempt);
+                        return;
+                    }
+                    Lost(mine, why, welcomed);
+                });
+            });
         };
         channel.Start();
         // To the server's host this is a window on another computer: it opens nothing on its own desktop, sending files
@@ -155,8 +186,11 @@ internal sealed class ServerConnection : IDisposable
         l.Send(LinkKind.Page, """{"type":"app.close","stop":true}""");
     }
 
-    /// <summary>Something only a window does, asked by the server's host. Returns the op.</summary>
-    private string WindowOp(LinkChannel channel, string json)
+    /// <summary>
+    /// Something only a window does, asked by the server's host. Returns the op, or "" for one that wasn't done: not
+    /// JSON, or it failed (a server's message can only fail itself, never the connection or this host).
+    /// </summary>
+    internal string WindowOp(LinkChannel channel, string json)
     {
         try
         {
@@ -170,10 +204,14 @@ internal sealed class ServerConnection : IDisposable
                     link = channel;
                     pending = null;
                     failures = 0;
+                    overCapNoted = false;   // a new connection: said again if it still lists too many
                     Machine = Str(op, "machine");
                     features = op.TryGetProperty("features", out var fs) && fs.ValueKind == JsonValueKind.Array
                         ? fs.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToHashSet(StringComparer.Ordinal) : [];
                     Version = Str(op, "version");
+                    // Its plugins are all sent again: copies here of any other (from before, or half sent) go, so what's
+                    // kept on the disk is only what's counted against its limits (see ServerCopies).
+                    copies.ClearPluginsExcept(served);
                     SetState("online", null);
                     // As a page does when it loads: the host sends its sessions, what they've shown, and their output from now on.
                     channel.Send(LinkKind.Page, """{"type":"ready"}""");
@@ -212,20 +250,40 @@ internal sealed class ServerConnection : IDisposable
                 case "file":
                     if (copies.FilePart(Str(op, "token"), Str(op, "name"), Str(op, "data"), Int(op, "index"), op.TryGetProperty("last", out var l) && l.ValueKind == JsonValueKind.True) is { } opened)
                     {
-                        _ = Task.Run(() => Desktop.OpenFileForViewing(opened));
+                        _ = Task.Run(() => Desktop.OpenFileForViewing(opened, fromServer: true));
                         FileOpened?.Invoke(this, Path.GetFileName(opened));
                     }
                     break;
             }
             return name;
         }
-        catch (JsonException)
+        catch (Exception ex) when (Survivable(ex))
         {
+            Dropped(json, ex);
             return "";
         }
     }
 
-    private void Lost(int mine, string? why, bool reached)
+    /// <summary>A message from the server failed, and was dropped: logged by its type and size, never what it said (files, tokens…).</summary>
+    private void Dropped(string json, Exception ex) =>
+        AppLog.Warn($"{Target}: a {AppLog.MessageType(json)} message ({json.Length} characters) failed and was dropped: {AppLog.Describe(ex)}");
+
+    private bool overCapNoted;
+
+    /// <summary>
+    /// True the first time it's asked on this connection (it's asked as the server lists more sessions than are shown
+    /// here, see AppHost.MaxServerSessions), so that's said once a connection, not each time it lists them.
+    /// </summary>
+    internal bool NoteOverCap() => !overCapNoted && (overCapNoted = true);
+
+    /// <summary>
+    /// Whether an exception from handling one of the server's messages is that message's failure only. Anything is,
+    /// but a cancellation once this connection is being disposed: that's the app shutting down, and goes on up.
+    /// </summary>
+    private bool Survivable(Exception ex) => ex is not OperationCanceledException || !disposed;
+
+    /// <param name="ended">Why this side ended the connection (see <see cref="LinkChannel.CloseReason"/>), shown as its problem.</param>
+    private void Lost(int mine, string? why, bool reached, string? ended = null)
     {
         if (mine != attempt || disposed) return;
         link = null;
@@ -248,7 +306,7 @@ internal sealed class ServerConnection : IDisposable
         }
         // The bridge command says so when there's no LlamaTree on the server (see Ssh.DefaultRemoteCommand): it can be installed.
         NotInstalled = !reached && why?.Contains(Ssh.NotInstalledMessage, StringComparison.Ordinal) == true;
-        SetState("offline", reached ? "The connection dropped." : string.IsNullOrWhiteSpace(why) ? "The connection ended before LlamaTree answered on the server." : why);
+        SetState("offline", ended ?? (reached ? "The connection dropped." : string.IsNullOrWhiteSpace(why) ? "The connection ended before LlamaTree answered on the server." : why));
         var wait = RetrySeconds[Math.Min(failures++, RetrySeconds.Length - 1)];
         _ = Task.Delay(TimeSpan.FromSeconds(wait)).ContinueWith(_ => runOnUi(() =>
         {
@@ -270,8 +328,8 @@ internal sealed class ServerConnection : IDisposable
         while (State == "connecting" && DateTime.UtcNow < until) await Task.Delay(150);
     }
 
-    /// <summary>This computer asks the server to open something: a file it sends for that is taken (see ServerCopies.ExpectFile).</summary>
-    public void ExpectFile() => copies.ExpectFile();
+    /// <summary>This computer asks the server to open something, at <paramref name="path"/>: a file of its name sent for that is taken (see ServerCopies.ExpectFile).</summary>
+    public void ExpectFile(string? path) => copies.ExpectFile(path);
 
     /// <summary>Requests that can send a file here to open: anything else sent unasked is refused.</summary>
     public static bool OpensFile(string type) => type is "fs.open" or "openFile" or "terminal.openPath";
@@ -320,7 +378,7 @@ internal sealed class ServerConnection : IDisposable
                 reply.TrySetResult(m.TryGetProperty("result", out var result) ? result.Clone() : default);
             else reply.TrySetException(new InvalidOperationException(Str(m, "error")));
         }
-        catch (JsonException) { }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException) { }   // not JSON, or a reqId that isn't a number
         return true;
     }
 

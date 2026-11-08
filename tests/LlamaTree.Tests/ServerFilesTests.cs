@@ -28,8 +28,124 @@ public class ServerFilesTests : IDisposable
     [InlineData("..", "file")]
     [InlineData("", "file")]
     [InlineData("a\u0001b.png", "a_b.png")]
+    // Windows drops dots and spaces from the end of a name as it makes the file: the name kept is the file made (C1).
+    [InlineData("README.cmd .", "README.cmd")]
+    [InlineData("x.exe  .", "x.exe")]
+    [InlineData("x.cmd . .", "x.cmd")]
+    [InlineData("x.bat.\t", "x.bat._")]                                      // a tab is a control character
+    [InlineData("  setup.msi \u00a0", "setup.msi")]
+    [InlineData("link.lnk...", "link.lnk")]
+    [InlineData(" . . ", "file")]
+    [InlineData("...", "file")]
+    [InlineData("notes.txt:Zone.Identifier", "notes.txt_Zone.Identifier")]   // no alternate data streams
+    [InlineData("evil\u202etxt.exe", "evil_txt.exe")]                       // no right-to-left override hiding .exe
+    [InlineData("CON", "_CON")]
+    [InlineData("nul.txt", "_nul.txt")]
+    [InlineData("com1.log", "_com1.log")]
+    [InlineData("LPT9", "_LPT9")]
+    [InlineData("AUX .", "_AUX")]
+    [InlineData("console.txt", "console.txt")]
+    [InlineData("com10.txt", "com10.txt")]
     public void A_name_from_the_other_computer_is_only_ever_a_file_name(string name, string expected) =>
         Assert.Equal(expected, ServerFiles.SafeName(name));
+
+    [Fact]
+    public void A_name_made_safe_stays_as_it_is_when_made_safe_again()
+    {
+        foreach (var name in new[] { "README.cmd .", "x.exe  .", "x.cmd . .", "CON", " a . b . ", "a.txt" })
+            Assert.Equal(ServerFiles.SafeName(name), ServerFiles.SafeName(ServerFiles.SafeName(name)));
+    }
+
+    [Fact]
+    public void A_file_named_to_hide_its_type_is_kept_under_the_name_it_really_has()
+    {
+        var copies = new ServerCopies(root);
+        copies.ExpectFile("/srv/work/README.cmd .");
+        var path = copies.FilePart("tok1", "README.cmd .", Part("@echo off"), 0, true);
+        Assert.Equal("README.cmd", Path.GetFileName(path));
+        Assert.True(File.Exists(path));
+        Assert.False(LlamaTree.Platform.Desktop.IsViewable(path!));   // so it isn't handed to the desktop to open
+    }
+
+    [Fact]
+    public void A_file_that_comes_must_be_the_one_asked_for()
+    {
+        var copies = new ServerCopies(root);
+        copies.ExpectFile("/home/me/work/notes.txt");
+        // Another name than asked: refused, and the request still waits for its own file.
+        Assert.Null(copies.FilePart("t1", "notes.cmd", Part("x"), 0, true));
+        Assert.False(Directory.Exists(Path.Combine(root, "opened", "t1")));
+        var path = copies.FilePart("t3", "notes.txt", Part("x"), 0, true);
+        Assert.Equal(Path.Combine(root, "opened", "t3", "notes.txt"), path);
+        // That request is answered: another file of its name is unasked.
+        Assert.Null(copies.FilePart("t4", "notes.txt", Part("x"), 0, true));
+
+        // A Windows server's path, and two requests answered in either order.
+        copies.ExpectFile(@"C:\work\a.md");
+        copies.ExpectFile("src/b.cs");
+        Assert.Equal("b.cs", Path.GetFileName(copies.FilePart("t5", "b.cs", Part("x"), 0, true)));
+        Assert.Equal("a.md", Path.GetFileName(copies.FilePart("t6", "a.md", Part("x"), 0, true)));
+    }
+
+    [WindowsFact]
+    public void A_servers_file_is_marked_as_from_the_internet()
+    {
+        var copies = new ServerCopies(root);
+        copies.ExpectFile("report.pdf");
+        var path = copies.FilePart("motw", "report.pdf", Part("%PDF"), 0, true)!;
+        Assert.Equal("%PDF", File.ReadAllText(path));
+        Assert.Contains("ZoneId=3", File.ReadAllText(path + ":Zone.Identifier"));
+        // Where it can't be marked, nothing fails.
+        ServerCopies.MarkFromInternet(Path.Combine(root, "missing", "x.txt"));
+    }
+
+    [LinuxUserXattrFact]
+    public void On_Linux_a_servers_file_records_where_it_came_from()
+    {
+        var copies = new ServerCopies(root, "dave@build.example");
+        copies.ExpectFile("report.pdf");
+        var path = copies.FilePart("origin", "report.pdf", Part("%PDF"), 0, true)!;
+        Assert.Equal("%PDF", File.ReadAllText(path));
+        Assert.Equal("llamatree-server://build.example/report.pdf", Platform.ExtendedAttributes.TryGet(path, "user.xdg.origin.url"));
+        // It's still made read-only after.
+        Assert.False(File.GetUnixFileMode(path).HasFlag(UnixFileMode.UserWrite));
+    }
+
+    [UnixFact]
+    public void Where_a_file_cant_be_marked_nothing_fails()
+    {
+        ServerCopies.MarkFromInternet(Path.Combine(root, "missing", "x.txt"), "llamatree-server://s/x.txt");
+        Assert.False(Platform.ExtendedAttributes.TrySet(Path.Combine(root, "missing", "x.txt"), "user.test", "x"));
+        Assert.Null(Platform.ExtendedAttributes.TryGet(Path.Combine(root, "missing", "x.txt"), "user.test"));
+    }
+
+    [Fact]
+    public void The_macOS_quarantine_value_says_downloaded_and_unapproved()
+    {
+        var at = new DateTimeOffset(2026, 11, 5, 12, 0, 0, TimeSpan.Zero);
+        var fields = ServerCopies.QuarantineValue(at).Split(';');
+        Assert.Equal(4, fields.Length);
+        Assert.Equal("0081", fields[0]);                                               // in quarantine, downloaded
+        Assert.Matches("^[0-9a-f]{8}$", fields[1]);
+        Assert.Equal(at.ToUnixTimeSeconds(), Convert.ToInt64(fields[1], 16));
+        Assert.Equal("LlamaTree", fields[2]);
+        Assert.Equal("", fields[3]);                                                   // no QuarantineEvents entry
+    }
+
+    [Fact]
+    public void Where_a_file_came_from_is_a_url_of_the_server_and_its_name()
+    {
+        Assert.Equal("llamatree-server://host/a%20b%23c.txt", ServerCopies.OriginUrl("me@host", "a b#c.txt"));
+        Assert.Equal("llamatree-server://build-box/x.txt", ServerCopies.OriginUrl("build-box", "x.txt"));
+        Assert.Equal("llamatree-server:///server/x.txt", ServerCopies.OriginUrl(null, "x.txt"));
+        Assert.Equal("llamatree-server:///my%20box/x.txt", ServerCopies.OriginUrl("me@my box", "x.txt"));
+        foreach (var server in new[] { "me@host", "build-box", "me@my box", "a@b@c:22", "" })
+        {
+            Assert.True(Uri.TryCreate(ServerCopies.OriginUrl(server, "y z.txt"), UriKind.Absolute, out var url), server);
+            Assert.Equal("llamatree-server", url.Scheme);
+            Assert.DoesNotContain("me", url.AbsoluteUri.Replace("llamatree-server", ""));   // no user name
+        }
+    }
 
     [Fact]
     public void A_typed_path_starts_from_the_home_folder()
@@ -256,6 +372,85 @@ public class ServerFilesTests : IDisposable
     }
 
     [Fact]
+    public void A_plugin_file_where_a_folder_is_or_a_folder_where_a_file_is_is_refused()
+    {
+        var copies = new ServerCopies(root);
+        copies.PluginBegin("tasks");
+        copies.PluginPart("tasks", "lib", Part("a file"), 0, true);
+        copies.PluginPart("tasks", "lib/app.js", Part("go()"), 0, true);   // lib is a file: no folder can go there
+        copies.PluginPart("tasks", "web/app.js", Part("go()"), 0, true);
+        copies.PluginPart("tasks", "web", Part("a file"), 0, true);         // web is a folder: no file can go there
+        var folder = copies.PluginFolder("tasks");
+        Assert.Equal("a file", File.ReadAllText(Path.Combine(folder, "lib")));
+        Assert.Equal("go()", File.ReadAllText(Path.Combine(folder, "web", "app.js")));
+        // The rest of the plugin still comes.
+        copies.PluginPart("tasks", "index.html", Part("<p>hi</p>"), 0, true);
+        Assert.True(File.Exists(Path.Combine(folder, "index.html")));
+    }
+
+    [Fact]
+    public void Copies_of_a_servers_plugins_from_before_are_cleared_but_the_ones_it_still_serves()
+    {
+        // An earlier run's copies, never counted by this one.
+        Directory.CreateDirectory(Path.Combine(root, "plugins", "old", "lib"));
+        File.WriteAllText(Path.Combine(root, "plugins", "old", "lib", "app.js"), "old");
+        var copies = new ServerCopies(root);
+        copies.PluginBegin("kept");
+        copies.PluginPart("kept", "index.html", Part("kept"), 0, true);
+        copies.PluginBegin("half");
+        copies.PluginPart("half", "index.html", Part("half"), 0, false);
+        copies.DropAll();   // the connection dropped part-way
+        copies.ClearPluginsExcept(new HashSet<string> { "kept" });
+        Assert.Equal(["kept"], Directory.GetDirectories(Path.Combine(root, "plugins")).Select(Path.GetFileName));
+        Assert.True(File.Exists(Path.Combine(copies.PluginFolder("kept"), "index.html")));
+        // What's cleared isn't counted any more: there's room for as many plugins as ever, the one kept among them.
+        for (var i = 0; i < ServerCopies.MaxPlugins + 5; i++)
+        {
+            copies.PluginBegin($"p{i}");
+            copies.PluginPart($"p{i}", "index.html", Part("<p>x</p>"), 0, true);
+        }
+        Assert.Equal(ServerCopies.MaxPlugins, Directory.GetDirectories(Path.Combine(root, "plugins")).Length);
+    }
+
+    [Fact]
+    public void A_server_has_at_most_so_many_sessions_here_and_keeps_those_it_has()
+    {
+        static System.Text.Json.Nodes.JsonArray List(IEnumerable<object?> ids) =>
+            new(ids.Select(id => (System.Text.Json.Nodes.JsonNode?)new System.Text.Json.Nodes.JsonObject { ["id"] = System.Text.Json.Nodes.JsonValue.Create(id) }).ToArray());
+        var many = Enumerable.Range(0, AppHost.MaxServerSessions + 50).Select(i => (object?)$"r{i}").ToList();
+        var shown = AppHost.ServerSessionsShown(List(many), new HashSet<string>());
+        Assert.Equal(AppHost.MaxServerSessions, shown.Count);
+        Assert.Contains("r0", shown);
+        Assert.DoesNotContain($"r{AppHost.MaxServerSessions}", shown);
+        // Those already here stay, wherever the list has them; new ones fill what room is left.
+        var known = new HashSet<string> { "r120", "r140" };
+        shown = AppHost.ServerSessionsShown(List(many), known);
+        Assert.Equal(AppHost.MaxServerSessions, shown.Count);
+        Assert.Contains("r120", shown);
+        Assert.Contains("r140", shown);
+        Assert.DoesNotContain($"r{AppHost.MaxServerSessions - 1}", shown);
+        // An id that isn't text, or is listed twice, is no session of its own.
+        Assert.Equal(["a"], AppHost.ServerSessionsShown(List(["a", "a", 5, null, ""]), new HashSet<string>()));
+    }
+
+    [Fact]
+    public void A_servers_message_that_fails_fails_alone()
+    {
+        var c = new ServerConnection("dev@box", a => a(), root);
+        using var link = new LlamaTree.Hosting.Link.LinkChannel(new MemoryStream());
+        var changes = 0;
+        c.PluginsChanged += _ => { changes++; throw new InvalidOperationException("a handler that fails"); };
+        Assert.Equal("", c.WindowOp(link, """{"op":"serve","id":"tasks"}"""));   // failed: no exception gets out
+        Assert.Equal(1, changes);
+        Assert.Equal("", c.WindowOp(link, "not json"));
+        Assert.Equal("", c.WindowOp(link, "[1]"));   // JSON, but not an object: reading it throws
+        // Messages after it are handled as ever.
+        Assert.Equal("plugin.begin", c.WindowOp(link, """{"op":"plugin.begin","id":"tasks"}"""));
+        Assert.True(link.IsOpen);
+        c.Dispose();
+    }
+
+    [Fact]
     public void A_pasted_file_arrives_under_its_own_name_and_a_half_sent_one_is_deleted()
     {
         var uploads = new ServerFiles.Uploads(root);
@@ -272,5 +467,25 @@ public class ServerFilesTests : IDisposable
         uploads.AbandonAll();
         Assert.False(File.Exists(second));
         Assert.Throws<InvalidOperationException>(() => uploads.End("t2"));
+    }
+}
+
+/// <summary>A test of Linux user extended attributes: skipped elsewhere, and where the temp folder's file system has none (tmpfs, some overlays).</summary>
+public sealed class LinuxUserXattrFactAttribute : FactAttribute
+{
+    public LinuxUserXattrFactAttribute()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            Skip = "Linux only";
+            return;
+        }
+        var probe = Path.Combine(Path.GetTempPath(), "lt-xattr-" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            File.WriteAllText(probe, "");
+            if (!LlamaTree.Platform.ExtendedAttributes.TrySet(probe, "user.llamatree.probe", "1")) Skip = "The temp folder's file system has no user extended attributes";
+        }
+        finally { File.Delete(probe); }
     }
 }

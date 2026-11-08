@@ -32,11 +32,24 @@ It shows for Claude Code and Codex. For other programs, they need to report it t
 
 ## Can't connect to a server
 
-- **It asks for a password, or fails at once:** LlamaTree signs in with your key or ssh-agent only. Check that `ssh user@server` works from a terminal without a password prompt.
+- **It asks for a password, or fails at once:** LlamaTree signs in with your key or ssh-agent only. Check that `ssh user@server` works from a terminal without a password prompt; [Setting up SSH](servers.md#setting-up-ssh) shows how.
+- **It asks for a key's passphrase:** LlamaTree can't type it. Have ssh-agent hold the key (see [Setting up SSH](servers.md#setting-up-ssh)); on Windows the agent is turned off until you start it.
 - **Host key not known:** connect once from a terminal and accept the server's key.
 - **LlamaTree isn't installed there:** use *Install LlamaTree on &lt;server&gt;…* on the session's menu, or install it by hand (see [Sessions on a server](servers.md#installing-llamatree-on-the-server)).
 - **The tile says *Can't reach*:** LlamaTree keeps trying; click the server's name to try now. The sessions are still running there.
 - **Sessions end when you disconnect:** the server ends your processes when you log out (systemd's `KillUserProcesses`). Run `loginctl enable-linger` on the server once.
+
+## Only 100 of a server's sessions show
+
+LlamaTree shows at most 100 sessions from each server, so a server can't fill this computer with them. When a server has more, a message says so once each time LlamaTree connects to it. Close sessions you no longer need there.
+
+## The log
+
+When something goes wrong that LlamaTree doesn't show you (a message from a server it couldn't handle, a file from a server it refused, a connection it ended because the other side misbehaved), it notes it in its log. Click the version number at the top right and choose **Open the log folder**. In a window showing a server's sessions, that opens the server's log folder.
+
+The log folder is `logs` in LlamaTree's local data: `%LOCALAPPDATA%\LlamaTree\logs` on Windows, `~/.local/share/LlamaTree/logs` on Linux and `~/Library/Application Support/LlamaTree/logs` on macOS (or `logs` in your `LLAMATREE_DATA` folder). Each process writes its own file: `llamatree-app.log` (the window), `llamatree-host.log` (the session host, which runs the sessions and the connections to servers) and `llamatree-bridge.log` (on a server, the connection to a window elsewhere). Each line is one entry: the time in UTC, the process, a level (`INFO`, `WARN` or `ERROR`) and what happened. A file is kept to 1 MB, then moved to `.1`, so the log never holds more than about 2 MB per process.
+
+The log never holds what a message said, only what kind it was, its size and which server sent it. Read it before you attach it to an issue or an email to [support@llamachant.com](mailto:support@llamachant.com) all the same: it names your servers and plugins. On macOS and Linux the folder and its files can be read only by you.
 
 ## No pull request chip
 

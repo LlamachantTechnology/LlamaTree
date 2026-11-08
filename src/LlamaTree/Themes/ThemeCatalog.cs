@@ -17,15 +17,28 @@ namespace LlamaTree.Themes;
 /// theme sets itself, and builds them again when the accent changes.
 /// </param>
 /// <param name="Accent">Its own accent, in place of the one picked in Accent colour; null keeps that.</param>
-/// <param name="Accents">Accent colours it suggests, offered first in Accent colour while it's on (Tron's cyan, Ares' red…).</param>
+/// <param name="Accents">Accent colours it suggests, offered first in Accent colour while it's on (Tron's cyan, Redline…).</param>
 /// <param name="Colors">The page's colours by name (see <see cref="ThemeCatalog.ColorNames"/>).</param>
 /// <param name="Terminal">The terminals' colours, by xterm.js's names (see <see cref="ThemeCatalog.TerminalNames"/>).</param>
 /// <param name="Diff">The diff editor's colours (see <see cref="ThemeCatalog.DiffNames"/>).</param>
 /// <param name="BuiltIn">Shipped with the app, rather than added to the themes folder.</param>
+/// <param name="TerminalBackground">
+/// How solid the terminals start over the window's floor, 0 to 100 (Matrix's 42 lets its rain show through), and that you
+/// may change it with the slider in a terminal's corner; null keeps the terminals solid, with no slider.
+/// </param>
+/// <param name="Version">"version" in its file (major.minor.patch), as themes from Get themes have; null if it has none.</param>
+/// <param name="Floor">
+/// The theme's own floor: a script that draws the window's floor, or null for none. It's never run on the app's page: the
+/// page runs it in a worker inside a sandboxed frame with no network, storage or way to navigate, and gives it only the
+/// window's size, the theme's colours and how many sessions are in each state (see themeFloor in app.js, and
+/// docs/customize.md#a-floor-of-its-own).
+/// </param>
+/// <param name="Cycle">The light cycle's own picture and options (see <see cref="ThemeCycle"/>), or null for the app's own.</param>
+/// <param name="Dots">Its own status dots (see <see cref="ThemeDots"/>), or null for none.</param>
 internal sealed record ThemeInfo(string Id, string Name, string Base, string? Font, bool Glow, bool Grid, bool Rain, bool Monochrome, string? Cursor, ThemeAccent? Accent,
     IReadOnlyList<ThemeAccentChoice> Accents,
     IReadOnlyDictionary<string, string> Colors, IReadOnlyDictionary<string, string> Terminal, IReadOnlyDictionary<string, string> Diff,
-    bool BuiltIn);
+    bool BuiltIn, int? TerminalBackground = null, string? Version = null, string? Floor = null, ThemeCycle? Cycle = null, ThemeDots? Dots = null);
 
 /// <param name="Line">Lines, ticks and highlights: readable on the theme's background.</param>
 /// <param name="Strong">Fills that carry white text: active tabs, buttons, menus.</param>
@@ -39,14 +52,18 @@ internal sealed record ThemeAccentChoice(string Name, string Color);
 /// <c>{ "name": "Nerds", "base": "dark", "font": "Cascadia Mono", "glow": true, "monochrome": true, "accent": { "line": "#39ff6a", "strong": "#0b6b26" },
 /// "colors": { "chrome": "#050a06", … }, "terminal": { "background": "#020703", … }, "diff": { "insertedLine": "#1a5a2a55", … } }</c>.
 /// A theme is only data: names the app knows and colour values it checks, so a theme can't restyle the page any other
-/// way, or load anything.
+/// way, or load anything. Its one piece of code, a floor (<see cref="ThemeInfo.Floor"/>), is never run on the page.
 /// </summary>
 internal static partial class ThemeCatalog
 {
     /// <summary>The names a theme can't take: the app's own choices in the theme menu.</summary>
     private static readonly HashSet<string> Reserved = ["system", "light", "dark"];
 
-    private const int MaxFileBytes = 64 * 1024;
+    /// <summary>How long a theme's floor script can be, in characters.</summary>
+    internal const int MaxFloorChars = 256 * 1024;
+
+    /// <summary>How large a theme file can be: its colours, and a floor script of up to <see cref="MaxFloorChars"/>.</summary>
+    internal const int MaxFileBytes = 64 * 1024 + MaxFloorChars * 3;   // a script's characters are up to 3 bytes each in UTF-8
 
     /// <summary>How many accent colours a theme can suggest.</summary>
     public const int MaxAccents = 8;
@@ -56,7 +73,8 @@ internal static partial class ThemeCatalog
     [
         "chrome", "chrome-2", "chrome-3", "panel", "panel-2", "hover", "hover-strong", "border", "border-soft", "border-strong",
         "text", "text-dim", "text-faint", "text-strong", "focus", "select", "select-inactive", "terminal-bg", "editor-bg",
-        "ok", "working", "attention", "asking", "danger", "danger-fill", "st-m", "st-a", "st-d", "st-r", "st-u",
+        "ok", "working", "attention", "asking", "danger", "danger-fill",
+        "status-ok", "status-working", "status-attention", "status-asking", "st-m", "st-a", "st-d", "st-r", "st-u",
         "info-bg", "info-border", "error-bg", "error-border", "pv-warn-bg", "pv-warn-border", "ico-folder", "ico-file", "graph",
         "ref-bg", "ref-fg", "ref-head-bg", "ref-head-fg", "ref-tag-bg", "ref-tag-fg", "scroll-thumb", "scroll-thumb-hover",
         "tab-border-shown", "tab-border-hover", "tick", "tick-active", "tick-hot", "card-bg", "card-border", "bubble",
@@ -100,7 +118,8 @@ internal static partial class ThemeCatalog
     /// <summary>
     /// The themes in <paramref name="builtIn"/> (shipped with the app) and then <paramref name="user"/> (the profile's
     /// themes folder), each by name. A file that isn't a theme is left out, and a value that isn't valid is left out of
-    /// its theme, with why.
+    /// its theme, with why. The app's own themes are also published in LlamaTree-Themes: a newer version from Get themes,
+    /// in the themes folder, takes the place of the one the app came with.
     /// </summary>
     public static (List<ThemeInfo> Themes, List<string> Problems) Load(string builtIn, string user)
     {
@@ -118,7 +137,8 @@ internal static partial class ThemeCatalog
                     problems.Add($"{fileName}: name the file with letters, digits and hyphens, and not light, dark or system.");
                     continue;
                 }
-                if (themes.Any(t => t.Id == id))
+                var shipped = themes.FindIndex(t => t.Id == id);
+                if (shipped >= 0 && !themes[shipped].BuiltIn)
                 {
                     problems.Add($"{fileName}: there's already a theme called {id}.");
                     continue;
@@ -131,7 +151,27 @@ internal static partial class ThemeCatalog
                         continue;
                     }
                     using var doc = JsonDocument.Parse(File.ReadAllText(file), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-                    if (Parse(id, doc.RootElement, isBuiltIn, fileName, problems) is { } theme) themes.Add(theme);
+                    var found = new List<string>();
+                    if (Parse(id, doc.RootElement, isBuiltIn, fileName, found) is not { } theme)
+                    {
+                        problems.AddRange(found);
+                        continue;
+                    }
+                    if (shipped < 0)
+                    {
+                        themes.Add(theme);
+                        problems.AddRange(found);
+                    }
+                    // One of the app's own themes, in the themes folder too: a newer version from Get themes takes its place
+                    // (still one the app comes with); an older one, left from before the app was updated, is passed over.
+                    // One of your own with its name (no version) can't take it.
+                    else if (theme.Version == null)
+                        problems.Add($"{fileName}: there's already a theme called {id}.");
+                    else if (themes[shipped].Version != null && IsNewer(theme.Version, themes[shipped].Version))
+                    {
+                        themes[shipped] = theme with { BuiltIn = true };
+                        problems.AddRange(found);
+                    }
                 }
                 catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
                 {
@@ -142,6 +182,10 @@ internal static partial class ThemeCatalog
         themes.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase));
         return (themes, problems);
     }
+
+    /// <summary>Whether <paramref name="version"/> is later than <paramref name="than"/> (major.minor.patch; none is earliest).</summary>
+    internal static bool IsNewer(string? version, string? than) =>
+        version != null && (than == null || Version.Parse(version) > Version.Parse(than));
 
     /// <summary>
     /// Writes <paramref name="theme"/> to <paramref name="folder"/> as a new file named after its name (my-dark.json; a
@@ -200,6 +244,22 @@ internal static partial class ThemeCatalog
             if (c.ValueKind == JsonValueKind.String && c.GetString() == "light-cycle") cursor = "light-cycle";
             else problems.Add($"{fileName}: cursor is \"light-cycle\" or left out.");
         }
+        var cycle = ThemeCycle.Parse(e, fileName, problems);
+        if (cycle != null && cursor == null) problems.Add($"{fileName}: cycle is for \"cursor\": \"light-cycle\", which this theme doesn't have.");
+
+        int? terminalBackground = null;
+        if (e.TryGetProperty("terminalBackground", out var tb))
+        {
+            if (tb.ValueKind == JsonValueKind.Number && tb.TryGetInt32(out var amount) && amount is >= 0 and <= 100) terminalBackground = amount;
+            else problems.Add($"{fileName}: terminalBackground is a whole number from 0 (see-through) to 100 (solid), or left out.");
+        }
+
+        string? floor = null;
+        if (e.TryGetProperty("floor", out var fl))
+        {
+            if (fl.ValueKind == JsonValueKind.String && fl.GetString() is { Length: > 0 and <= MaxFloorChars } script) floor = script;
+            else problems.Add($"{fileName}: floor is the floor's script, as a string of up to {MaxFloorChars / 1024}K characters, or left out.");
+        }
 
         ThemeAccent? accent = null;
         if (e.TryGetProperty("accent", out var a) && a.ValueKind == JsonValueKind.Object)
@@ -213,7 +273,9 @@ internal static partial class ThemeCatalog
             Colors(e, "colors", ColorNames, CssColor(), fileName, problems),
             Colors(e, "terminal", TerminalNames, CssColor(), fileName, problems),
             Colors(e, "diff", DiffNames, HexColor(), fileName, problems),
-            builtIn);
+            builtIn, terminalBackground,
+            Str(e, "version") is { } v && Plugins.PluginCatalog.VersionPattern().IsMatch(v) ? v : null, floor, cursor == null ? null : cycle,
+            ThemeDots.Parse(e, fileName, problems));
     }
 
     /// <summary>

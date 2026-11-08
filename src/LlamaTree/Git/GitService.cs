@@ -12,6 +12,9 @@ internal sealed record GitResult(int ExitCode, byte[] Output, string Error)
 
     /// <summary>Output went past the requested limit, so reading stopped and git was ended; <see cref="Output"/> is incomplete.</summary>
     public bool Truncated { get; init; }
+
+    /// <summary>Not run: the repository's own settings can run programs and the person hasn't trusted it (see <see cref="RepoTrust"/>).</summary>
+    public bool NeedsTrust { get; init; }
 }
 
 /// <param name="Untracked">Not known to git at all ("?" in status); undoing it means deleting the file.</param>
@@ -30,6 +33,9 @@ internal sealed record GitStatus(
 {
     /// <summary>What the page shows and sends back for the last commit: its id, "(initial)" on an unborn branch, or null when unknown.</summary>
     public string? HeadId => HeadOid ?? (Unborn ? "(initial)" : null);
+
+    /// <summary>The repository's settings that can run programs, and whether they're trusted; null when it has none.</summary>
+    public RepoTrustInfo? Trust { get; init; }
 }
 
 internal sealed record CommitInfo(string Sha, string ShortSha, string Author, string Date, string Subject, string Refs, bool Outgoing);
@@ -53,6 +59,11 @@ internal sealed record TopFolders(string Root, IReadOnlyList<FolderCount> Folder
 /// <param name="Merged">Everything on its branch is already on the base branch, so once it's clean it can go.</param>
 internal sealed record WorktreeOverview(string Path, string? Branch, bool Main, bool Bare, bool Missing, int Ahead, int Behind, int Changes, bool Merged);
 
+/// <summary>What removing a worktree would delete beyond its commits (see <see cref="GitService.GetWorktreeContentsAsync"/>).</summary>
+/// <param name="Changes">Files git status lists in it (staged, unstaged and untracked); Remove worktree refuses while there are any.</param>
+/// <param name="Ignored">Its ignored files and folders (a folder once, as "bin/"), in git's order; git deletes these with it.</param>
+internal sealed record WorktreeContents(int Changes, IReadOnlyList<string> Ignored);
+
 /// <param name="BaseBranch">What the worktrees are compared with (origin/main, say), or null if the repository has none.</param>
 internal sealed record RepoOverview(string Root, string? BaseBranch, List<WorktreeOverview> Worktrees);
 
@@ -64,7 +75,11 @@ internal sealed record RepoOverview(string Root, string? BaseBranch, List<Worktr
 internal sealed record BranchInfo(string Name, bool Remote, string? Upstream, int Ahead, int Behind, bool Gone, string? Worktree);
 
 /// <summary>What <see cref="GitService.CreateBranchAsync"/> or <see cref="GitService.CheckoutBranchAsync"/> did; <paramref name="Stash"/> is the commit id of the stash it made, if it made one.</summary>
-internal sealed record BranchResult(bool Ok, string Message, string? Stash = null);
+internal sealed record BranchResult(bool Ok, string Message, string? Stash = null)
+{
+    /// <summary>See <see cref="GitResult.NeedsTrust"/>.</summary>
+    public bool NeedsTrust { get; init; }
+}
 
 internal sealed record DiffContent(string Original, string Modified, string OriginalLabel, string ModifiedLabel, string? Notice);
 
@@ -74,10 +89,43 @@ internal static class GitService
     private const int MaxDiffBytes = 4 * 1024 * 1024;
 
     /// <param name="maxOutputBytes">Stop reading (and end git) once stdout exceeds this; the result is then <see cref="GitResult.Truncated"/>.</param>
-    /// <param name="environment">Extra environment variables for git (e.g. to forbid credential prompts).</param>
+    /// <param name="environment">Extra environment variables for git (e.g. to forbid credential prompts); a null value removes one.</param>
     /// <param name="timeout">Ends git and returns a failed result if it runs longer than this.</param>
+    /// <remarks>
+    /// In a repository whose own settings can run programs and that the person hasn't trusted, git also gets
+    /// <see cref="RepoTrust.OverridesForAsync"/>: its filter drivers turned off.
+    /// </remarks>
     public static async Task<GitResult> RunAsync(string dir, IEnumerable<string> args, string? stdin = null, CancellationToken ct = default,
-        int? maxOutputBytes = null, IReadOnlyDictionary<string, string>? environment = null, TimeSpan? timeout = null)
+        int? maxOutputBytes = null, IReadOnlyDictionary<string, string?>? environment = null, TimeSpan? timeout = null)
+    {
+        var overrides = await RepoTrust.OverridesForAsync(dir, ct);
+        return await RunUnguardedAsync(dir, args, stdin, ct, maxOutputBytes, WithOverrides(environment, overrides), timeout);
+    }
+
+    /// <summary>
+    /// The environment that adds <paramref name="overrides"/> to git's config, after any the environment already adds.
+    /// Given as GIT_CONFIG_KEY_n/VALUE_n rather than -c, because a driver's name may hold an "=", which -c would split
+    /// at; like -c they outrank the repository's config and reach the git processes git starts (submodules included).
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string?>? WithOverrides(IReadOnlyDictionary<string, string?>? environment,
+        IReadOnlyList<(string Key, string Value)> overrides)
+    {
+        if (overrides.Count == 0) return environment;
+        var env = new Dictionary<string, string?>(environment ?? new Dictionary<string, string?>(), StringComparer.Ordinal);
+        var existing = env.TryGetValue("GIT_CONFIG_COUNT", out var given) ? given : Environment.GetEnvironmentVariable("GIT_CONFIG_COUNT");
+        var start = int.TryParse(existing, out var n) && n > 0 ? n : 0;
+        for (var i = 0; i < overrides.Count; i++)
+        {
+            env[$"GIT_CONFIG_KEY_{start + i}"] = overrides[i].Key;
+            env[$"GIT_CONFIG_VALUE_{start + i}"] = overrides[i].Value;
+        }
+        env["GIT_CONFIG_COUNT"] = (start + overrides.Count).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return env;
+    }
+
+    /// <summary><see cref="RunAsync"/> without the repository's trust looked up: for reading the settings themselves, and outside any repository.</summary>
+    internal static async Task<GitResult> RunUnguardedAsync(string dir, IEnumerable<string> args, string? stdin = null, CancellationToken ct = default,
+        int? maxOutputBytes = null, IReadOnlyDictionary<string, string?>? environment = null, TimeSpan? timeout = null)
     {
         if (timeout is { } limit)
         {
@@ -85,33 +133,14 @@ internal static class GitService
             timer.CancelAfter(limit);
             try
             {
-                return await RunAsync(dir, args, stdin, timer.Token, maxOutputBytes, environment);
+                return await RunUnguardedAsync(dir, args, stdin, timer.Token, maxOutputBytes, environment);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 return new GitResult(1, [], $"git {args.FirstOrDefault(a => !a.StartsWith('-') && !a.Contains('='))} was stopped after {limit.TotalSeconds:0} s without finishing.");
             }
         }
-        var psi = new ProcessStartInfo("git")
-        {
-            WorkingDirectory = dir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = stdin != null,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardErrorEncoding = Encoding.UTF8,
-        };
-        // Commit messages and pathspec lists go through stdin; without this they use the OEM code page.
-        if (stdin != null) psi.StandardInputEncoding = new UTF8Encoding(false);
-        // Don't take index.lock for read-only commands; the Claude sessions are using these repos concurrently.
-        psi.Environment["GIT_OPTIONAL_LOCKS"] = "0";
-        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        if (environment != null)
-            foreach (var (name, value) in environment) psi.Environment[name] = value;
-        foreach (var a in new[] { "-c", "core.quotepath=false", "-c", "color.ui=false", "-c", "core.safecrlf=false" })
-            psi.ArgumentList.Add(a);
-        foreach (var a in args) psi.ArgumentList.Add(a);
+        var psi = CreateStartInfo(dir, args, stdin != null, environment);
 
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("Could not start git");
         void Kill()
@@ -150,6 +179,96 @@ internal static class GitService
         }
     }
 
+    /// <summary>
+    /// Given to every git call, ahead of its own arguments. Most of the app's git commands run by themselves (status on
+    /// start, on every change and every 15 s, in each worktree of the Project view), in folders the person may not have
+    /// looked at yet: an extracted archive, a copied project, a nested repository. A repository's own config can name
+    /// programs for git to run, so the ones these commands could start are turned off: the file system monitor
+    /// (core.fsmonitor runs its command on every status) and the untracked cache that works with it, signature checks
+    /// on log and show (log.showSignature runs gpg.program), and any pager. Diffs the app reads also pass --no-ext-diff
+    /// and --no-textconv, which have no config equivalent. Hooks are left alone: a commit the person makes should run
+    /// theirs, and the read-only commands run none.
+    /// </summary>
+    internal static readonly string[] SafeConfig =
+    [
+        "--no-pager",
+        "-c", "core.quotepath=false", "-c", "color.ui=false", "-c", "core.safecrlf=false",
+        "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "log.showSignature=false",
+    ];
+
+    /// <summary>How <see cref="RunAsync"/> starts git: in <paramref name="dir"/>, with <see cref="SafeConfig"/> before <paramref name="args"/>.</summary>
+    /// <param name="environment">Set on top of this process's own variables; a null value removes that variable.</param>
+    internal static ProcessStartInfo CreateStartInfo(string dir, IEnumerable<string> args, bool redirectStdin = false,
+        IReadOnlyDictionary<string, string?>? environment = null)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = dir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            RedirectStandardInput = redirectStdin,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardErrorEncoding = Encoding.UTF8,
+        };
+        // Commit messages and pathspec lists go through stdin; without this they use the OEM code page.
+        if (redirectStdin) psi.StandardInputEncoding = new UTF8Encoding(false);
+        // Don't take index.lock for read-only commands; the Claude sessions are using these repos concurrently.
+        psi.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        psi.Environment["GIT_PAGER"] = "cat";   // outranks core.pager, should anything still ask for one
+        if (environment != null)
+            foreach (var (name, value) in environment)
+                if (value == null) psi.Environment.Remove(name);
+                else psi.Environment[name] = value;
+        foreach (var a in SafeConfig) psi.ArgumentList.Add(a);
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        return psi;
+    }
+
+    /// <summary>Variables that point git at a repository, or add config, whatever folder it starts in.</summary>
+    internal static readonly string[] RepositoryVariables =
+    [
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NAMESPACE", "GIT_PREFIX", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    ];
+
+    /// <summary>
+    /// The environment for git started in <paramref name="neutralDir"/> so that no repository applies: the variables
+    /// that name one (or add config) are cleared, and git doesn't look above that folder for one. Only the person's
+    /// global and system config are read. <paramref name="extra"/> is applied first, so it can't undo any of that.
+    /// </summary>
+    internal static Dictionary<string, string?> OutsideRepositoryEnvironment(string neutralDir, IReadOnlyDictionary<string, string?>? extra = null)
+    {
+        var env = new Dictionary<string, string?>(extra ?? new Dictionary<string, string?>(), StringComparer.Ordinal);
+        foreach (var name in RepositoryVariables) env[name] = null;
+        foreach (var name in Environment.GetEnvironmentVariables().Keys.OfType<string>())
+            if (name.StartsWith("GIT_CONFIG_KEY_", StringComparison.OrdinalIgnoreCase) || name.StartsWith("GIT_CONFIG_VALUE_", StringComparison.OrdinalIgnoreCase))
+                env[name] = null;
+        env["GIT_CEILING_DIRECTORIES"] = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(neutralDir))) ?? neutralDir;
+        return env;
+    }
+
+    /// <summary>
+    /// Runs git outside any repository, for a command that must see only the person's own config: credential fill, where
+    /// a repository's credential.helper = !command would otherwise run. It starts in a new empty folder, deleted after.
+    /// </summary>
+    public static async Task<GitResult> RunOutsideRepositoryAsync(IEnumerable<string> args, string? stdin = null,
+        IReadOnlyDictionary<string, string?>? environment = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        var neutral = Directory.CreateTempSubdirectory("llamatree-git-").FullName;
+        try
+        {
+            return await RunUnguardedAsync(neutral, args, stdin, ct, environment: OutsideRepositoryEnvironment(neutral, environment), timeout: timeout);
+        }
+        finally
+        {
+            try { Directory.Delete(neutral, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
     /// <returns>True if reading stopped because <paramref name="max"/> was exceeded (and <paramref name="onLimit"/> was called).</returns>
     private static async Task<bool> ReadOutputAsync(Stream source, MemoryStream target, int? max, Action onLimit, CancellationToken ct)
     {
@@ -183,7 +302,7 @@ internal static class GitService
             var notRepo = r.Error.Contains("not a git repository", StringComparison.OrdinalIgnoreCase);
             return new GitStatus(false, notRepo ? null : r.Error, null, null, 0, 0, [], []);
         }
-        return ParseStatus(r.Text);
+        return ParseStatus(r.Text) with { Trust = await RepoTrust.DescribeAsync(dir) };   // read for this call already: cached
     }
 
     /// <summary>Parses <c>git status --porcelain=v2 --branch -z</c> output.</summary>
@@ -289,13 +408,13 @@ internal static class GitService
 
     public static async Task<object> GetCommitDetailsAsync(string dir, string sha)
     {
-        var info = await RunAsync(dir, ["show", "-s", "--format=%H%x1f%an <%ae>%x1f%aI%x1f%B%x1f%P", sha]);
+        var info = await RunAsync(dir, ["show", "-s", "--format=%H%x1f%an <%ae>%x1f%aI%x1f%B%x1f%P", "--end-of-options", sha]);
         var f = info.Text.Split('\x1f');
         var parents = f.Length > 4 ? f[4].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries) : [];
 
         var r = parents.Length > 0
-            ? await RunAsync(dir, ["diff", "--name-status", "-z", "-M", parents[0], sha])
-            : await RunAsync(dir, ["diff-tree", "--root", "-r", "-M", "--no-commit-id", "--name-status", "-z", sha]);
+            ? await RunAsync(dir, ["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", "--end-of-options", parents[0], sha, "--"])
+            : await RunAsync(dir, ["diff-tree", "--root", "-r", "-M", "--no-commit-id", "--name-status", "-z", "--end-of-options", sha, "--"]);
 
         var files = new List<FileChange>();
         var parts = r.Text.Split('\0');
@@ -391,7 +510,7 @@ internal static class GitService
     /// <summary>Commits on <paramref name="branch"/> not on <paramref name="baseBranch"/>, and the other way round; (0, 0) if git couldn't say.</summary>
     private static async Task<(int Ahead, int Behind)> AheadBehindAsync(string dir, string baseBranch, string branch)
     {
-        var r = await RunAsync(dir, ["rev-list", "--left-right", "--count", baseBranch + "..." + branch]);
+        var r = await RunAsync(dir, ["rev-list", "--left-right", "--count", "--end-of-options", baseBranch + "..." + branch, "--"]);
         var parts = r.Ok ? r.Text.Trim().Split(['\t', ' '], StringSplitOptions.RemoveEmptyEntries) : [];
         return parts.Length == 2 && int.TryParse(parts[0], out var behind) && int.TryParse(parts[1], out var ahead) ? (ahead, behind) : (0, 0);
     }
@@ -404,25 +523,79 @@ internal static class GitService
     }
 
     /// <summary>
+    /// What removing the worktree at <paramref name="path"/> would delete beyond its committed files, for Remove
+    /// worktree's confirmation: the files git status lists (staged, unstaged and untracked), and the ignored files and
+    /// folders (an ignored folder counts once, as "bin/"). Null if <paramref name="path"/> isn't a removable worktree of
+    /// the repository at <paramref name="repoDir"/>, its folder is gone, or git couldn't say. Read-only.
+    /// </summary>
+    public static async Task<WorktreeContents?> GetWorktreeContentsAsync(string repoDir, string path) =>
+        await FindRemovableWorktreeAsync(repoDir, path) is { Worktree: { } w } && Directory.Exists(w.Path) ? await ReadWorktreeContentsAsync(w.Path) : null;
+
+    private static async Task<WorktreeContents?> ReadWorktreeContentsAsync(string worktree)
+    {
+        // "matching" lists an ignored folder once rather than every file in it (a node_modules stays one line).
+        var r = await RunAsync(worktree, ["status", "--porcelain", "-z", "--untracked-files=normal", "--ignored=matching"], maxOutputBytes: 4 << 20);
+        if (!r.Ok || r.Truncated) return null;
+        var entries = r.Text.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        var changes = 0;
+        var ignored = new List<string>();
+        for (var k = 0; k < entries.Length; k++)
+        {
+            var e = entries[k];
+            if (e.Length < 4) continue;
+            if (e.StartsWith("!! ")) ignored.Add(e[3..]);
+            else
+            {
+                changes++;
+                if (e[0] is 'R' or 'C') k++;   // a rename or copy is followed by the path it came from
+            }
+        }
+        return new WorktreeContents(changes, ignored);
+    }
+
+    /// <summary>The listed worktree at <paramref name="path"/> if it may be removed, else why not.</summary>
+    private static async Task<(WorktreeInfo? Worktree, string? Problem)> FindRemovableWorktreeAsync(string repoDir, string path)
+    {
+        if (!Path.IsPathFullyQualified(path)) return (null, "The worktree must be given as a full path.");
+        var list = await GetWorktreesAsync(repoDir);
+        var i = list.FindIndex(w => PathText.SamePlace(w.Path, path));
+        if (i < 0) return (null, $"{path} isn't a worktree of this repository.");
+        if (i == 0) return (null, "This is the repository's main worktree; it can't be removed.");
+        return (list[i], null);
+    }
+
+    /// <summary>
     /// Removes the worktree at <paramref name="path"/> from the repository at <paramref name="repoDir"/> (the Project
     /// view's Remove worktree). Only a listed worktree other than the main one, and only when nothing in it is
     /// uncommitted: git's own check stays (never forced), and ours runs first so the refusal says what's in the way.
-    /// A worktree whose folder is already gone is pruned from the list instead. The branch stays either way.
+    /// Git deletes ignored files with the folder even unforced (a .env, local settings, build output), so a worktree
+    /// that has any is only removed when <paramref name="deleteIgnored"/> says the person has seen that and agreed.
+    /// A worktree whose folder is already gone has only its own entry removed; other worktrees git could prune are left
+    /// listed. The branch stays either way.
     /// </summary>
-    public static async Task<GitResult> RemoveWorktreeAsync(string repoDir, string path)
+    public static async Task<GitResult> RemoveWorktreeAsync(string repoDir, string path, bool deleteIgnored = false)
     {
-        if (!Path.IsPathFullyQualified(path)) return Failed("The worktree must be given as a full path.");
-        var list = await GetWorktreesAsync(repoDir);
-        var i = list.FindIndex(w => PathText.SamePlace(w.Path, path));
-        if (i < 0) return Failed($"{path} isn't a worktree of this repository.");
-        if (i == 0) return Failed("This is the repository's main worktree; it can't be removed.");
-        if (!Directory.Exists(list[i].Path)) return await RunAsync(repoDir, ["worktree", "prune"]);
-        var changes = await CountChangesAsync(list[i].Path);
+        var (w, problem) = await FindRemovableWorktreeAsync(repoDir, path);
+        if (w == null) return Failed(problem!);
+        // Not "git worktree prune", which drops every worktree whose folder is gone; remove (git 2.19 and later) takes
+        // just this one's entry when its folder is missing.
+        if (!Directory.Exists(w.Path)) return await RunAsync(repoDir, ["worktree", "remove", "--end-of-options", w.Path]);
+        var contents = await ReadWorktreeContentsAsync(w.Path);
+        if (contents == null) return Failed("Couldn't check the worktree for uncommitted changes, so it was left alone.");
+        var changes = contents.Changes;
         if (changes != 0)
-            return Failed(changes < 0
-                ? "Couldn't check the worktree for uncommitted changes, so it was left alone."
-                : $"{changes} file{(changes == 1 ? " is" : "s are")} changed or new in this worktree and would be lost. Commit or undo {(changes == 1 ? "it" : "them")} first.");
-        return await RunAsync(repoDir, ["worktree", "remove", list[i].Path], timeout: TimeSpan.FromMinutes(2));
+            return Failed($"{changes} file{(changes == 1 ? " is" : "s are")} changed or new in this worktree and would be lost. Commit or undo {(changes == 1 ? "it" : "them")} first.");
+        if (contents.Ignored.Count > 0 && !deleteIgnored)
+            return Failed($"{IgnoredText(contents.Ignored)} would be deleted with the worktree, so it was left alone.");
+        return await RunAsync(repoDir, ["worktree", "remove", "--end-of-options", w.Path], timeout: TimeSpan.FromMinutes(2));
+    }
+
+    /// <summary>"2 ignored files or folders (.env, bin/)": how many, and the first few by name.</summary>
+    private static string IgnoredText(IReadOnlyList<string> ignored)
+    {
+        const int Shown = 5;
+        var names = string.Join(", ", ignored.Take(Shown)) + (ignored.Count > Shown ? $" and {ignored.Count - Shown} more" : "");
+        return $"{ignored.Count} ignored file{(ignored.Count == 1 ? " or folder" : "s or folders")} ({names})";
     }
 
     /// <summary>
@@ -434,13 +607,15 @@ internal static class GitService
     public static async Task<GitResult> AddWorktreeAsync(string repoDir, string path, string branch, string? startPoint)
     {
         static GitResult Fail(string message) => new(1, [], message);
+        if (await TrustGateAsync(repoDir, "create the worktree") is { } refused) return refused;   // its checkout runs filters and hooks
         if (await CheckNewBranchAsync(repoDir, branch, startPoint) is { } problem) return Fail(problem);
         if (!Path.IsPathFullyQualified(path)) return Fail("The folder must be a full path, such as D:\\Source\\repo-feature.");
         if (Directory.Exists(path) && Directory.EnumerateFileSystemEntries(path).Any()) return Fail($"{path} already exists and isn't empty.");
         if (File.Exists(path)) return Fail($"{path} is a file.");
         // --no-track: started from a remote branch (origin/main, say), git would make that the new branch's upstream, and
         // Push would then fail on the names not matching. With none, the first Push publishes it under its own name.
-        var args = new List<string> { "worktree", "add", "--no-track", "-b", branch, path };
+        // -b takes its value literally; --end-of-options keeps the folder and start point from being read as options.
+        var args = new List<string> { "worktree", "add", "--no-track", "-b", branch, "--end-of-options", path };
         if (!string.IsNullOrWhiteSpace(startPoint)) args.Add(startPoint);
         return await RunAsync(repoDir, args, timeout: TimeSpan.FromMinutes(5));   // checking out a big tree takes a while
     }
@@ -497,12 +672,13 @@ internal static class GitService
         startPoint = string.IsNullOrWhiteSpace(startPoint) ? null : startPoint.Trim();
         if (await CheckNewBranchAsync(dir, branch, startPoint) is { } problem) return new(false, problem);
         string[] from = startPoint is null ? [] : [startPoint];
+        if (checkout && await RefusalAsync(dir, "switch branches") is { } why) return new(false, why) { NeedsTrust = true };
         if (!checkout)
         {
-            var made = await RunAsync(dir, ["branch", "--no-track", branch, .. from]);
+            var made = await RunAsync(dir, ["branch", "--no-track", "--end-of-options", branch, .. from]);
             return made.Ok ? new(true, $"Created {branch}.") : new(false, made.Error);
         }
-        return await SwitchAsync(dir, branch, ["switch", "--no-track", "-c", branch, .. from], stashChanges, $"Switched to the new branch {branch}.");
+        return await SwitchAsync(dir, branch, ["switch", "--no-track", "-c", branch, "--end-of-options", .. from], stashChanges, $"Switched to the new branch {branch}.");
     }
 
     /// <summary>
@@ -513,10 +689,12 @@ internal static class GitService
     public static async Task<BranchResult> CheckoutBranchAsync(string dir, string branch, bool remote, bool stashChanges)
     {
         if (branch.StartsWith('-')) return new(false, $"\"{branch}\" isn't a branch.");
+        // A checkout runs the repository's smudge filters and post-checkout hook.
+        if (await RefusalAsync(dir, "switch branches") is { } why) return new(false, why) { NeedsTrust = true };
         var exists = async (string reference) => (await RunAsync(dir, ["rev-parse", "--verify", "--quiet", reference])).Ok;
         if (!remote)
             return await exists("refs/heads/" + branch)
-                ? await SwitchAsync(dir, branch, ["switch", branch], stashChanges, $"Switched to {branch}.")
+                ? await SwitchAsync(dir, branch, ["switch", "--end-of-options", branch], stashChanges, $"Switched to {branch}.")
                 : new(false, $"There's no branch named \"{branch}\" any more.");
 
         if (!await exists("refs/remotes/" + branch)) return new(false, $"There's no remote branch named \"{branch}\" any more. Fetch, then try again.");
@@ -525,9 +703,10 @@ internal static class GitService
         var owner = remotes.Where(r => branch.StartsWith(r + "/")).MaxBy(r => r.Length);
         if (owner == null) return new(false, $"\"{branch}\" doesn't belong to any of this repository's remotes.");
         var local = branch[(owner.Length + 1)..];
+        if (local.Length == 0 || local.StartsWith('-')) return new(false, $"\"{branch}\" has no local name a branch can take.");
         if (await exists("refs/heads/" + local))
-            return await SwitchAsync(dir, local, ["switch", local], stashChanges, $"Switched to {local} (your local branch for {branch}).");
-        return await SwitchAsync(dir, local, ["switch", "-c", local, "--track", branch], stashChanges, $"Switched to {local}, a new local branch tracking {branch}.");
+            return await SwitchAsync(dir, local, ["switch", "--end-of-options", local], stashChanges, $"Switched to {local} (your local branch for {branch}).");
+        return await SwitchAsync(dir, local, ["switch", "-c", local, "--track", "--end-of-options", branch], stashChanges, $"Switched to {local}, a new local branch tracking {branch}.");
     }
 
     /// <summary>
@@ -556,8 +735,8 @@ internal static class GitService
             return new(false, why.Contains("would be overwritten")
                 ? why + $"\n\nThose changes can't be brought to {target}: stash them instead, or commit them first."
                 : why);
-        var back = await RunAsync(dir, ["stash", "apply", "--index", stash]);
-        if (back.Ok && await FindStashAsync(dir, null, stash) is { } entry) await RunAsync(dir, ["stash", "drop", entry]);
+        var back = await RunAsync(dir, ["stash", "apply", "--index", "--end-of-options", stash]);
+        if (back.Ok && await FindStashAsync(dir, null, stash) is { } entry) await RunAsync(dir, ["stash", "drop", "--end-of-options", entry]);
         return new(false, back.Ok ? why : why + $"\n\nYour changes are still stashed: git stash apply {stash} brings them back.");
     }
 
@@ -624,7 +803,8 @@ internal static class GitService
     /// <summary>Reads one side of a diff from git, giving up (and ending git) as soon as it is too large to show.</summary>
     internal static async Task<Blob> ShowAsync(string dir, string spec)
     {
-        var r = await RunAsync(dir, ["show", spec], maxOutputBytes: MaxDiffBytes);
+        // The spec starts with a commit the page sent: without --end-of-options, "--output=x:file" would be an option.
+        var r = await RunAsync(dir, ["show", "--no-textconv", "--end-of-options", spec], maxOutputBytes: MaxDiffBytes);
         return r.Truncated ? Blob.Large : r.Ok ? new Blob(true, r.Output) : Blob.Empty;
     }
 
@@ -705,8 +885,9 @@ internal static class GitService
     internal static Func<string, IEnumerable<string>, IReadOnlyCollection<string>, Task<GitResult>> RunWithPaths = (dir, args, paths) =>
         RunAsync(dir, ["--literal-pathspecs", .. args, .. PathsFromStdin], NulList(paths));
 
-    public static Task<GitResult> StageAsync(string dir, IEnumerable<string> paths) =>
-        RunWithPathsAsync(dir, ["add", "-A"], paths.ToList());
+    /// <summary>Runs the repository's clean filters, so it waits for trust like a commit (with them off, LFS files would be stored whole).</summary>
+    public static async Task<GitResult> StageAsync(string dir, IEnumerable<string> paths) =>
+        await TrustGateAsync(dir, "stage the files") ?? await RunWithPathsAsync(dir, ["add", "-A"], paths.ToList());
 
     public static async Task<GitResult> UnstageAsync(string dir, IEnumerable<string> paths)
     {
@@ -744,8 +925,12 @@ internal static class GitService
     /// <param name="confirmedAlsoUnstaged">Selected files the dialog said also had unstaged edits.</param>
     /// <returns>The number of files undone.</returns>
     public static async Task<int> UndoConfirmedAsync(string root, bool staged, IReadOnlyList<FileChange> confirmed,
-        string? confirmedHead = null, IReadOnlyCollection<string>? confirmedAlsoUnstaged = null) =>
-        await UndoAgainstAsync(root, await GetStatusAsync(root), staged, confirmed, confirmedHead, confirmedAlsoUnstaged);
+        string? confirmedHead = null, IReadOnlyCollection<string>? confirmedAlsoUnstaged = null)
+    {
+        // Restoring files runs the repository's smudge filters.
+        if (await RefusalAsync(root, "undo the changes") is { } why) throw new RepoTrustRequiredException(why);
+        return await UndoAgainstAsync(root, await GetStatusAsync(root), staged, confirmed, confirmedHead, confirmedAlsoUnstaged);
+    }
 
     /// <summary><see cref="UndoConfirmedAsync"/> against a status already read (tests supply malformed ones).</summary>
     internal static async Task<int> UndoAgainstAsync(string root, GitStatus status, bool staged, IReadOnlyList<FileChange> confirmed,
@@ -967,17 +1152,41 @@ internal static class GitService
     /// <summary>Long enough to sign in through Git Credential Manager's window; short enough that nothing hangs forever.</summary>
     private static readonly TimeSpan RemoteTimeout = TimeSpan.FromMinutes(5);
 
-    public static Task<GitResult> FetchAsync(string dir) => RunRemoteAsync(dir, ["fetch", "--prune"]);
+    public static async Task<GitResult> FetchAsync(string dir) =>
+        await TrustGateAsync(dir, "fetch") ?? await RunRemoteAsync(dir, ["fetch", "--prune"]);
 
     /// <summary>
     /// Fast-forward only: never creates a merge commit or leaves conflicts in a worktree a Claude session may be editing.
     /// A diverged branch fails with git's explanation instead.
     /// </summary>
-    public static Task<GitResult> PullAsync(string dir) => RunRemoteAsync(dir, ["pull", "--ff-only"]);
+    public static async Task<GitResult> PullAsync(string dir) =>
+        await TrustGateAsync(dir, "pull") ?? await RunRemoteAsync(dir, ["pull", "--ff-only"]);
+
+    /// <summary>
+    /// A refusal for a command the person started, when the repository's own settings could make it run a program (an
+    /// ssh command, a credential helper, a hook, a filter) and they haven't trusted it; null when it may run. These
+    /// commands aren't run with the settings turned off instead: a filter turned off would store or check out the wrong
+    /// content, and the rest would make them fail in ways that don't say why.
+    /// </summary>
+    private static async Task<GitResult?> TrustGateAsync(string dir, string action) =>
+        await RefusalAsync(dir, action) is { } why ? new GitResult(1, [], why) { NeedsTrust = true } : null;
+
+    private static async Task<string?> RefusalAsync(string dir, string action)
+    {
+        try
+        {
+            return await RepoTrust.RefusalAsync(dir, action);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            return null;   // git can't be started at all: the command fails on its own, saying so
+        }
+    }
 
     /// <summary>Never forces. A branch with no upstream is published to the default remote, which then becomes its upstream.</summary>
     public static async Task<GitResult> PushAsync(string dir)
     {
+        if (await TrustGateAsync(dir, "push") is { } refused) return refused;
         var status = await GetStatusAsync(dir);
         if (!status.IsRepo) return Failed("This folder isn't a Git repository.");
         if (status.Branch is null || status.Branch.StartsWith('('))
@@ -986,7 +1195,7 @@ internal static class GitService
         var remote = await DefaultRemoteAsync(dir);
         return remote == null
             ? Failed("This repository has no remote to push to.")
-            : await RunRemoteAsync(dir, ["push", "--set-upstream", remote, "HEAD"]);
+            : await RunRemoteAsync(dir, ["push", "--set-upstream", "--end-of-options", remote, "HEAD"]);
     }
 
     /// <summary>"origin" if it exists, otherwise the first remote, or null when there are none.</summary>
@@ -1002,6 +1211,7 @@ internal static class GitService
 
     public static async Task<GitResult> CommitAsync(string dir, string message, bool all)
     {
+        if (await TrustGateAsync(dir, "commit") is { } refused) return refused;
         if (all)
         {
             var add = await RunAsync(dir, ["add", "-A"]);

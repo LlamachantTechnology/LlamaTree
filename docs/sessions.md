@@ -32,6 +32,8 @@ How working, waiting and asking move is up to you: the palette button › **Stat
 | **Calm** | a ring with a gap turns slowly | a dot in a ring, fading gently | a pink diamond that slowly swells |
 | **Signal** | a ring fills round a small core | a square light blinking | a dot in a ring that shakes |
 
+A theme can come with status dots of its own (see [Themes and plugins](customize.md#status-dots-of-its-own)). While it's on, they're one more card, first in **Status dots**, and they're used until you pick another style. That choice holds for that theme only: your own style comes back with every other theme, and picking the theme's card again brings its dots back.
+
 With your OS's animation effects turned off, the dots stay still, and in every style their shapes still tell the states apart.
 
 ## Each session has its own conversation
@@ -62,7 +64,13 @@ Tick *Don't ask again* to always do one or the other; the version menu (top righ
 
 ### Restarting
 
-After a restart, the sessions come back, each in its own conversation. A Claude or Codex session brought back after a restart waits until you first open it (its tile says *Starts when you open it*; pressing Enter in it works too). Its start-up context, such as hooks, the date and Git status, is then fresh when you use the session, and a session you don't open costs nothing. A message from another session starts it too, so the sender isn't left waiting. New sessions, and sessions running other commands (a dev server, say), start straight away.
+After a restart, the sessions come back, each in its own conversation. A Claude or Codex session brought back after a restart waits until you first click on its terminal (its tile says *Starts when you click it*; pressing Enter in it works too). Its start-up context, such as hooks, the date and Git status, is then fresh when you use the session, and a session you don't click on costs nothing. A message from another session starts it too, so the sender isn't left waiting. New sessions, and sessions running other commands (a dev server, say), start straight away.
+
+To have a Claude or Codex session start as soon as LlamaTree opens instead, set **Starts** when you add it in *New session*, or later in its ⋯ menu › *Rename / edit command…*:
+
+- **When you first click on its terminal**: the default, as above.
+- **When LlamaTree opens, if its terminal was running when LlamaTree last closed**: brings back the sessions you were using, whether you stopped them by closing LlamaTree, signing out or restarting the computer. A session you stopped yourself, or whose Claude you quit (`/exit`), waits to be clicked on as usual.
+- **When LlamaTree opens, always**.
 
 ## Conversation rail and tab
 
@@ -81,6 +89,8 @@ Both come from the agent's saved transcript (a Claude session's process names it
 Projects group sessions, for example one product across its worktrees. Tick projects on and off in the Projects row; **All** and **None** do what they say, and <kbd>Ctrl</kbd>+click (or right-click › *Show only this project*) shows only one. Sessions with no project are grouped under **Unknown**, which you tick and untick like a project. Each session's tab and tile carry a tag in its project's colour, so two sessions with the same name in different projects can be told apart. Hidden sessions keep running, and each project's tab counts its sessions waiting for you, so a hidden project still gets noticed.
 
 ![Sessions grouped by project, with Git Changes for the selected worktree](images/overview.png)
+
+**Projects as tabs.** With many projects, the row of filters gets busy. Right-click the Projects row's free space › *Projects as tabs* to show each project as a tab instead: a click shows only that project's sessions, clicking it again (or **All**) goes back to every project, and <kbd>Ctrl</kbd>+click adds or removes a project alongside the ones shown. Every project starts pinned to the row. Hover a tab and click its pin (or right-click › *Unpin*) to move it into the **▾** list after the tabs. Picking a project there shows it as a tab in italics, with its pin ready to put it back on the row. The ▾ shows a dot and a count when a session in an unpinned project is waiting for you. This is an option of the *Projects and sessions across the top* layout; the other layouts list projects down the left.
 
 - **Put a session in a project** when you add it, by dragging its tab into the project's group, or right-click its tab › *Move to project…*
 - **Rename, recolour, reorder or delete** a project by right-clicking it. *Edit project* sets its name and colour (a swatch, a custom colour or Automatic). Deleting a project keeps its sessions; they just have no project.

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 
 namespace LlamaTree.Hosting;
 
@@ -14,13 +15,25 @@ namespace LlamaTree.Hosting;
 /// message bridge, never this server. Requests must name this address as their Host (a site that points its own name
 /// at 127.0.0.1 gets nothing), and no file allows reads from another origin. The app's files, and each plugin's
 /// folder, are served under random paths made for this run: no plugin can load the app page or another plugin's page
-/// into its frame (see <see cref="PluginBase"/>). The app page carries the window's bridge token, written in as it's
+/// into its frame (see <see cref="PluginBase"/>), and the app page lets its frames load only plugins' pages (see
+/// <see cref="AppPagePolicy"/>). The app page carries the window's bridge token, written in as it's
 /// served (see <see cref="PhotinoHost"/>).
 /// </para>
 /// </summary>
-internal sealed class LocalSite : IDisposable
+internal sealed partial class LocalSite : IDisposable
 {
     private const string TokenPlaceholder = "<head>";
+
+    /// <summary>
+    /// The app page's Content-Security-Policy here. Never in a frame (it carries the bridge token), and its frames only
+    /// at plugins' addresses: a plugin's frame that follows a link elsewhere is stopped by the web view, rather than the
+    /// page it lands on getting the plugin's messages and grants (see pluginFrame in app.js).
+    /// </summary>
+    internal static string AppPagePolicy(string origin) =>
+        $"frame-ancestors 'none'; frame-src {origin}/plugin/; object-src 'none'; base-uri 'none'";
+
+    [GeneratedRegex("""\s*<meta\s+http-equiv\s*=\s*"Content-Security-Policy"[^>]*>""", RegexOptions.IgnoreCase)]
+    private static partial Regex PagePolicyMeta();
 
     private readonly HttpListener listener;
     private readonly string root;
@@ -121,12 +134,16 @@ internal sealed class LocalSite : IDisposable
             // The files only change when the app (or a plugin) does; never serve an old copy after that.
             response.Headers["Cache-Control"] = "no-store";
             response.Headers["X-Content-Type-Options"] = "nosniff";
+            // The window's web view has the clipboard throughout (for the app page's copy and paste); a plugin's frame is
+            // kept off it by its sandbox, and by this as well, where the engine honours it.
+            if (IsPluginPath(request.Url?.AbsolutePath)) response.Headers["Permissions-Policy"] = PluginPermissions;
             if (file == Path.Combine(root, "index.html"))
             {
                 // The app page, with the bridge token for its script. Never in a frame: a frame of it would get the token too.
                 response.Headers["X-Frame-Options"] = "DENY";
-                response.Headers["Content-Security-Policy"] = "frame-ancestors 'none'";
-                var html = (await File.ReadAllTextAsync(file)).Replace(TokenPlaceholder,
+                response.Headers["Content-Security-Policy"] = AppPagePolicy(Origin);
+                // The page's own policy is the Windows window's (plugins at https://<id>.plugin.local/); this one replaces it.
+                var html = PagePolicyMeta().Replace(await File.ReadAllTextAsync(file), "").Replace(TokenPlaceholder,
                     TokenPlaceholder + $"\n  <meta name=\"llamatree-bridge\" content=\"{bridgeToken}\">", StringComparison.OrdinalIgnoreCase);
                 var bytes = System.Text.Encoding.UTF8.GetBytes(html);
                 response.ContentLength64 = bytes.Length;
@@ -147,12 +164,18 @@ internal sealed class LocalSite : IDisposable
         }
     }
 
+    /// <summary>What every plugin page and file is served with: no clipboard, read or write.</summary>
+    internal const string PluginPermissions = "clipboard-read=(), clipboard-write=()";
+
+    private static bool IsPluginPath(string? urlPath) =>
+        urlPath != null && Uri.UnescapeDataString(urlPath).StartsWith("/plugin/", StringComparison.Ordinal);
+
     /// <summary>The file a request path names, inside wwwroot or a plugin's folder; null for anything else.</summary>
     private string? Resolve(string urlPath)
     {
         var path = Uri.UnescapeDataString(urlPath);
         string folder;
-        if (path.StartsWith("/plugin/", StringComparison.Ordinal))
+        if (IsPluginPath(urlPath))
         {
             var rest = path["/plugin/".Length..];
             var slash = rest.IndexOf('/');
@@ -196,6 +219,8 @@ internal sealed class LocalSite : IDisposable
 
     public void Dispose()
     {
-        try { listener.Stop(); listener.Close(); } catch (ObjectDisposedException) { }
+        // Close alone (it stops too): on macOS and Linux, Stop then Close lets go of the port and then binds it again to
+        // let go a second time, which fails, or holds it, if something else has the port by then.
+        try { listener.Close(); } catch (Exception ex) when (ex is ObjectDisposedException or HttpListenerException) { }
     }
 }

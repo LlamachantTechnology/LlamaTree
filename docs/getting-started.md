@@ -23,7 +23,13 @@ Run this in PowerShell:
 powershell -c "irm https://github.com/LlamachantTechnology/LlamaTree/releases/latest/download/install.ps1 | iex"
 ```
 
-It downloads the latest installer, checks it against the SHA-256 GitHub publishes for it, and installs it silently for your account. No administrator rights are needed. The script is in [tools/install](https://github.com/LlamachantTechnology/LlamaTree/tree/main/tools/install) if you'd like to read it first.
+It downloads the latest installer, checks that it's ours (it must match the release's checksums signed with our code signing certificate, and carry our own signature, *Llamachant Technology Ltd*), and installs it silently for your account. No administrator rights are needed. When it's done, it opens LlamaTree (not from an administrator window, so the app doesn't run as administrator; then start it from the Start menu). To install without opening it, for example in a script, set `LLAMATREE_NO_LAUNCH=1` first:
+
+```powershell
+$env:LLAMATREE_NO_LAUNCH = '1'; irm https://github.com/LlamachantTechnology/LlamaTree/releases/latest/download/install.ps1 | iex
+```
+
+The script is in [tools/install](https://github.com/LlamachantTechnology/LlamaTree/tree/main/tools/install) if you'd like to read it first.
 
 Or download `LlamaTree-Setup-<version>.exe` from the [latest release](https://github.com/LlamachantTechnology/LlamaTree/releases/latest) and run it. It also installs for your account only, and later versions install themselves from inside the app (see [Updates](#updates)).
 
@@ -37,10 +43,16 @@ LlamaTree needs the WebView2 runtime. It's built into Windows 11, and setup offe
 curl -fsSL https://github.com/LlamachantTechnology/LlamaTree/releases/latest/download/install.sh | sh
 ```
 
-It downloads the latest release and checks it against the SHA-256 GitHub publishes for it. When there's apt, dnf or zypper and you can use sudo, it installs the `.deb` or `.rpm` (it asks for your password), so WebKitGTK and libnotify come with it. Otherwise it unpacks the `.tar.gz` into `~/.local/share/LlamaTree`, with a `llamatree` command in `~/.local/bin` and a menu entry, for your account only. To choose that anyway, set `LLAMATREE_INSTALL=tar`:
+It downloads the latest release and checks that it's ours: it must match the release's checksums, signed with our code signing certificate, which the script checks with `openssl` (installed on most systems; without it the script stops and says so). When there's apt, dnf or zypper and you can use sudo, it installs the `.deb` or `.rpm` (it asks for your password), so WebKitGTK and libnotify come with it. Otherwise it unpacks the `.tar.gz` into `~/.local/share/LlamaTree`, with a `llamatree` command in `~/.local/bin` and a menu entry, for your account only. To choose that anyway, set `LLAMATREE_INSTALL=tar`:
 
 ```sh
 curl -fsSL https://github.com/LlamachantTechnology/LlamaTree/releases/latest/download/install.sh | LLAMATREE_INSTALL=tar sh
+```
+
+When it's done, it opens LlamaTree, if you're at a desktop. Over SSH, without a display, or when it's run as root, it says how to start it instead. To install without opening it, set `LLAMATREE_NO_LAUNCH=1`:
+
+```sh
+curl -fsSL https://github.com/LlamachantTechnology/LlamaTree/releases/latest/download/install.sh | LLAMATREE_NO_LAUNCH=1 sh
 ```
 
 The script is in [tools/install](https://github.com/LlamachantTechnology/LlamaTree/tree/main/tools/install) if you'd like to read it first.
@@ -97,14 +109,14 @@ Plain <kbd>Esc</kbd> always goes to the terminal, because Claude Code uses it to
 
 A few seconds after starting, and every 15 minutes, LlamaTree checks the latest GitHub release (an anonymous request; nothing about you or your sessions is sent). When there's a newer version, an **Update to x.y.z** button appears in the title bar, showing what's new.
 
-*Update and restart* downloads the new version, checks it against the SHA-256 GitHub publishes for it (it won't run a file that doesn't match), closes the app, installs it and reopens it. Running sessions carry on in the conversations they were in.
+*Update and restart* downloads the new version, checks it against the checksum signed for the release with our code signing certificate and, on Windows, checks that the installer itself is signed by Llamachant Technology Ltd (it won't run a file that fails either), closes the app, installs it and reopens it. Running sessions carry on in the conversations they were in.
 
 - **Windows:** the installer runs silently.
 - **Linux, from a package:** the `.deb` or `.rpm` you installed from is downloaded and checked the same way, then installed with apt, dnf or zypper behind your desktop's administrator password prompt. A cancelled prompt leaves things as they were.
 - **Linux, from a `.tar.gz`:** a copy unpacked into a folder you own is replaced by the new one.
 - **macOS** (for now): the button links the release instead.
 
-The version is shown at the top right and in the window title. Click it for *Check for updates*, and untick *Check for updates automatically* to turn the automatic check off.
+The version is shown at the top right and in the window title. Click it for *Check for updates*, and untick *Check for updates automatically* to turn the automatic check off. *Count me among the users*, in the same menu, is the answer you gave to *May we count you?* (see [Counting users](privacy.md#counting-users)).
 
 ## Next
 

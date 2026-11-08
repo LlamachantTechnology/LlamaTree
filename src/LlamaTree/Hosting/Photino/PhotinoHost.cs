@@ -58,6 +58,9 @@ internal sealed class PhotinoHost : HostLink.IWindow
             Maximized = true,
             Resizable = true,
             ContextMenuEnabled = false,
+            // On, so copying keeps working in WKWebView and WebKitGTK. It's for the whole web view, plugins' frames too:
+            // there they rely on the frame's sandbox (an opaque origin) to keep them from the clipboard, and on the
+            // Permissions-Policy the local site serves them with (see LocalSite.PluginPermissions).
             JavascriptClipboardAccessEnabled = true,
             // The page sits on its own loopback address; it never needs other browser permissions without asking.
             GrantBrowserPermissions = false,
@@ -182,6 +185,12 @@ internal sealed class PhotinoHost : HostLink.IWindow
     }
 
     public string[] ClipboardFiles() => OperatingSystem.IsWindows() ? [] : Desktop.UnixClipboardFiles();
+
+    /// <summary>WKWebView and WebKitGTK give the page a dropped file's contents but never its path: the page sends those.</summary>
+    public string[] DroppedFiles() => [];
+
+    /// <summary>Photino can't bring its window to the front; the window manager decides whether a drop does.</summary>
+    public void BringToFront() { }
 
     public string? ClipboardText() => OperatingSystem.IsWindows() ? null : Desktop.UnixClipboardText();
 

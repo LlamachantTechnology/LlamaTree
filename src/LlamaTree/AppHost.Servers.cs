@@ -166,7 +166,7 @@ internal sealed partial class AppHost
     private static async Task<object?> ForwardAsync(ServerConnection c, JsonElement msg, string? remoteId)
     {
         if (c.State == "connecting") await c.WhenSettledAsync(TimeSpan.FromSeconds(30));
-        if (msg.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String && ServerConnection.OpensFile(t.GetString()!)) c.ExpectFile();
+        if (msg.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String && ServerConnection.OpensFile(t.GetString()!)) c.ExpectFile(OptStr(msg, "path"));
         var obj = JsonNode.Parse(msg.GetRawText())!.AsObject();
         var wantsReply = obj.Remove("reqId");
         obj.Remove("server");
@@ -316,11 +316,19 @@ internal sealed partial class AppHost
     /// </summary>
     private void SyncServerSessions(ServerConnection c, JsonArray list)
     {
+        var known = serverSessions.Values.Where(x => string.Equals(x.Info.Server, c.Target, StringComparison.OrdinalIgnoreCase)).Select(x => x.Info.RemoteId!).ToHashSet(StringComparer.Ordinal);
+        var shown = ServerSessionsShown(list, known);
+        if (webReady && OverCap(c, list, shown) is { } listed)
+        {
+            // Said once a connection (not each time it lists them), here and to the person: once there's a page to say it on.
+            AppLog.Warn($"{c.Target}: it has {listed} sessions; only {MaxServerSessions} are shown here.");
+            Post(new { type = "servers.tooMany", server = c.Machine is { Length: > 0 } m ? m : c.Target, listed, shown = MaxServerSessions });
+        }
         var seen = new HashSet<string>();
         var save = false;
         foreach (var item in list.OfType<JsonObject>())
         {
-            if (item["id"]?.GetValue<string>() is not { Length: > 0 } rid) continue;
+            if (ListedId(item) is not { } rid || !shown.Contains(rid)) continue;
             seen.Add(rid);
             var ss = FindServerSession(c.Target, rid);
             if (ss == null)
@@ -348,4 +356,40 @@ internal sealed partial class AppHost
         if (save) SaveSessions();
         Post(SessionList());
     }
+
+    /// <summary>
+    /// The most sessions a server may have here. Each is saved, shown and offered to sessions here (list_sessions), so
+    /// a server can't make this computer keep endless numbers of them: past this, more it lists aren't shown.
+    /// </summary>
+    internal const int MaxServerSessions = 100;
+
+    /// <summary>
+    /// Which of the sessions a server lists are shown here: those already here (<paramref name="known"/>, by their ids
+    /// there), then new ones, in its order, up to <see cref="MaxServerSessions"/> in all.
+    /// </summary>
+    internal static HashSet<string> ServerSessionsShown(JsonArray list, IReadOnlySet<string> known)
+    {
+        var listed = list.OfType<JsonObject>().Select(ListedId).OfType<string>().Distinct(StringComparer.Ordinal).ToList();
+        var shown = listed.Where(known.Contains).ToHashSet(StringComparer.Ordinal);
+        foreach (var rid in listed)
+        {
+            if (shown.Count >= MaxServerSessions) break;
+            shown.Add(rid);
+        }
+        return shown;
+    }
+
+    /// <summary>
+    /// How many sessions the server lists, when that's more than are <paramref name="shown"/> here and it hasn't been
+    /// said yet on this connection (see <see cref="ServerConnection.NoteOverCap"/>); else null.
+    /// </summary>
+    internal static int? OverCap(ServerConnection c, JsonArray list, IReadOnlySet<string> shown)
+    {
+        if (shown.Count < MaxServerSessions) return null;
+        var listed = list.OfType<JsonObject>().Select(ListedId).OfType<string>().Distinct(StringComparer.Ordinal).Count();
+        return listed > shown.Count && c.NoteOverCap() ? listed : null;
+    }
+
+    /// <summary>A listed session's id on its server, or null for one without (or with one that isn't text).</summary>
+    private static string? ListedId(JsonObject item) => item["id"] is JsonValue v && v.TryGetValue<string>(out var id) && id.Length > 0 ? id : null;
 }

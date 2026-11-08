@@ -50,6 +50,15 @@ internal sealed class HostLink
 
         string[] ClipboardFiles();
 
+        /// <summary>
+        /// The paths of the files that came with the page's message being handled (a drop on a terminal), where the
+        /// web view tells them (WebView2); otherwise none, and the page sends their contents instead.
+        /// </summary>
+        string[] DroppedFiles();
+
+        /// <summary>Brings the window to the front (after a drop from another app), where the system allows it.</summary>
+        void BringToFront();
+
         string? ClipboardText();
 
         void ApplyTheme(bool light, string? background);
@@ -100,7 +109,9 @@ internal sealed class HostLink
         if (Remote == null)
         {
             stream = await HostEndpoint.ConnectAsync(TimeSpan.FromMilliseconds(300));
-            if (stream == null && SessionHost.StartDetached())
+            // No safe place for the host's socket: said, not waited out.
+            if (stream == null && HostEndpoint.Problem is { } problem) failure = problem;
+            else if (stream == null && SessionHost.StartDetached())
                 for (var i = 0; i < 60 && stream == null; i++) stream = await HostEndpoint.ConnectAsync(TimeSpan.FromMilliseconds(250));
         }
         else
@@ -113,7 +124,7 @@ internal sealed class HostLink
             window.RunOnUi(() => Failed(failure));
             return;
         }
-        var link = new LinkChannel(stream);
+        var link = new LinkChannel(stream) { Name = Remote ?? "session host" };
         latest = link;
         link.Received += (kind, json) => OnHostMessage(link, kind, json);
         link.Closed += () => window.RunOnUi(() => OnLost(link));
@@ -121,8 +132,9 @@ internal sealed class HostLink
         link.Send(LinkKind.Hello, JsonSerializer.Serialize(new
         {
             // A window on another computer: the host can't wait for its process (and sends it its plugins' files to serve).
+            // Their addresses are made from ids of their own here (see ServedId), never a plugin of this computer's.
             pid = Remote == null ? Environment.ProcessId : (int?)null,
-            plugins = new { origin = window.Plugins.Origin, key = window.Plugins.Key },
+            plugins = new { origin = window.Plugins.Origin, key = window.Plugins.Key, namespaced = Remote != null },
             remote = Remote,
         }, JsonOptions));
         window.RunOnUi(() =>
@@ -209,22 +221,23 @@ internal sealed class HostLink
                     result = window.PickFolder("Choose the folder (worktree) for the session", Directory.Exists(initial) ? initial : null);
                     break;
                 }
-                case "clipboard.files" when Remote != null:
-                {
-                    // Files and pictures pasted into a server's session are copied there first: their paths there are pasted.
-                    var paths = window.ClipboardFiles();
-                    var link = channel ?? throw new InvalidOperationException($"Not connected to {Remote}.");
-                    _ = UploadAsync(link, paths).ContinueWith(t => window.RunOnUi(() =>
-                    {
-                        if (reqId == null) return;
-                        if (t.IsCompletedSuccessfully) Reply(reqId.Value, true, t.Result, null);
-                        else Reply(reqId.Value, false, null, t.Exception?.InnerException?.Message ?? "The files couldn't be copied to the server.");
-                    }), TaskScheduler.Default);
-                    return true;
-                }
                 case "clipboard.files":
-                    result = window.ClipboardFiles();
+                    return ReplyWithFiles(reqId, window.ClipboardFiles());
+                case "window.front":
+                    window.BringToFront();
                     break;
+                case "drop.files":
+                    // Files dropped on a terminal, where the window can tell their paths (WebView2).
+                    return ReplyWithFiles(reqId, window.DroppedFiles());
+                case "drop.save":
+                {
+                    // One whose path it can't: the page sends its contents, saved here.
+                    var bytes = Convert.FromBase64String(Str(msg, "data"));
+                    if (bytes.Length > MaxDroppedBytes) throw new InvalidOperationException("That file is too big to drop here.");
+                    var path = Desktop.NewDroppedFilePath(Str(msg, "name"));
+                    using (var file = Desktop.CreatePastedImage(path)) file.Write(bytes);
+                    return ReplyWithFiles(reqId, [path]);
+                }
                 case "clipboard.text":
                     result = window.ClipboardText();
                     break;
@@ -242,8 +255,34 @@ internal sealed class HostLink
                 case "window.closing":
                     closeAcknowledged = true;   // the page is asking you (see AskToClose)
                     break;
+                // "Let my other computers connect": about the computer this window is on, so only a window of its own
+                // sessions asks, and Windows' prompts for it come from the window you're looking at.
+                case "remoteAccess.state" when Remote == null && OperatingSystem.IsWindows():
+                    result = RemoteAccess.State();
+                    break;
+                case "remoteAccess.myKey.make" when Remote == null && OperatingSystem.IsWindows():
+                    result = RemoteAccess.MakeMyKey();
+                    break;
+                case "remoteAccess.enable" or "remoteAccess.disable" or "remoteAccess.addKey" or "remoteAccess.removeKey"
+                    when Remote == null && OperatingSystem.IsWindows():
+                {
+                    Task<object?> work = type switch
+                    {
+                        "remoteAccess.enable" => RemoteAccess.EnableAsync(Bool(msg, "keysOnly"), Bool(msg, "publicNetworks")).ContinueWith(t => { t.GetAwaiter().GetResult(); return (object?)null; }),
+                        "remoteAccess.disable" => RemoteAccess.DisableAsync().ContinueWith(t => { t.GetAwaiter().GetResult(); return (object?)null; }),
+                        "remoteAccess.addKey" => RemoteAccess.AddKeyAsync(Str(msg, "key")).ContinueWith(t => (object?)t.GetAwaiter().GetResult()),
+                        _ => RemoteAccess.RemoveKeyAsync(Str(msg, "fingerprint")).ContinueWith(t => { t.GetAwaiter().GetResult(); return (object?)null; }),
+                    };
+                    _ = work.ContinueWith(t => window.RunOnUi(() =>
+                    {
+                        if (reqId == null) return;
+                        if (t.IsCompletedSuccessfully) Reply(reqId.Value, true, t.Result, null);
+                        else Reply(reqId.Value, false, null, t.Exception?.InnerException?.Message ?? "It didn't finish.");
+                    }), TaskScheduler.Default);
+                    return true;
+                }
                 default:
-                    if (Remote != null && ServerConnection.OpensFile(type)) Copies.ExpectFile();   // a file may come for it
+                    if (Remote != null && ServerConnection.OpensFile(type)) Copies.ExpectFile(Str(msg, "path"));   // a file of that name may come for it
                     return false;
             }
         }
@@ -258,6 +297,30 @@ internal sealed class HostLink
 
     private void Reply(int reqId, bool ok, object? result, string? error) =>
         window.PostJson(JsonSerializer.Serialize(new { type = "reply", reqId, ok, result, error }, JsonOptions));
+
+    /// <summary>The most a file dropped by its contents may hold (see "drop.save"); the page checks first, so it isn't sent.</summary>
+    private const int MaxDroppedBytes = 25 * 1024 * 1024;
+
+    /// <summary>
+    /// Answers with the paths of files on this computer, for pasting into a session. A window of a server's sessions
+    /// copies them there first and answers with the copies' paths there.
+    /// </summary>
+    private bool ReplyWithFiles(int? reqId, string[] paths)
+    {
+        if (Remote == null || paths.Length == 0)
+        {
+            if (reqId != null) Reply(reqId.Value, true, paths, null);
+            return true;
+        }
+        var link = channel ?? throw new InvalidOperationException($"Not connected to {Remote}.");
+        _ = UploadAsync(link, paths).ContinueWith(t => window.RunOnUi(() =>
+        {
+            if (reqId == null) return;
+            if (t.IsCompletedSuccessfully) Reply(reqId.Value, true, t.Result, null);
+            else Reply(reqId.Value, false, null, t.Exception?.InnerException?.Message ?? "The files couldn't be copied to the server.");
+        }), TaskScheduler.Default);
+        return true;
+    }
 
     // ---------------------------------------------------------------- the window's own requests to the host
 
@@ -306,8 +369,20 @@ internal sealed class HostLink
     private void OnHostMessage(LinkChannel link, char kind, string json)
     {
         if (kind == LinkKind.Page && TakeOwnReply(json)) return;
-        if (kind == LinkKind.Page) window.RunOnUi(() => window.PostJson(json));
-        else if (kind == LinkKind.Window) window.RunOnUi(() => DoWindowOp(link, json));
+        if (kind != LinkKind.Page && kind != LinkKind.Window) return;
+        // A server sending faster than the window takes it in is made to wait, rather than the window filling up (see
+        // LinkChannel.Hold). This computer's host isn't: it would end the connection instead (see LinkChannel.MaxOutbox).
+        var done = Remote != null ? link.Hold(json.Length) : null;
+        window.RunOnUi(() =>
+        {
+            try
+            {
+                // A server's host says what it likes: its colours are checked before the page puts them in a style.
+                if (kind == LinkKind.Page) window.PostJson(Remote != null ? ServerColors.Sanitize(json) : json);
+                else DoWindowOp(link, json);
+            }
+            finally { done?.Invoke(); }
+        });
     }
 
     private void DoWindowOp(LinkChannel link, string json)
@@ -320,6 +395,9 @@ internal sealed class HostLink
             switch (Str(op, "op"))
             {
                 case "welcome":
+                    // The first time: copies of the server's plugins from an earlier run go (it sends them all again),
+                    // so the disk only holds what this run counts against their limits (see ServerCopies).
+                    if (Remote != null && !everWelcomed) Copies.ClearPluginsExcept(new HashSet<string>());
                     welcomed = everWelcomed = true;
                     if (Remote != null) reconnects = 0;   // back after a dropped connection: the waits start short again
                     hostVersion = Str(op, "version");
@@ -332,21 +410,22 @@ internal sealed class HostLink
                     break;
                 case "serve":
                 {
-                    // A server's plugin is served from the copy of its folder it has just sent (see ServerCopies).
+                    // A server's plugin is served from the copy of its folder it has just sent (see ServerCopies), under
+                    // an id of its own (see ServedId).
                     var id = Str(op, "id");
                     if (Remote == null) window.ServePlugin(id, Str(op, "folder"));
-                    else if (Plugins.PluginCatalog.IsValidId(id) && Directory.Exists(Copies.PluginFolder(id))) window.ServePlugin(id, Copies.PluginFolder(id));
+                    else if (Plugins.PluginCatalog.IsValidId(id) && Directory.Exists(Copies.PluginFolder(id))) window.ServePlugin(ServedId(id), Copies.PluginFolder(id));
                     break;
                 }
                 case "unserve":
-                    window.StopServingPlugin(Str(op, "id"));
+                    window.StopServingPlugin(ServedId(Str(op, "id")));
                     if (Remote != null) Copies.PluginGone(Str(op, "id"));
                     break;
                 // A server's files: one to open here, or a plugin's.
                 case "file" when Remote != null:
                     if (Copies.FilePart(Str(op, "token"), Str(op, "name"), Str(op, "data"), Int(op, "index"), Bool(op, "last")) is { } opened)
                     {
-                        _ = Task.Run(() => Desktop.OpenFileForViewing(opened));
+                        _ = Task.Run(() => Desktop.OpenFileForViewing(opened, fromServer: true));
                         window.PostJson(JsonSerializer.Serialize(new { type = "files.opened", name = Path.GetFileName(opened), server = hostMachine is { Length: > 0 } m ? m : Remote }, JsonOptions));
                     }
                     break;
@@ -358,7 +437,12 @@ internal sealed class HostLink
                     break;
             }
         }
-        catch (JsonException) { }
+        // Whatever the host sent fails only itself: never the window (this runs on its UI thread) or the connection.
+        // A cancellation as the window closes goes on up.
+        catch (Exception ex) when (ex is not OperationCanceledException || !closing)
+        {
+            AppLog.Warn($"{link.Name}: a {AppLog.MessageType(json)} message ({json.Length} characters) failed and was dropped: {AppLog.Describe(ex)}");
+        }
     }
 
     /// <summary>
@@ -384,10 +468,21 @@ internal sealed class HostLink
         if (!everWelcomed)
         {
             // Its output can end a moment before ssh has finished saying why: wait for that (briefly).
-            var said = ssh?.ErrorsAsync(TimeSpan.FromSeconds(2)) ?? Task.FromResult("");
+            var tried = ssh;
+            var said = Task.Run(async () =>
+            {
+                var errors = tried == null ? "" : await tried.ErrorsAsync(TimeSpan.FromSeconds(2));
+                return (errors, windows: tried != null && await tried.FoundWindowsAsync(errors));
+            });
             _ = said.ContinueWith(t => window.RunOnUi(() =>
             {
-                var why = t.Result;
+                var (why, windows) = t.Result;
+                // It runs Windows, found just now: connected to again at once, with the bridge command for Windows.
+                if (windows && !closing && latest == link)
+                {
+                    _ = ConnectAsync(reload: false);
+                    return;
+                }
                 Failed(why.Length > 0 ? why : "The connection ended before LlamaTree answered on the server.");
             }), TaskScheduler.Default);
             return;
@@ -442,7 +537,15 @@ internal sealed class HostLink
     public static string RemoteKey(string remote) =>
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(remote.ToLowerInvariant())))[..16];
 
+    /// <summary>
+    /// The id this window serves a plugin under: a server's plugin gets one of its own (see
+    /// <see cref="PluginAddressing.RemoteId"/>), so it never shares an address with this computer's plugin of the same id
+    /// (the windows share one web view profile). The server's host makes its address from the same id (the hello's
+    /// "namespaced").
+    /// </summary>
+    private static string ServedId(string pluginId) => Remote is { } r ? PluginAddressing.RemoteId(r, pluginId) : pluginId;
+
     /// <summary>This window's copies of the server's files (see <see cref="ServerCopies"/>).</summary>
-    private ServerCopies Copies => copies ??= new ServerCopies(Path.Combine(AppProfile.CustomFolder ?? AppProfile.LocalFolder, "servers", RemoteKey(Remote!)));
+    private ServerCopies Copies => copies ??= new ServerCopies(Path.Combine(AppProfile.CustomFolder ?? AppProfile.LocalFolder, "servers", RemoteKey(Remote!)), Remote);
     private ServerCopies? copies;
 }

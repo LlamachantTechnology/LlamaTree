@@ -74,20 +74,23 @@ public sealed class ThemeCatalogTests : IDisposable
         Assert.Equal(("#ffe066", "#3fe0a8"), (tron.Colors["attention"], tron.Colors["ok"]));
         Assert.DoesNotContain("chrome", tron.Colors.Keys);
         Assert.DoesNotContain("background", tron.Terminal.Keys);
-        Assert.Equal([new ThemeAccentChoice("Tron", "#00e5ff"), new ThemeAccentChoice("Ares", "#ff3b3b")], tron.Accents);
+        Assert.Equal([new ThemeAccentChoice("Tron", "#00e5ff"), new ThemeAccentChoice("Redline", "#ff3b3b")], tron.Accents);
         Assert.Equal(["Green phosphor", "Amber", "Paper white"], nerds.Accents.Select(a => a.Name));
         Assert.Equal("light-cycle", tron.Cursor);
-        Assert.True(tron.Grid);
+        Assert.False(tron.Grid);   // Tron and Matrix draw the Grid and the rain as floors of their own now (LlamaTree-Themes)
         Assert.False(tron.Rain);
         Assert.Null(nerds.Cursor);
         Assert.False(nerds.Grid);
         Assert.False(nerds.Rain);
         var matrix = Assert.Single(themes, t => t.Id == "matrix");
-        Assert.Equal(("Matrix", "dark", "Cascadia Mono", true, false, true, null, true), (matrix.Name, matrix.Base, matrix.Font, matrix.Glow, matrix.Grid, matrix.Rain, matrix.Cursor, matrix.BuiltIn));
+        Assert.Equal(("Matrix", "dark", "Cascadia Mono", true, false, false, null, true), (matrix.Name, matrix.Base, matrix.Font, matrix.Glow, matrix.Grid, matrix.Rain, matrix.Cursor, matrix.BuiltIn));
         Assert.Equal(("#39ff6a", "#0b6b26"), (matrix.Accent!.Line, matrix.Accent.Strong));
+        // Matrix lets its rain show through the terminals, and Tron its Grid; Nerds keeps them solid, with no slider.
+        Assert.Equal((42, 85, (int?)null), (matrix.TerminalBackground, tron.TerminalBackground, nerds.TerminalBackground));
         Assert.DoesNotContain(themes, t => t.Id == "tron-ares");   // Tron in red is Tron with a red accent now
         // Matrix is written out in full: every colour the page, the terminals and the diff editor can take, so nothing of Dark shows through.
-        Assert.Equal(ThemeCatalog.ColorNames.OrderBy(n => n), matrix.Colors.Keys.OrderBy(n => n));
+        // (Not the status dots' own, which are its status colours when left out.)
+        Assert.Equal(ThemeCatalog.ColorNames.Where(n => !n.StartsWith("status-")).OrderBy(n => n), matrix.Colors.Keys.OrderBy(n => n));
         Assert.Equal(ThemeCatalog.DiffNames.OrderBy(n => n), matrix.Diff.Keys.OrderBy(n => n));
         Assert.Equal(ThemeCatalog.TerminalNames.Except(["selectionForeground"]).OrderBy(n => n), matrix.Terminal.Keys.OrderBy(n => n));
     }
@@ -96,9 +99,9 @@ public sealed class ThemeCatalogTests : IDisposable
     public void Every_colour_a_theme_can_set_is_one_the_stylesheet_uses()
     {
         var css = File.ReadAllText(Shipped("app.css"));
-        var root = css[css.IndexOf(":root {", StringComparison.Ordinal)..];
-        root = root[..root.IndexOf('}')];
-        var defined = Regex.Matches(root, @"--([a-z0-9-]+):").Select(m => m.Groups[1].Value).ToHashSet();
+        // The colours, and the status dots' own (status-ok…, each its status colour unless a theme sets it), in a :root of their own.
+        var defined = Regex.Matches(css, @":root \{([^}]*)\}").SelectMany(r => Regex.Matches(r.Groups[1].Value, @"--([a-z0-9-]+):"))
+            .Select(m => m.Groups[1].Value).ToHashSet();
         Assert.Subset(defined, ThemeCatalog.ColorNames.ToHashSet());
         // And every colour it defines is one a theme can set, apart from the accent (a theme's "accent") and layout.
         Assert.Empty(defined.Except(ThemeCatalog.ColorNames).Except(["accent", "accent-strong", "header-h"]));
@@ -194,5 +197,61 @@ public sealed class ThemeCatalogTests : IDisposable
         var (themes, problems) = ThemeCatalog.Load(builtIn, user);
         Assert.Empty(themes);
         Assert.Contains("base", Assert.Single(problems));
+    }
+
+    [Theory]
+    [InlineData("0", 0)]
+    [InlineData("65", 65)]
+    [InlineData("100", 100)]
+    [InlineData("101", null)]
+    [InlineData("-1", null)]
+    [InlineData("42.5", null)]
+    [InlineData("\"42%\"", null)]
+    [InlineData("true", null)]
+    public void A_themes_terminal_background_is_a_whole_number_from_0_to_100(string json, int? expected)
+    {
+        File.WriteAllText(Path.Combine(user, "veiled.json"), $$"""{ "name": "Veiled", "terminalBackground": {{json}} }""");
+        var (themes, problems) = ThemeCatalog.Load(builtIn, user);
+        Assert.Equal(expected, Assert.Single(themes).TerminalBackground);   // the theme still loads, keeping the terminals solid
+        if (expected is null) Assert.Contains("terminalBackground", Assert.Single(problems));
+        else Assert.Empty(problems);
+    }
+
+    [Fact]
+    public void A_floor_is_its_script_as_text()
+    {
+        Write(user, "floored.json", new { name = "Floored", floor = "floor({ draw(ctx, now, info) { } });" });
+
+        var (themes, problems) = ThemeCatalog.Load(builtIn, user);
+
+        Assert.Equal("floor({ draw(ctx, now, info) { } });", Assert.Single(themes).Floor);
+        Assert.Empty(problems);
+    }
+
+    [Theory]
+    [InlineData("\"\"")]          // empty
+    [InlineData("true")]            // not a script
+    [InlineData("{ \"src\": \"floor.js\" }")]   // a file to load: a theme loads nothing
+    public void A_floor_that_isnt_a_script_is_left_out(string value)
+    {
+        File.WriteAllText(Path.Combine(user, "odd.json"), "{ \"name\": \"Odd\", \"floor\": " + value + " }");
+
+        var (themes, problems) = ThemeCatalog.Load(builtIn, user);
+
+        Assert.Null(Assert.Single(themes).Floor);   // the theme still loads, without a floor
+        Assert.Contains("floor", Assert.Single(problems));
+    }
+
+    [Fact]
+    public void A_floor_has_a_size_limit()
+    {
+        Write(user, "big.json", new { name = "Big", floor = new string('x', ThemeCatalog.MaxFloorChars + 1) });
+        Write(user, "most.json", new { name = "Most", floor = new string('x', ThemeCatalog.MaxFloorChars) });
+
+        var (themes, problems) = ThemeCatalog.Load(builtIn, user);
+
+        Assert.Null(Assert.Single(themes, t => t.Id == "big").Floor);
+        Assert.Equal(ThemeCatalog.MaxFloorChars, Assert.Single(themes, t => t.Id == "most").Floor!.Length);   // the file itself is within MaxFileBytes
+        Assert.Contains(problems, p => p.StartsWith("big.json: floor"));
     }
 }

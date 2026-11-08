@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <!-- Windows: frames only at plugins' addresses, so a plugin's frame can't go to a page elsewhere and speak for it (see
+       pluginFrame). The Photino window's local site serves its own policy in place of this one (see LocalSite). -->
+  <meta http-equiv="Content-Security-Policy" content="frame-src https://*.plugin.local; object-src 'none'; base-uri 'none'">
   <title>LlamaTree</title>
   <link rel="stylesheet" href="lib/xterm/xterm.css">
   <link rel="stylesheet" href="app.css">
@@ -44,9 +47,17 @@
         <div id="termPane">
           <div id="grid"></div>
           <div id="empty" hidden>
+            <img class="welcome-mark" src="icon.svg" alt="" width="112" height="112">
             <div class="empty-title">No sessions yet</div>
             <div class="empty-sub">Add a session for each worktree you want Claude to work in.</div>
-            <button id="btnAddEmpty" class="btn primary">New Session…</button>
+            <div id="emptyAgents" hidden></div>
+            <div id="emptyRecent" hidden></div>
+            <div id="emptyProject" hidden></div>
+            <div class="empty-actions">
+              <button id="btnResumeEmpty" class="btn" hidden>More conversations…</button>
+              <button id="btnAddEmpty" class="btn primary">New Session…</button>
+              <button id="btnOpenPicked" class="btn primary" hidden>Open sessions</button>
+            </div>
           </div>
         </div>
 
@@ -105,6 +116,17 @@
             <button id="permsPause" class="tb-btn text" aria-pressed="false">Pause messages</button>
           </div>
           <div id="permsBody" tabindex="-1"></div>
+        </section>
+
+        <!-- Get plugins and Get themes: what the LlamaTree-Plugins and LlamaTree-Themes repositories offer (see renderGallery). -->
+        <section id="galleryDoc" hidden>
+          <div class="diff-toolbar">
+            <span class="diff-summary">Get</span>
+            <div id="galleryBy" class="seg" role="tablist" aria-label="Get plugins or themes"></div>
+            <span class="spacer"></span>
+            <div id="galleryTools" class="gallery-tools"></div>
+          </div>
+          <div id="galleryBody" tabindex="-1"></div>
         </section>
 
         <!-- Between the terminal and a tab shown beside it, and where a tab dragged here would go (see showDocs). -->

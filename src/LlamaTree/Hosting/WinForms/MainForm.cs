@@ -65,21 +65,56 @@ internal sealed class MainForm : Form, HostLink.IWindow
 
     /// <summary>
     /// The files copied in Explorer, or the image on the clipboard (a screenshot, a copied picture) saved as a PNG in the
-    /// temp folder.
+    /// app's own folder (see <see cref="Desktop.NewPastedImagePath()"/>).
     /// </summary>
     public string[] ClipboardFiles()
     {
         if (Clipboard.ContainsFileDropList()) return Clipboard.GetFileDropList().Cast<string>().ToArray();
         if (!Clipboard.ContainsImage()) return [];
-        var path = Desktop.NewPastedImagePath();
         // The PNG as the app that copied it wrote it (keeping transparency), else the bitmap.
-        if (Clipboard.GetData("PNG") is MemoryStream png) File.WriteAllBytes(path, png.ToArray());
-        else if (Clipboard.GetImage() is { } image) using (image) image.Save(path, System.Drawing.Imaging.ImageFormat.Png);
-        else return [];
+        using var png = Clipboard.GetData("PNG") as MemoryStream;
+        using var image = png == null ? Clipboard.GetImage() : null;
+        if (png == null && image == null) return [];
+        var path = Desktop.NewPastedImagePath();
+        using (var file = Desktop.CreatePastedImage(path))
+        {
+            if (png != null) png.WriteTo(file);
+            else image!.Save(file, System.Drawing.Imaging.ImageFormat.Png);
+        }
         return [path];
     }
 
     public string? ClipboardText() => Clipboard.ContainsText() ? Clipboard.GetText() : null;
+
+    /// <summary>The files sent with the message being received (see OnLoad's WebMessageReceived).</summary>
+    private string[] dropped = [];
+
+    public string[] DroppedFiles() => dropped;
+
+    /// <summary>
+    /// Comes to the front after files are dropped on it, so typing goes on in the terminal. The drop leaves the app they
+    /// were dragged from in front, and Windows won't let another app take that place by asking: it's joined to that
+    /// app's input for the moment it takes it.
+    /// </summary>
+    public void BringToFront()
+    {
+        if (WindowState == FormWindowState.Minimized) return;
+        var front = Native.GetForegroundWindow();
+        if (front == Handle) return;
+        var theirs = Native.GetWindowThreadProcessId(front, IntPtr.Zero);
+        var ours = Native.GetCurrentThreadId();
+        var joined = theirs != 0 && theirs != ours && Native.AttachThreadInput(ours, theirs, true);
+        try
+        {
+            Native.SetForegroundWindow(Handle);
+            Activate();
+        }
+        finally
+        {
+            if (joined) Native.AttachThreadInput(ours, theirs, false);
+        }
+        webView.Focus();
+    }
 
     public void ApplyTheme(bool light, string? background)
     {
@@ -171,8 +206,9 @@ internal sealed class MainForm : Form, HostLink.IWindow
 #else
             core.Settings.AreDevToolsEnabled = false;
 #endif
-            // A file or link dropped on the window would otherwise replace the app page (and could then talk to the host).
-            webView.AllowExternalDrop = false;
+            // Files dropped on a terminal paste their paths (see DroppedFiles). A file or link dropped anywhere else would
+            // navigate to it, which the page prevents, and failing that the check below: nothing but the app page loads.
+            webView.AllowExternalDrop = true;
             core.NavigationStarting += (_, args) => { if (!IsAppUri(args.Uri)) args.Cancel = true; };
             var root = Path.Combine(AppContext.BaseDirectory, "wwwroot");
             core.SetVirtualHostNameToFolderMapping("app.local", root, CoreWebView2HostResourceAccessKind.Allow);
@@ -180,13 +216,19 @@ internal sealed class MainForm : Form, HostLink.IWindow
             {
                 if (!IsAppUri(args.Source)) return;
                 pageUp = true;
-                link.Receive(args.WebMessageAsJson);
+                // Files the page sent along (postMessageWithAdditionalObjects): the dropped files, by their paths here.
+                dropped = args.AdditionalObjects is { Count: > 0 } objects
+                    ? objects.OfType<CoreWebView2File>().Select(f => f.Path).Where(p => !string.IsNullOrEmpty(p)).ToArray()
+                    : [];
+                try { link.Receive(args.WebMessageAsJson); }
+                finally { dropped = []; }
             };
             foreach (var (id, folder) in servedPlugins)
                 core.SetVirtualHostNameToFolderMapping(PluginCatalog.HostFor(id), folder, CoreWebView2HostResourceAccessKind.DenyCors);
             core.NewWindowRequested += (_, args) => args.Handled = true;
             // Plugins are pages in frames of their own (see PluginCatalog): a plugin's frame stays on plugin addresses.
-            core.FrameNavigationStarting += (_, args) => { if (!PluginCatalog.IsPluginUri(args.Uri) && args.Uri != "about:blank") args.Cancel = true; };
+            // A theme's own floor is a frame of the page's own writing (srcdoc), which stays put: it has no way to navigate.
+            core.FrameNavigationStarting += (_, args) => { if (!PluginCatalog.IsPluginUri(args.Uri) && args.Uri is not ("about:blank" or "about:srcdoc")) args.Cancel = true; };
             // And on its own plugin's address: the page answers a plugin's frame with what that plugin was allowed to see,
             // so another plugin's page mustn't get into it.
             core.FrameCreated += (_, created) =>
@@ -198,20 +240,22 @@ internal sealed class MainForm : Form, HostLink.IWindow
                     host ??= u.Host;
                     if (!string.Equals(host, u.Host, StringComparison.OrdinalIgnoreCase)) args.Cancel = true;
                 };
+                // A plugin's frame (or one inside it) asks here first, whatever origin it names: the answer is no, and
+                // the page's own handler below never hears of it.
+                created.Frame.PermissionRequested += (_, args) =>
+                {
+                    Answer(args, fromFrame: true);
+                    args.Handled = true;
+                };
             };
-            // The terminal's Paste menu item reads the clipboard; without this WebView2 asks "Allow clipboard access?"
-            // the first time, a prompt that also takes focus away from the terminal. Only the app's own origin gets it
-            // (requests name the origin, not the page; navigation never leaves the app page anyway).
-            core.PermissionRequested += (_, args) =>
+            // Only the app page reads the clipboard; plugins and any other origin get no permission (see WebPermissions).
+            core.PermissionRequested += (_, args) => Answer(args, fromFrame: false);
+            static void Answer(CoreWebView2PermissionRequestedEventArgs args, bool fromFrame)
             {
-                if (args.PermissionKind == CoreWebView2PermissionKind.ClipboardRead &&
-                    Uri.TryCreate(args.Uri, UriKind.Absolute, out var origin) &&
-                    origin.Scheme == Uri.UriSchemeHttps && string.Equals(origin.Host, "app.local", StringComparison.OrdinalIgnoreCase))
-                    args.State = CoreWebView2PermissionState.Allow;
-                // A plugin gets nothing: no clipboard, camera, location or notifications, and no prompt asking for them.
-                else if (PluginCatalog.IsPluginUri(args.Uri))
-                    args.State = CoreWebView2PermissionState.Deny;
-            };
+                var answer = WebPermissions.Decide(args.PermissionKind == CoreWebView2PermissionKind.ClipboardRead, args.Uri, fromFrame);
+                if (answer != WebPermissionAnswer.Default)
+                    args.State = answer == WebPermissionAnswer.Allow ? CoreWebView2PermissionState.Allow : CoreWebView2PermissionState.Deny;
+            }
             // The page's files come from the install folder and only change when the app is updated, but the browser
             // caches them heuristically from their timestamps; after an upgrade it could keep running the previous
             // version's app.js, possibly mixed with new files. Start each launch with an empty HTTP cache.

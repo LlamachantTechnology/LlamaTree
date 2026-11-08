@@ -153,18 +153,21 @@
     linear-gradient(90deg, color-mix(in srgb, var(--accent) 8%, transparent) 1px, transparent 1px) 0 0 / 32px 32px,
     var(--chrome);
 }
-:root:is([data-grid], [data-rain]) :is(#stage, #splitter, #docSplitter, #navSplitter) { background: transparent; }
-:root:is([data-grid], [data-rain]) #navBar { background: color-mix(in srgb, var(--chrome-3) 70%, transparent); }
-:root:is([data-grid], [data-rain]) :is(#titlebar, .doc-tabs, .tab-scroller.doc, .dock-group > .tw-title) { background: color-mix(in srgb, var(--chrome-2) 70%, transparent); }
-:root:is([data-grid], [data-rain]) #gitPanel { background: color-mix(in srgb, var(--panel) 55%, transparent); }
-:root:is([data-grid], [data-rain]) .tile-header { background: color-mix(in srgb, var(--panel) 70%, transparent); }
+:root:is([data-grid], [data-rain], [data-floor]) :is(#stage, #splitter, #docSplitter, #navSplitter) { background: transparent; }
+:root:is([data-grid], [data-rain], [data-floor]) #navBar { background: color-mix(in srgb, var(--chrome-3) 70%, transparent); }
+:root:is([data-grid], [data-rain], [data-floor]) :is(#titlebar, .doc-tabs, .tab-scroller.doc, .dock-group > .tw-title) { background: color-mix(in srgb, var(--chrome-2) 70%, transparent); }
+:root:is([data-grid], [data-rain], [data-floor]) #gitPanel { background: color-mix(in srgb, var(--panel) 55%, transparent); }
+:root:is([data-grid], [data-rain], [data-floor]) .tile-header { background: color-mix(in srgb, var(--panel) 70%, transparent); }
 /* The rain (a theme's "rain": true, see digitalRain in app.js): a canvas fixed behind the page; the terminal's canvas is
    see-through over it and the tile dims it with the terminal's own background at half strength, so the text reads. */
 #rain { position: fixed; inset: 0; z-index: -1; pointer-events: none; }   /* behind the page's content, over its background */
 :root[data-rain] { background: var(--chrome); }
 :root[data-rain] body { background: transparent; }   /* the body's own background would paint over the canvas; the root's paints under it */
-:root[data-rain] .tile { background: color-mix(in srgb, var(--terminal-bg) 42%, transparent); }
-:root[data-rain] .xterm .xterm-viewport { background-color: transparent !important; }
+/* A theme's own floor (a theme's "floor", see themeFloor in app.js): a sandboxed frame fixed behind the page, as the rain's
+   canvas is. It never takes the pointer, and its colour scheme is the page's, so the browser doesn't paint it opaque. */
+#themeFloor { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: -1; pointer-events: none; background: transparent; color-scheme: normal; }
+:root[data-floor] { background: var(--chrome); }
+:root[data-floor] body { background: transparent; }
 /* The terminal itself: its canvas is see-through under a Grid theme (dressCursor in app.js), and the tile paints the same
    lines over the terminal's own background, fixed to the window so they run on from the floor around it. */
 :root[data-grid] .tile {
@@ -172,10 +175,12 @@
     radial-gradient(120% 40% at 50% 100%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 70%),
     linear-gradient(color-mix(in srgb, var(--accent) 8%, transparent) 1px, transparent 1px) 0 0 / 32px 32px,
     linear-gradient(90deg, color-mix(in srgb, var(--accent) 8%, transparent) 1px, transparent 1px) 0 0 / 32px 32px,
-    var(--terminal-bg);
+    color-mix(in srgb, var(--terminal-bg) var(--terminal-veil, 100%), transparent);
   background-attachment: fixed, fixed, fixed, scroll;   /* the glow at the horizon and the lines run on from the floor around the tile */
 }
-:root[data-grid] .xterm .xterm-viewport { background-color: transparent !important; }   /* xterm paints its viewport black on its own */
+/* The terminal's canvas is see-through (data-veil, set by markVeil in app.js) over a floor and whenever the veil is under
+   100%; xterm paints its viewport in the theme's background on its own, so that's made see-through here too. */
+:root[data-veil] .xterm .xterm-viewport { background-color: transparent !important; }
 
 /* Project colours are picked for a dark background; their text is deepened to stay readable on a light one. */
 :root[data-theme="light"] .proj-tag,
@@ -238,6 +243,10 @@ svg.ic { width: 16px; height: 16px; flex: none; display: block; }
    preview in that dialog. Rings and glows reach past the 8px dot without taking room, so a tab keeps its width
    whatever the state, and syncStatus (app.js) keeps the animations going when a dot is rebuilt. Every style still
    tells the states apart by shape with Windows' "Animation effects" off. */
+/* Status colours: the theme's own, unless it gives status colours of their own (a monochrome theme: see monochromeLook),
+   which then show only here, where a session's status is shown. Set on the root, each takes the theme's colour there. */
+:root { --status-ok: var(--ok); --status-working: var(--working); --status-attention: var(--attention); --status-asking: var(--asking); }
+.dot, .session-tab, .tile { --ok: var(--status-ok); --working: var(--status-working); --attention: var(--status-attention); --asking: var(--status-asking); }
 .dot { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); flex: none; }
 .dot::before, .dot::after { position: absolute; border-radius: 50%; pointer-events: none; }
 .dot.exited { background: none; box-shadow: inset 0 0 0 1.5px var(--text-faint); }
@@ -369,6 +378,29 @@ svg.ic { width: 16px; height: 16px; flex: none; display: block; }
 [data-dots="signal"] .dot.asking { background: var(--asking); animation: dot-shake 1.6s ease-in-out infinite; }
 [data-dots="signal"] .dot.asking::after { content: ''; inset: -3.5px; box-shadow: inset 0 0 0 1.5px var(--asking); }
 
+/* ---- A theme's own (its "dots", while it's on: see themeDots in app.js). Each state it draws is its picture, an image
+   on the root as --dot-icon-<status>, at the theme's size centred on the dot and moving as it says (--dot-motion-<status>);
+   data-dot-icons on the root lists those states. A state it leaves out is a plain, still dot in its colour (idle and
+   not running as in every style). */
+[data-dots="theme"] .dot.working { background: var(--working); }
+[data-dots="theme"] .dot.attention { background: var(--attention); }
+[data-dots="theme"] .dot.asking { background: var(--asking); }
+[data-dots="theme"] .dot.running { --icon: var(--dot-icon-running); --motion: var(--dot-motion-running); }
+[data-dots="theme"] .dot.working { --icon: var(--dot-icon-working); --motion: var(--dot-motion-working); }
+[data-dots="theme"] .dot.attention { --icon: var(--dot-icon-attention); --motion: var(--dot-motion-attention); }
+[data-dots="theme"] .dot.asking { --icon: var(--dot-icon-asking); --motion: var(--dot-motion-asking); }
+[data-dots="theme"] .dot.exited { --icon: var(--dot-icon-exited); --motion: var(--dot-motion-exited); }
+:root[data-dot-icons~="running"] [data-dots="theme"] .dot.running, :root[data-dot-icons~="working"] [data-dots="theme"] .dot.working,
+:root[data-dot-icons~="attention"] [data-dots="theme"] .dot.attention, :root[data-dot-icons~="asking"] [data-dots="theme"] .dot.asking,
+:root[data-dot-icons~="exited"] [data-dots="theme"] .dot.exited { background: none; box-shadow: none; border-radius: 0; }
+:root[data-dot-icons~="running"] [data-dots="theme"] .dot.running::before, :root[data-dot-icons~="working"] [data-dots="theme"] .dot.working::before,
+:root[data-dot-icons~="attention"] [data-dots="theme"] .dot.attention::before, :root[data-dot-icons~="asking"] [data-dots="theme"] .dot.asking::before,
+:root[data-dot-icons~="exited"] [data-dots="theme"] .dot.exited::before {
+  content: ''; inset: calc(50% - var(--dot-icon-size, 10px) / 2); border-radius: 0; box-shadow: none; opacity: 1;
+  background: var(--icon) center / contain no-repeat; animation: var(--motion, none);
+}
+:root[data-dot-icons~="running"] [data-dots="theme"] .dot.running::after { content: none; }   /* idle's resting glow: the picture is idle's own */
+
 @keyframes dot-typing {
   0%, 48%, 100% { box-shadow: -4.5px 20px var(--working), 0 20px var(--working), 4.5px 20px var(--working); }
   12% { box-shadow: -4.5px 17.5px var(--working), 0 20px var(--working), 4.5px 20px var(--working); }
@@ -470,11 +502,46 @@ body.side-empty #splitter, body.side-empty #gitPanel { display: none; }   /* sid
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
 }
 .empty-title { font-size: 18px; font-weight: 600; }
-.empty-sub { color: var(--text-dim); }
+.empty-sub { color: var(--text-dim); text-align: center; padding: 0 16px; }
+/* The website's mark (docs/brand/LlamaTree-Icon.svg) above the welcome's title, with the site's warm glow; left out
+   when the window is too short to spare it. */
+.welcome-mark { display: none; width: 112px; height: 112px; margin-bottom: 4px; filter: drop-shadow(0 8px 24px rgba(255, 138, 26, .25)); }
+#empty.welcome .welcome-mark { display: block; }
+@media (max-height: 760px) { #empty.welcome .welcome-mark { display: none; } }
+.empty-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+/* The welcome with no agent installed: each one's installer, to copy, and its install guide. */
+#emptyAgents { width: min(560px, calc(100% - 32px)); margin: 6px 0; display: flex; flex-direction: column; gap: 10px; text-align: left; }
+.agents-missing { color: var(--attention); }
+.agent-install { border: 1px solid var(--border); border-radius: 6px; background: var(--chrome-2); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.agent-install-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.agent-install-head a { color: var(--accent, var(--focus)); font-size: 12px; }
+.agent-install-label { color: var(--text-faint); font-size: 11px; margin-bottom: 2px; }
+.agent-install-line { display: flex; gap: 6px; align-items: center; }
+.agent-install-line code {
+  flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono, Consolas, monospace); font-size: 12px;
+  background: var(--terminal-bg, var(--bg)); border: 1px solid var(--border-soft); border-radius: 4px; padding: 5px 8px; user-select: all;
+}
+.agents-again { color: var(--text-faint); display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+/* The welcome's recent conversations: the picker's rows in a card no wider than reads well. */
+#emptyRecent { width: min(560px, calc(100% - 32px)); margin: 6px 0; text-align: left; }
+#emptyRecent .conv-list { border-radius: 6px; height: auto; max-height: min(50vh, 560px); overflow: auto; }
+#emptyProject { width: min(560px, calc(100% - 32px)); text-align: left; }
+#emptyProject .field { margin-bottom: 4px; }
+#emptyProject input { width: 100%; }
+#btnOpenPicked { min-width: 130px; }   /* the count changing the text doesn't shift the buttons beside it */
+#emptyProject .help { color: var(--text-faint); }
+.welcome-item { display: flex; gap: 10px; align-items: flex-start; }
+.welcome-item input { margin-top: 3px; flex: none; pointer-events: none; }
+.welcome-text { min-width: 0; flex: 1; }
+#emptyRecent .conv-item:last-child { border-bottom: none; }
+#emptyRecent .conv-item:focus-visible { outline: none; border-left-color: var(--focus); background: var(--hover); }
 
 /* ---------------------------------------------------------------- tiles */
+/* The terminal veil: the tile paints the terminal's background at --terminal-veil over whatever is behind it (the
+   window's floor under a Grid or rain theme): 100% unless the theme lets you see through ("terminalBackground"), when
+   markVeil in app.js puts its amount, or yours from the slider, on the root element. */
 .tile {
-  position: absolute; display: flex; flex-direction: column; background: var(--terminal-bg);
+  position: absolute; display: flex; flex-direction: column; background: color-mix(in srgb, var(--terminal-bg) var(--terminal-veil, 100%), transparent);
   border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
   transition: left .16s ease, top .16s ease, width .16s ease, height .16s ease, opacity .12s ease, border-color .2s;
 }
@@ -482,6 +549,8 @@ body.side-empty #splitter, body.side-empty #gitPanel { display: none; }   /* sid
 .tile.current:not(.expanded) { border-color: var(--accent-strong); }
 .tile.attention:not(.expanded) { border-color: var(--attention); box-shadow: 0 0 0 1px var(--attention); }
 .tile.asking:not(.expanded) { border-color: var(--asking); box-shadow: 0 0 0 1px var(--asking); }
+/* Files dragged over a terminal: dropping them pastes their paths there. */
+.tile.drop-over { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tile.expanded { z-index: 5; border-radius: 4px; }
 .tile.concealed { opacity: 0; pointer-events: none; }
 body.no-anim .tile, body.no-anim .surface { transition: none !important; }
@@ -524,11 +593,12 @@ button.chip:hover { border-color: var(--border); color: var(--text); }
    cursor's cell, riding out over the next two, and ribbons of light that fade behind it, in the terminal's cursor
    colour, over the screen's canvases. */
 .cycle-layer { position: absolute; inset: 0; pointer-events: none; z-index: 10; overflow: hidden; }
-.cycle-head { position: absolute; color: var(--cycle); filter: drop-shadow(0 0 2px var(--cycle)) drop-shadow(0 0 6px var(--cycle)); animation: cycle-idle 1.8s ease-in-out infinite; }
+.cycle-head { position: absolute; color: var(--cycle); animation: cycle-idle 1.8s ease-in-out infinite; }
 .cycle-head svg { display: block; width: 100%; height: 100%; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 @keyframes cycle-idle { 50% { opacity: .7; } }
 .xterm:not(.focus) .cycle-head { opacity: .3; animation: none; }   /* only the focused terminal's cycle is lit, as only its cursor blinks */
-.cycle-trail { position: absolute; background: var(--cycle); box-shadow: 0 0 4px var(--cycle), 0 0 10px var(--cycle); opacity: .85; animation: cycle-fade .8s ease-out forwards; }
+.cycle-head.over-text { opacity: .12; filter: none !important; animation: none; }   /* over text: faint, so the text reads (lightCycle) */
+.cycle-trail { position: absolute; background: var(--cycle-trail, var(--cycle)); opacity: .85; animation: cycle-fade .8s ease-out forwards; }   /* its width, glow and fade are the theme's (lightCycle in app.js) */
 @keyframes cycle-fade { to { opacity: 0; } }
 .tile-cover { position: absolute; inset: 0; cursor: zoom-in; z-index: 2; }
 .tile.expanded .tile-cover { display: none; }
@@ -629,11 +699,11 @@ textarea.skill-text {
 }
 .tw-tab.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
 .tw-tab.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
-.tw-session select, .repo-picker, .field input, .field select, textarea.commit-msg {
+.tw-session select, .repo-picker, .field input:not([type=checkbox], [type=radio]), .field select, textarea.commit-msg {
   width: 100%; background: var(--chrome-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px;
   font: inherit; padding: 4px 6px; outline: none;
 }
-.tw-session select:focus, .repo-picker:focus, .field input:focus, textarea.commit-msg:focus { border-color: var(--focus); }
+.tw-session select:focus, .repo-picker:focus, .field input:not([type=checkbox], [type=radio]):focus, textarea.commit-msg:focus { border-color: var(--focus); }
 .tw-session select:disabled { opacity: 1; cursor: default; appearance: none; color: var(--text-dim); }   /* locked to the open session: no arrow */
 
 .git-branch { display: flex; align-items: center; gap: 6px; padding: 8px 10px 4px; min-width: 0; }
@@ -658,6 +728,8 @@ textarea.commit-msg { resize: vertical; min-height: 54px; height: 54px; user-sel
 }
 .infobar.error { background: var(--error-bg); border-color: var(--error-border); }
 .infobar .msg { flex: 1; }
+.trust-bar { align-items: center; }
+.trust-bar .btn { flex: none; }
 
 .git-scroll { flex: 1; overflow: auto; padding-bottom: 12px; min-height: 0; }
 .git-message { padding: 16px 12px; color: var(--text-dim); }
@@ -757,6 +829,7 @@ textarea.commit-msg { resize: vertical; min-height: 54px; height: 54px; user-sel
 .modal-body { padding: 10px 18px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
 .modal-footer { padding: 12px 18px 16px; display: flex; justify-content: flex-end; gap: 8px; }
 .name-list { margin: 0; padding-left: 22px; font-weight: 600; }
+.link-confirm-url { margin-top: -8px; padding: 4px 8px; border-radius: 4px; background: var(--code-bg); font-family: "Cascadia Mono", Consolas, Menlo, "DejaVu Sans Mono", monospace; word-break: break-all; user-select: text; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .check-field { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 .field label { color: var(--text-dim); }
@@ -772,7 +845,7 @@ span.combo-btn { pointer-events: none; }   /* a list's arrow only shows; the lis
   border: 0; border-radius: 0 3px 3px 0; background: transparent; color: var(--text-dim); cursor: pointer;
 }
 .combo-btn:hover { background: var(--hover-strong); color: var(--text); }
-.field input { height: 28px; user-select: text; }
+.field input:not([type=checkbox], [type=radio]) { height: 28px; user-select: text; }   /* boxes to type in: a check box in a field (a worktree to add, say) stays a check box */
 .field .help { color: var(--text-faint); }
 .wt-list { border: 1px solid var(--border); border-radius: 4px; max-height: 220px; overflow: auto; background: var(--chrome-2); }
 .wt-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; }
@@ -879,6 +952,49 @@ img.plugin-ic { width: 16px; height: 16px; flex: none; object-fit: contain; }
 .project-all:hover { color: var(--text); border-color: var(--border); }
 .project-all.active { color: var(--text); border-color: var(--border); }
 .project-add { margin-left: 2px; color: var(--text-dim); }
+/* Projects as tabs (Top layout): no checkbox, a pin that shows on hover (always, turned aside, on an unpinned tab being
+   shown), and a ▾ for the projects that aren't pinned. */
+.project-tab.tabbed .project-name { padding: 0 2px 0 10px; }
+/* The tabs stand on the row's bottom edge, rounded at the top only. The selected one takes the session row's colour and
+   covers the line beneath it, so it runs into the sessions it shows; a stripe in its project's colour runs along its top. */
+#projectBar.tabbed { position: relative; border-bottom: 0; }
+#projectBar.tabbed::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--border-soft); }
+#projectBar.tabbed > .tab-scroller { align-self: stretch; position: relative; z-index: 1; }
+#projectBar.tabbed .project-tabs { align-self: stretch; align-items: flex-end; gap: 1px; }
+#projectBar.tabbed .project-tabs > :not(.project-tab, .project-all) { align-self: center; }
+#projectBar.tabbed :is(.project-tab.tabbed, .project-all) {
+  --tab-proj: var(--proj, var(--accent));
+  height: 30px; border-radius: 3px 3px 0 0; border: 1px solid transparent; border-bottom: 0;
+  background: transparent; color: var(--text-dim);
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--tab-proj) 35%, transparent);
+}
+#projectBar.tabbed .project-all { padding: 0 14px; box-shadow: none; }
+#projectBar.tabbed .project-tab.unknown { --tab-proj: var(--text-faint); }
+#projectBar.tabbed :is(.project-tab.tabbed, .project-all):hover { background: var(--hover); color: var(--text); }
+#projectBar.tabbed :is(.project-tab.tabbed.shown, .project-all.active) {
+  background: var(--chrome-2); border-color: var(--border-soft); color: var(--text);
+  box-shadow: inset 0 2px 0 var(--tab-proj);
+}
+#projectBar.tabbed .project-tab.tabbed .project-name { padding-left: 12px; }
+#projectBar.tabbed .project-more { margin-left: 2px; }
+.project-pin { padding: 0 7px 0 2px; color: var(--text-faint); visibility: hidden; }
+.project-pin svg.ic { width: 12px; height: 12px; }
+.project-pin:hover { color: var(--text); }
+.project-tab.tabbed:hover .project-pin, .project-pin:focus-visible, .project-pin.unpinned { visibility: visible; }
+.project-pin.unpinned svg.ic { transform: rotate(90deg); }
+.project-tab.preview .project-label { font-style: italic; padding-right: 2px; }   /* room for the slant, or it's clipped */
+.project-more {
+  display: inline-flex; align-items: center; gap: 5px; flex: none; height: 24px; padding: 0 8px; border-radius: 12px;
+  border: 1px solid transparent; background: none; color: var(--text-dim); cursor: pointer;
+}
+.project-more:hover { color: var(--text); border-color: var(--border); }
+.project-more:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.project-more svg.ic { width: 12px; height: 12px; }
+.project-more .dot { width: 7px; height: 7px; }
+.project-more .badge {
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--attention); color: #000;
+  font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
+}
 .tile.off-project { display: none; }
 .project-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -908,7 +1024,10 @@ body[data-nav="left"] #docTools { display: flex; }
 #docTools .tb-btn { height: 24px; min-width: 24px; }
 #docTools .app-version { margin: 0 12px 0 2px; }   /* set apart from the buttons after it */
 #navHead > #btnGrid { flex: none; height: 24px; min-width: 24px; margin: 0 4px 0 -4px; }
-#navFoot { display: flex; align-items: center; gap: 2px; }
+#navFoot { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+/* Each button keeps its words on one line: a side bar too narrow for both stacks them instead. */
+#navFoot > .tb-btn { white-space: nowrap; }
+#navFoot > .project-add { margin-left: 0; }
 #navFoot > #btnAdd { flex: none; padding: 0 8px; color: var(--text-dim); }
 #navFoot > #btnAdd:hover { color: var(--text); }
 
@@ -939,13 +1058,25 @@ body.no-nav-branches #navList .tab-branch { display: none; }   /* Layout ▸ Sho
 #navList .session-tab .tab-label { flex: 1; min-width: 0; }
 #navList .session-tab .tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* A session's name with the branch it's on beneath it (tabBranch in app.js). */
-#navList .tab-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+#navList .tab-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; text-align: left; }   /* not the button's centring: a branch wider than the name would shift it */
 #navList .tab-text .tab-name { white-space: nowrap; }
 .tab-branch { display: inline-flex; align-items: center; gap: 3px; min-width: 0; font-size: 11px; color: var(--text-faint); }
 .tab-branch:empty { display: none; }
 .tab-branch span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-branch svg.ic { width: 11px; height: 11px; flex: none; }
 #navList .session-tab .key { margin-left: auto; min-width: 40px; text-align: right; }
+/* A narrow bar keeps the name: the shortcut gives up its room first, then the agent and server marks, and only then the
+   name; narrower still, they're hidden rather than shown cut off. The bar is a container for that (see #navBar). */
+#navBar { container: nav-bar / inline-size; }
+#navList .session-tab .key { flex: 0 1000000000 40px; min-width: 0; }   /* weights far apart, so each gives way entirely before the next: so far that what the next would give is less than a layout unit */
+#navList .session-tab .session-marks { flex: 0 100000 auto; min-width: 0; }
+/* Whole or not at all: what doesn't fit wraps to a second line, which is cut off. It wraps after the ::before, a
+   zero-width space (an empty one isn't laid out, so there'd be nothing to wrap after); nowrap keeps Ctrl+1 whole rather
+   than broken at its +. */
+#navList .session-tab :is(.key, .session-marks) { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; height: 15px; overflow: hidden; white-space: nowrap; }
+#navList .session-tab :is(.key, .session-marks)::before { content: '\200b'; }
+@container nav-bar (max-width: 215px) { #navList .session-tab .key { display: none; } }
+@container nav-bar (max-width: 180px) { #navList .session-tab .session-marks { display: none; } }
 /* Which agent a session runs and where, before its Ctrl+N (sessionMarks in app.js) */
 .session-marks { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; flex: none; }
 #navList .session-marks + .key { margin-left: 2px; }   /* the marks take the free space, so they line up down the list */
@@ -993,6 +1124,20 @@ body.no-nav-branches #navList .tab-branch { display: none; }   /* Layout ▸ Sho
 .swatch-row .proj-tag { margin-left: 8px; }
 .swatch-auto { display: inline-flex; align-items: center; gap: 6px; }
 .swatch-auto:disabled { opacity: .5; cursor: default; }
+/* How solid the terminals are: a small slider in a tile's bottom-right corner (veilSlider in app.js), only under a theme
+   that lets you see through (data-veil-slider): always on the open terminal, on the others while the pointer is over
+   them; faint until the pointer is on it. It sits clear of the conversation rail, and above the "Starts when you open
+   it" badge when that's showing. */
+.tile-veil {
+  position: absolute; right: 24px; bottom: 8px; z-index: 3; display: none; align-items: center; gap: 6px; padding: 3px 8px;
+  border-radius: 10px; background: color-mix(in srgb, var(--panel) 85%, transparent); border: 1px solid var(--border-soft);
+  color: var(--text-dim); font-size: 11px; opacity: .5; transition: opacity .15s;
+}
+:root[data-veil-slider] :is(.tile:hover, .tile.expanded) .tile-veil { display: inline-flex; }
+.tile-veil:hover, .tile-veil:focus-within { opacity: 1; }
+.tile-veil input[type=range] { width: 84px; height: 12px; margin: 0; accent-color: var(--accent-strong); cursor: pointer; }
+.tile-veil span { min-width: 3.5ch; text-align: right; font-variant-numeric: tabular-nums; }
+.tile-exited:not([hidden]) ~ .tile-veil { bottom: 44px; }
 
 /* Status dots dialog: a card per style, each showing every state moving. */
 .dot-style-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; }
@@ -1063,6 +1208,8 @@ body.no-nav-branches #navList .tab-branch { display: none; }   /* Layout ▸ Sho
 .session-tab.dragging, .project-tab.dragging, .doc-tab.dragging { opacity: .4; }
 .session-tab.drop-before, .project-tab.drop-before, .doc-tab.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
 .session-tab.drop-after, .project-tab.drop-after, .doc-tab.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
+/* A session dragged onto a project (its tab, row or group name) goes into it. */
+.project-tab.drop-into, .session-group-label.drop-into { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 18%, transparent); }
 body.tab-dragging, body.tab-dragging * { cursor: grabbing !important; user-select: none !important; }
 
 /* Git toolbar: branch, outgoing/incoming counts, pull request chip, then Fetch / Pull / Push / Sync / ⋯ */
@@ -1191,6 +1338,38 @@ body.tab-dragging, body.tab-dragging * { cursor: grabbing !important; user-selec
 .perms-hidden { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); margin-top: 4px; }
 .perms-hidden .decision-mark { width: 16px; height: 16px; }
 .perms-hidden .decision-mark svg.ic { width: 10px; height: 10px; }
+/* Get plugins and Get themes (see renderGallery) */
+#galleryDoc { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--editor-bg); }
+#galleryDoc .diff-toolbar .seg { align-self: center; }
+#galleryDoc .diff-toolbar .seg-btn { padding: 2px 12px; font-size: 12px; white-space: nowrap; }
+.gallery-tools { display: flex; align-items: center; gap: 6px; }
+.gallery-previewing { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--accent); }
+#galleryBody { flex: 1; min-height: 0; overflow: auto; padding: 16px 16px 32px; outline: none; display: grid; grid-template-columns: minmax(0, 1100px); gap: 14px; align-content: start; }
+.gallery-intro { margin: 0; font-size: 12px; max-width: 760px; }
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.gallery-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+.gallery-card.have { border-color: var(--border-strong); }
+.gallery-card.trying { box-shadow: 0 0 0 2px var(--accent); }
+.gallery-card > header { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.gallery-icon { width: 28px; height: 28px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 6px; background: var(--panel-2); object-fit: contain; }
+.gallery-icon svg.ic { width: 18px; height: 18px; }
+.gallery-name { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.gallery-name > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gallery-name span { font-size: 11px; }
+.gallery-have { color: var(--ok); border-color: var(--ok); flex: none; }
+.gallery-about { margin: 0; font-size: 12.5px; line-height: 1.45; }
+.gallery-facts { margin: 0; padding: 0; list-style: none; font-size: 11.5px; display: grid; gap: 2px; }
+.gallery-note { margin: 0; font-size: 12px; color: var(--attention); }
+.gallery-problems { margin: 0; font-size: 11.5px; }
+.gallery-card > footer { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 4px; }
+.gallery-card > footer .btn { white-space: nowrap; }
+.gallery-card > footer { flex-wrap: wrap; }
+.gallery-card > footer .link-btn { font-size: 12px; }
+.theme-thumb { border-radius: 4px; overflow: hidden; font-size: 10.5px; box-shadow: 0 0 0 1px var(--border) inset; }
+.tt-bar { display: flex; align-items: center; gap: 10px; padding: 5px 8px 0; }
+.tt-tab { padding-bottom: 3px; border-bottom: 2px solid transparent; white-space: nowrap; }
+.tt-dot { width: 6px; height: 6px; border-radius: 50%; margin-bottom: 3px; }
+.tt-term { padding: 6px 8px 8px; font-family: "Cascadia Mono", Consolas, Menlo, "DejaVu Sans Mono", monospace; line-height: 1.5; white-space: pre; overflow: hidden; }
 .link-btn { border: none; background: none; padding: 0; color: var(--link); cursor: pointer; font: inherit; }
 .link-btn:hover { text-decoration: underline; }
 .decision-mark.scope { color: var(--text-dim); background: var(--panel-2); }
@@ -1410,6 +1589,9 @@ svg.sparkline circle { fill: var(--accent); }
 .notice-inline-link { color: var(--notice-ink); text-decoration: underline; text-underline-offset: 2px; }
 .notice-inline-link:hover { text-decoration-thickness: 2px; }
 .notice-close { flex: none; margin-left: auto; height: 24px; min-width: 24px; color: var(--text-dim); }
+/* The question about the count: its two answers, where a notice's close button goes. */
+.notice-actions { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 0; }
+.notice-actions .btn { height: 24px; padding: 0 10px; font-size: 12px; }
 
 /* ---------------------------------------------------------------- updates */
 .tb-btn.update-btn { color: var(--update-fg); background: color-mix(in srgb, var(--ok) 28%, transparent); border-radius: 4px; gap: 4px; }
@@ -1500,3 +1682,20 @@ button.sb-item:hover, .sb-item.open { background: var(--hover-strong); color: va
 }
 .spawn-warn { padding: 6px 8px; border-radius: 4px; background: var(--info-bg); border: 1px solid var(--info-border); }
 .spawn-ask code { word-break: break-all; }
+/* Let my other computers connect */
+.remote-access { display: flex; flex-direction: column; gap: 10px; max-width: 560px; }
+.remote-access p { margin: 0; }
+.remote-access-status { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--text-strong); }
+.remote-access-status .dot.on { background: var(--ok); }
+.remote-access-head { margin-top: 6px; font-weight: 600; color: var(--text-strong); }
+.remote-access-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.remote-access-code { font: 12px "Cascadia Mono", Consolas, Menlo, "DejaVu Sans Mono", monospace; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; user-select: text; overflow-wrap: anywhere; }
+.remote-access-key { display: flex; align-items: flex-start; gap: 8px; }
+.remote-access-key .remote-access-code { flex: 1; padding: 6px 8px; }
+.remote-access-warn { color: var(--warn, var(--text-strong)); }
+.remote-access-note { color: var(--text-faint); }
+textarea.key-text {
+  width: 100%; resize: vertical; padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--chrome-2);
+  color: var(--text); font: 12px "Cascadia Mono", Consolas, Menlo, "DejaVu Sans Mono", monospace; outline: none;
+}
+textarea.key-text:focus { border-color: var(--focus); }
