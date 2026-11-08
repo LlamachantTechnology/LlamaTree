@@ -1,7 +1,7 @@
 {
   "title": "Timeline",
   "description": "A live map of your sessions in the side panel: what each is doing now, your prompts and what Claude did between them, the tokens each is using, and a summary on demand",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "entry": "index.html",
   "placement": "panel",
   "access": ["sessions", "ask"],

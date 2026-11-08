@@ -311,7 +311,6 @@ footer .k { display: inline-flex; align-items: center; gap: 5px; }
 @keyframes crawl { to { background-position: 12px 0; } }
 @media (prefers-reduced-motion: reduce) { [data-look="tron"] .cycle::after, [data-look="tron"] .line.wait { animation: none !important; } }
 
-/* Ares: the same Grid in red, for the app's Tron: Ares theme. Only the light changes colour; amber still means it waits on you. */
 /* Matrix: the Grid in green, in a monospaced face. */
 :root[data-grid="matrix"] {
   --bg: #020804; --panel: rgba(2, 10, 5, .86); --border: #15502a; --border-soft: #0c2e18; --hover: #0a2214;
@@ -327,13 +326,4 @@ footer .k { display: inline-flex; align-items: center; gap: 5px; }
 [data-grid="matrix"] .btn, [data-grid="matrix"] select, [data-grid="matrix"] .seg, [data-grid="matrix"] .seg button { text-transform: none; letter-spacing: 0; font-size: 11px; }
 [data-grid="matrix"] .axis, [data-grid="matrix"] .who .state, [data-grid="matrix"] .ctx, [data-grid="matrix"] .stop .t, [data-grid="matrix"] .stop .beads { text-transform: none; letter-spacing: 0; }
 
-:root[data-grid="ares"] {
-  --bg: #0a0303; --panel: rgba(22, 6, 7, .86); --border: #6a1f23; --border-soft: #33100f; --hover: #2b1012;
-  --text: #ffe9e6; --text-dim: #d08a86; --text-faint: #8a5553; --code: #140506;
-  --line: #b32a2e; --station: #ff5a5a; --accent: #ff3b3b; --danger: #ff6a3d;
-  --working: #ff3b3b; --idle: #c94a4e; --stopped: #5a2a2c;
-  --working-glow: rgba(255, 59, 59, .75);
-  --heat1: #2a0a0b; --heat2: #5a1518; --heat3: #b32a2e; --heat4: #ff3b3b;
-  --grid-rgb: 255, 59, 59; --cycle: #ffc7c7; --on-text: #1a0405; --heat-mid: #8a2a2e;
-}
 :root[data-glow] body { text-shadow: 0 0 6px color-mix(in srgb, var(--accent) 30%, transparent); }   /* a theme with a glow (the app says) */

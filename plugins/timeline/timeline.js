@@ -59,21 +59,27 @@ addEventListener('message', (e) => {
   }
 });
 
-/** Dresses the page for the app's theme: its dark or light colours, or the Grid when one of the app's Tron themes is on (red for Ares). */
+/** Dresses the page for the app's theme: its colours and font, in the shape of the Grid when the app's Tron or Matrix theme is on. */
 function dress(m) {
-  const root = document.documentElement, id = m.id;
+  const root = document.documentElement, id = m.id, c = m.colors ?? {};
   root.dataset.theme = m.theme === 'light' ? 'light' : 'dark';
-  const grid = id === 'tron-ares' ? 'ares' : id === 'matrix' ? 'matrix' : null;   // the Grid's colour: cyan, red, or Matrix green
-  const tron = id === 'tron' || !!grid;
+  // The Grid's shape (a ruled floor, glows, upper-case labels) for Tron; Matrix the same in its monospaced face.
+  const grid = id === 'matrix' ? 'matrix' : null;
+  const tron = id === 'tron' || id === 'tron-ares' || !!grid;
   root.dataset.look = tron ? 'tron' : 'app';
   if (grid) root.dataset.grid = grid; else delete root.dataset.grid;
-  // The plain look takes the app's own colours and font, so it matches whatever theme is on (Nerds, one of yours); the Grid
-  // looks paint their own, so nothing is set over them.
-  const c = tron ? {} : (m.colors ?? {});
-  for (const [mine, theirs] of Object.entries(TIMELINE_COLORS)) { if (c[theirs]) root.style.setProperty('--' + mine, c[theirs]); else root.style.removeProperty('--' + mine); }
+  // The colours are always the app's: the theme's own, or the ones Tron builds from your accent colour, so the Grid is lit
+  // in your accent (red for Redline) and changes with it. On the Grid the lights take the accent's bright line colour.
+  // The looks' own sets, in timeline.css, stand in for an older app that sends none.
+  const map = tron ? { ...TIMELINE_COLORS, accent: 'accent', station: 'accent', working: 'accent' } : TIMELINE_COLORS;
+  for (const [mine, theirs] of Object.entries(map)) { if (c[theirs]) root.style.setProperty('--' + mine, c[theirs]); else root.style.removeProperty('--' + mine); }
   const heat = [['heat1', 14], ['heat2', 32], ['heat3', 60], ['heat4', 100]];
   for (const [name, pct] of heat) { if (c.accent && c.chrome) root.style.setProperty('--' + name, `color-mix(in srgb, ${c.accent} ${pct}%, ${c.chrome})`); else root.style.removeProperty('--' + name); }
-  document.body.style.fontFamily = !tron && m.font ? `"${m.font}", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif` : '';
+  const lit = tron && /^#[0-9a-f]{6}$/i.test(c.accent ?? '') && c.chrome;   // the Grid's own light: its lines, glows, the cycle and the text on a lit button
+  const grid3 = { 'grid-rgb': lit && [1, 3, 5].map((i) => parseInt(c.accent.slice(i, i + 2), 16)).join(', '), cycle: lit && `color-mix(in srgb, ${c.accent} 55%, white)`,
+    'on-text': lit && c.chrome, 'heat-mid': lit && `color-mix(in srgb, ${c.accent} 55%, ${c.chrome})` };
+  for (const [name, v] of Object.entries(grid3)) { if (v) root.style.setProperty('--' + name, v); else root.style.removeProperty('--' + name); }
+  document.body.style.fontFamily = m.font ? `"${m.font}", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif` : '';
   if (!tron && m.glow) root.dataset.glow = ''; else delete root.dataset.glow;
 }
 /** This page's colours by the app's names for them (see the theme message in the app's README). */
