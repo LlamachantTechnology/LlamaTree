@@ -2676,6 +2676,10 @@ function terminalMenuItems(s) {
 // Both are looked for, as apostrophes in prose can look like quotes around a path.
 const PATH_WORD = /[^\s"'`<>|,;()[\]{}]+/g;
 const QUOTED_PATH = /"([^"\n]{2,})"|'([^'\n]{2,})'|`([^`\n]{2,})`/g;
+// Where an unquoted absolute path starts (C:\, \\server, ~/ or /), at the start of a word. Such a path may have spaces
+// in it (C:\My Files\a.txt), so it's also tried with the next few words added on; the longest one there is the link.
+const ABS_PATH_START = /(?<![^\s(\[{<,;=])(?:[A-Za-z]:[\\/]|\\\\(?=[^\\\s])|~[\\/]|\/(?=[^\s/]))/g;
+const ABS_PATH_MAX_SPACES = 6;
 
 /**
  * The path in a word of terminal output, or null if it can't be one: unless it was quoted, it needs a folder
@@ -2762,6 +2766,20 @@ function pathLinkProvider(s) {
       };
       for (const m of text.matchAll(QUOTED_PATH)) add(m[1] ?? m[2] ?? m[3], m.index + 1, true);
       for (const m of text.matchAll(PATH_WORD)) add(m[0], m.index);
+      for (const m of text.matchAll(ABS_PATH_START)) {
+        // The path with 1, 2, ... more words on it (single spaces only), stopping at anything a path word can't have.
+        let end = m.index;
+        for (let spaces = 0; spaces <= ABS_PATH_MAX_SPACES; spaces++) {
+          PATH_WORD.lastIndex = end;
+          const w = PATH_WORD.exec(text);
+          if (!w || w.index !== end) break;
+          end = w.index + w[0].length;
+          if (spaces > 0) add(text.slice(m.index, end), m.index);
+          if (text[end] !== ' ' || text[end + 1] === ' ') break;
+          end++;
+        }
+      }
+      PATH_WORD.lastIndex = 0;
       if (!words.length) return callback(undefined);
       const ask = [...new Set(words.map((w) => w.path).filter((p) => !fresh(cache.get(p))))];
       const lookup = ask.length ? request('terminal.paths', { id: s.id, paths: ask }) : Promise.resolve([]);
