@@ -63,6 +63,8 @@ The Claude and Codex conversations had in the folder go with it, so each session
 
 A session another session's agent started (`start_session`) is listed beneath the one that started it, indented a step, in the list down the left. Its tooltip says which session started it.
 
+Click the arrow beside a session that started others to fold them away beneath it, and again to show them. While they're folded, the session's row shows how many there are, with a dot when one is working or asking you something and a count of those waiting for you. Folded sessions keep running, and still have their tiles and <kbd>Ctrl</kbd>+number keys.
+
 ### Closing the window
 
 Closing the window with sessions running asks what to do with them:

@@ -311,6 +311,8 @@ const state = {
   projectTabs: store.get('projectTabs', false),
   // Projects (and Unknown) taken off the tab row into its ▾ list. Unpinned rather than pinned, so new projects start pinned.
   unpinnedProjects: new Set(store.get('unpinnedProjects', [])),
+  // Sessions whose started sessions are folded away beneath them in the list down the left (see renderNav).
+  collapsedStarters: new Set(store.get('collapsedStarters', [])),
 };
 
 // ------------------------------------------------------------------ projects: which sessions are visible
@@ -381,7 +383,8 @@ function visibleSessions() {
 /**
  * The sessions with each one another started moved beneath the one that started it, and its `nestDepth` set: how many
  * levels down it is (0 for one you made). Only beneath a starter that's in the list and in the same project, so a
- * session never leaves its project's group; one whose starter is hidden or gone stays where it was.
+ * session never leaves its project's group; one whose starter is hidden or gone stays where it was. Also sets
+ * `nestParent`, the id of the one it's beneath (null at the top), and `nestKids`, how many sit directly beneath it.
  */
 function nestStarted(list) {
   const shown = new Map(list.map((s) => [s.id, s]));
@@ -392,16 +395,65 @@ function nestStarted(list) {
   const children = new Map();
   for (const s of list) { const by = starterOf(s); if (by) children.set(by.id, [...(children.get(by.id) ?? []), s]); }
   const out = [], placed = new Set();
-  const place = (s, depth) => {
+  const place = (s, depth, parent) => {
     if (placed.has(s.id)) return;
     placed.add(s.id);
     s.nestDepth = depth;
+    s.nestParent = parent;
+    s.nestKids = 0;
     out.push(s);
-    for (const c of children.get(s.id) ?? []) place(c, depth + 1);
+    for (const c of children.get(s.id) ?? []) { if (!placed.has(c.id)) s.nestKids++; place(c, depth + 1, s.id); }
   };
-  for (const s of list) if (!starterOf(s)) place(s, 0);
-  for (const s of list) place(s, 0);   // only ever a loop of starters (each started by another of them): left as they were
+  for (const s of list) if (!starterOf(s)) place(s, 0, null);
+  for (const s of list) place(s, 0, null);   // only ever a loop of starters (each started by another of them): left as they were
   return out;
+}
+
+/** Whether a session is folded away beneath a collapsed starter (one above it in nestStarted's tree). */
+function foldedAway(s) {
+  for (let up = s.nestParent, seen = 0; up && seen < 64; up = state.byId.get(up)?.nestParent, seen++)
+    if (state.collapsedStarters.has(up)) return true;
+  return false;
+}
+
+/** The sessions beneath a starter in nestStarted's tree, however far down. */
+function nestedUnder(s) {
+  return state.sessions.filter((x) => {
+    for (let up = x.nestParent, seen = 0; up && seen < 64; up = state.byId.get(up)?.nestParent, seen++) if (up === s.id) return true;
+    return false;
+  });
+}
+
+/** Folds a starter's sessions away beneath it in the list down the left, or shows them again. */
+function toggleStarter(id) {
+  const set = state.collapsedStarters;
+  if (!set.delete(id)) set.add(id);
+  for (const x of [...set]) if (!state.byId.has(x)) set.delete(x);   // sessions since closed
+  store.set('collapsedStarters', [...set]);
+  renderNav();
+}
+
+/**
+ * On a collapsed starter's row: how many sessions are folded beneath it, with the dot of one that asks or works and a
+ * count of those waiting for you, so a folded session still gets noticed.
+ */
+function nestFold(s) {
+  const under = nestedUnder(s).filter(isVisible);
+  const waiting = under.filter(waitingForYou).length;
+  return h('span', { class: 'nest-fold', 'data-id': s.id, title: `${under.length} session${under.length === 1 ? '' : 's'} started from here, folded away` },
+    `+${under.length}`, projectDot(under),
+    waiting ? h('span', { class: 'badge', title: `${waiting} waiting for you` }, String(waiting)) : null);
+}
+
+/** Refreshes the folded counts on collapsed starters after a session's status changes. */
+function updateNestFolds() {
+  for (const el of document.querySelectorAll('#navList .nest-fold')) {
+    const s = state.byId.get(el.dataset.id);
+    if (!s) continue;
+    const next = nestFold(s);
+    // The same dot and count stay, so the dot's animation isn't restarted on every update.
+    if (next.outerHTML !== el.outerHTML) { el.replaceWith(next); syncStatus(next); }
+  }
 }
 
 function saveHiddenProjects() {
@@ -667,13 +719,27 @@ function renderNav() {
   if (state.navLayout === 'top') return;
   const tree = state.navLayout === 'left';
   const groups = projectGroups();
-  const shown = tree ? visibleSessions() : [];
+  const all = tree ? visibleSessions() : [];
+  // Sessions folded away beneath a collapsed starter aren't listed; they still have their tiles and Ctrl+1…9.
+  const shown = all.filter((s) => !foldedAway(s));
   const tabOf = (s) => {
-    const tab = sessionTab(s, shown.indexOf(s), true);   // the index gives its Ctrl+1…9, as in the tab row
+    const tab = sessionTab(s, all.indexOf(s), true);   // the index gives its Ctrl+1…9, as in the tab row
     // One another session started sits beneath it (see nestStarted).
     if (s.nestDepth > 0) {
       tab.classList.add('nested');
       tab.style.setProperty('--depth', String(s.nestDepth));
+    }
+    if (s.nestKids > 0) {
+      const open = !state.collapsedStarters.has(s.id);
+      tab.classList.add('starter');
+      tab.prepend(h('button', {
+        class: 'nest-toggle', 'aria-expanded': String(open),
+        title: `${open ? 'Hide' : 'Show'} the sessions ${s.name} started`,
+        onclick: (e) => { e.stopPropagation(); toggleStarter(s.id); },
+      }, iconEl('chevD')));
+      // Folded: how many beneath it, on the name's line.
+      const name = !open && tab.querySelector('.tab-text .tab-name');
+      if (name) { const line = h('span', { class: 'tab-line' }); name.replaceWith(line); line.append(name, nestFold(s)); }
     }
     return tab;
   };
@@ -2106,6 +2172,7 @@ function renderTileState(s) {
   syncStatus(s.header);
   if (tab) syncStatus(tab);
   updateProjectIndicators(groupOf(s));
+  if (s.nestParent) updateNestFolds();
   projectViewChanged(s);
   relayNotify(s);   // an idle session told of messages it has
 }

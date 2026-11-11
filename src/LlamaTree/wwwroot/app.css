@@ -1052,10 +1052,18 @@ body[data-nav="left"] #docTools { display: flex; }
 /* A project's sessions, beneath it on a line in its colour */
 .nav-sessions { display: flex; flex-direction: column; gap: 1px; margin-left: 13px; padding-left: 6px; border-left: 2px solid color-mix(in srgb, var(--proj) 45%, transparent); }
 .nav-sessions.unnamed { margin-left: 0; padding-left: 0; border-left: 0; }
-#navList .session-tab { display: flex; width: 100%; height: 28px; padding-left: 8px; }
-/* A session another started, beneath the one that started it: indented a step for each level, with a tick joining it to the line. */
-#navList .session-tab.nested { position: relative; width: calc(100% - var(--depth) * 14px); margin-left: calc(var(--depth) * 14px); }
-#navList .session-tab.nested::before { content: ''; position: absolute; left: -9px; top: 50%; width: 6px; border-top: 1px solid color-mix(in srgb, var(--proj, var(--text-faint)) 55%, transparent); }
+/* Every row is the list's full width, reaching into the gap beside the project's line, which leaves room for a chevron. */
+#navList .session-tab { position: relative; display: flex; width: 100%; height: 28px; padding-left: 14px; }
+#navList .nav-sessions:not(.unnamed) > .session-tab { width: calc(100% + 6px); margin-left: -6px; }
+/* A session another started, beneath the one that started it: its contents indented a step for each level, its highlight still full width. */
+#navList .session-tab.nested { padding-left: calc(14px + var(--depth) * 14px); }
+/* A session that started others: a chevron to its left folds them away; folded, a count of them (and a dot if one asks or works) */
+#navList .nest-toggle { position: absolute; left: calc(var(--depth, 0) * 14px); top: 0; bottom: 0; width: 14px; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; background: none; color: var(--text-faint); cursor: pointer; }
+#navList .nest-toggle:hover, #navList .nest-toggle:focus-visible { color: var(--text); }
+#navList .nest-toggle .ic { width: 12px; height: 12px; transition: transform .12s; }
+#navList .nest-toggle[aria-expanded="false"] .ic { transform: rotate(-90deg); }
+#navList .tab-line { display: flex; align-items: center; min-width: 0; }
+#navList .nest-fold { flex: none; display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 0 5px; border-radius: 8px; font-size: 11px; line-height: 16px; color: var(--text-dim); background: color-mix(in srgb, var(--text-faint) 18%, transparent); }
 body:not(.no-nav-branches) #navList .session-tab:has(.tab-branch:not(:empty)) { height: 38px; }   /* room for the branch beneath the name */
 body.no-nav-branches #navList .tab-branch { display: none; }   /* Layout ▸ Show branches, off */
 #navList .session-tab .tab-label { flex: 1; min-width: 0; }
