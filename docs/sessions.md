@@ -53,6 +53,18 @@ In **New session**, or a session's ⋯ menu › *Resume a different conversation
 
 ![Resuming a saved Claude Code conversation](images/resume.png)
 
+### Moving a session's folder
+
+Change the **Folder** in *Edit session* (or *Browse…* to the folder to move it into) to move the folder itself on disk, and the session with it. A worktree is moved with `git worktree move`, so its repository keeps track of it; a repository's main folder is moved and its other worktrees repaired (`git worktree repair`). Any other session in the folder or inside it moves too. Running ones are stopped first, after you confirm, since their programs hold the folder.
+
+The Claude and Codex conversations had in the folder go with it, so each session reopens its conversation in the new place. The new folder must not exist yet, and has to be on the same drive. Claude may ask once whether you trust the new folder.
+
+### Sessions started by another session
+
+A session another session's agent started (`start_session`) is listed beneath the one that started it, indented a step, in the list down the left. Its tooltip says which session started it.
+
+Click the arrow beside a session that started others to fold them away beneath it, and again to show them. While they're folded, the session's row shows how many there are, with a dot when one is working or asking you something and a count of those waiting for you. Folded sessions keep running, and still have their tiles and <kbd>Ctrl</kbd>+number keys.
+
 ### Closing the window
 
 Closing the window with sessions running asks what to do with them:
