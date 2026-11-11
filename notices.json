@@ -1,6 +1,14 @@
 {
   "notices": [
     {
+      "id": "tip-explainer-video",
+      "text": "New to LlamaTree? A 2-minute video shows what it does: sessions side by side, the dots that tell you which one needs you, diffs and panels.",
+      "link": {
+        "label": "Watch the 2-minute overview",
+        "url": "https://youtu.be/iEjyTYRCZJY"
+      }
+    },
+    {
       "id": "llamalogger-lite-free-2026",
       "kind": "offer",
       "color": "orange",
