@@ -667,6 +667,8 @@ function renderNav() {
 function projectMenu(p, x, y) {
   if (p.unknown) {   // a group, not a project: nothing to rename, move or delete
     showMenu(x, y, [
+      ...projectNewSessionItems(UNKNOWN),
+      '-',
       { label: 'Project view: its worktrees side by side', action: () => openProjectView(UNKNOWN) },
       '-',
       { label: 'Show only sessions with no project', action: () => showOnlyProject(UNKNOWN) },
@@ -679,6 +681,8 @@ function projectMenu(p, x, y) {
   const i = state.projects.indexOf(p);
   const across = state.navLayout === 'top';   // a row of tabs; down the left, a list
   showMenu(x, y, [
+    ...projectNewSessionItems(p.id),
+    '-',
     { label: 'Project view: its worktrees side by side', action: () => openProjectView(p.id) },
     '-',
     { label: 'Show only this project', action: () => showOnlyProject(p.id) },
@@ -3478,14 +3482,30 @@ function showAddDialog(mode = 'new', from = null) {
  */
 function quickAddMenu(s, anchor) {
   const r = anchor.getBoundingClientRect();
+  showMenu(r.left, r.bottom + 2, newSessionItems(s));
+}
+
+/** What quickAddMenu offers: a header naming the project, then where the new session goes. */
+function newSessionItems(s) {
   const p = projectOf(s);
-  showMenu(r.left, r.bottom + 2, [
+  return [
     { header: p ? `New session in ${p.name}` : 'New session with no project' },
     { label: 'In the same folder', action: () => quickSession(s) },
     s.git?.isRepo && { label: 'In a new worktree…', action: () => showWorktreeDialog(s) },   // worktrees need a Git repository
     '-',
     { label: 'A different folder…', action: () => showAddDialog('new', { directory: s.directory, project: s.project ?? null, server: s.server ?? null }) },
-  ]);
+  ];
+}
+
+/**
+ * New session items for a project's right-click menu: as its + offers, like its current session (else its first, shown
+ * or not); a project with no sessions has no + and nothing to be like, so it opens New session with the project picked.
+ */
+function projectNewSessionItems(projectId) {
+  const members = state.sessions.filter((s) => groupOf(s) === projectId);
+  const like = members.find((s) => s.id === state.currentId) || members[0];
+  if (like) return newSessionItems(like);
+  return [{ label: 'New session…', action: () => showAddDialog('new', { project: projectId === UNKNOWN ? null : projectId }) }];
 }
 
 /** The session's command without anything that picks a conversation: a new session gets one of its own. */
