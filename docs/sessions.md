@@ -4,7 +4,7 @@ A session is one agent (or any command) running in its own real terminal, in a f
 
 ## Working with sessions
 
-Click a session's tile, or its tab in the title bar, to work in it full-size; click its tab again, or press <kbd>Shift</kbd>+<kbd>Esc</kbd>, to go back to all sessions. **New session** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd>) starts a new conversation, optionally one session per worktree, or resumes an existing one. [Keyboard shortcuts](shortcuts.md) lists the rest.
+Click a session's tile, or its tab (in the list down the left, or across the top in that layout), to work in it full-size; click its tab again, or press <kbd>Shift</kbd>+<kbd>Esc</kbd>, to go back to all sessions. **New session** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd>) starts a new conversation, optionally one session per worktree, or resumes an existing one. [Keyboard shortcuts](shortcuts.md) lists the rest.
 
 ![An expanded session with its Git Changes](images/session.png)
 
