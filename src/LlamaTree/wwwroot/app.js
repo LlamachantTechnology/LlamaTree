@@ -105,6 +105,21 @@ const store = {
   set(key, v) { localStorage.setItem('ct.' + key, JSON.stringify(v)); },
 };
 
+/**
+ * The layout picked under Layout, else the default: Left (projects and sessions down the left) for a new install. A
+ * copy of LlamaTree that has run before without one picked had Top, its default then, and keeps it. Saved either way,
+ * so it doesn't change later.
+ */
+function initialNavLayout() {
+  const picked = store.get('navLayout');
+  if (['top', 'hybrid', 'left'].includes(picked)) return picked;
+  let ranBefore = false;
+  try { ranBefore = Object.keys(localStorage).some((k) => k.startsWith('ct.')); } catch { }
+  const layout = ranBefore ? 'top' : 'left';
+  try { store.set('navLayout', layout); } catch { }
+  return layout;
+}
+
 function debounce(fn, ms) {
   let t;
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
@@ -304,7 +319,7 @@ const state = {
   projects: [],                                        // [{ id, name }] in display order
   hiddenProjects: new Set(store.get('hiddenProjects', [])),   // hidden rather than shown, so new projects start visible
   // Where projects and sessions go (see NAV_LAYOUTS): 'top', 'hybrid' (projects on the left) or 'left' (both, as a tree).
-  navLayout: ['hybrid', 'left'].includes(store.get('navLayout')) ? store.get('navLayout') : 'top',
+  navLayout: initialNavLayout(),
   navWidth: store.get('navWidth', 230),
   navBranches: store.get('navBranches', true),   // each session's branch beneath its name, down the left
   // In the Top layout, projects as tabs (a click shows only that project) rather than as filters to tick.
