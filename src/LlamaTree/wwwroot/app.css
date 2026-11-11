@@ -1053,6 +1053,9 @@ body[data-nav="left"] #docTools { display: flex; }
 .nav-sessions { display: flex; flex-direction: column; gap: 1px; margin-left: 13px; padding-left: 6px; border-left: 2px solid color-mix(in srgb, var(--proj) 45%, transparent); }
 .nav-sessions.unnamed { margin-left: 0; padding-left: 0; border-left: 0; }
 #navList .session-tab { display: flex; width: 100%; height: 28px; padding-left: 8px; }
+/* A session another started, beneath the one that started it: indented a step for each level, with a tick joining it to the line. */
+#navList .session-tab.nested { position: relative; width: calc(100% - var(--depth) * 14px); margin-left: calc(var(--depth) * 14px); }
+#navList .session-tab.nested::before { content: ''; position: absolute; left: -9px; top: 50%; width: 6px; border-top: 1px solid color-mix(in srgb, var(--proj, var(--text-faint)) 55%, transparent); }
 body:not(.no-nav-branches) #navList .session-tab:has(.tab-branch:not(:empty)) { height: 38px; }   /* room for the branch beneath the name */
 body.no-nav-branches #navList .tab-branch { display: none; }   /* Layout ▸ Show branches, off */
 #navList .session-tab .tab-label { flex: 1; min-width: 0; }

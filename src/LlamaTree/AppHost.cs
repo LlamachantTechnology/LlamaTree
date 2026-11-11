@@ -734,6 +734,63 @@ internal sealed partial class AppHost
         return s;
     }
 
+    /// <summary>
+    /// Moves the session's folder on disk to <paramref name="to"/> (see <see cref="FolderMove"/>), and every session here
+    /// in that folder or inside it with it, their agents' saved conversations included. Their programs hold the folder, so
+    /// running ones are stopped first, and only when <paramref name="stop"/> says the person agreed; otherwise nothing
+    /// happens and the page is told which are running.
+    /// </summary>
+    private async Task MoveSessionFolderAsync(TerminalSession s, string to, bool stop)
+    {
+        var from = PathText.TrimEnd(Path.GetFullPath(s.Info.Directory));
+        if (FolderMove.Problem(from, to) is { } problem) throw new InvalidOperationException(problem);
+        to = PathText.TrimEnd(Path.GetFullPath(to));
+        var moving = sessions.Values.Where(x => FolderMove.Inside(x.Info.Directory, from)).ToList();
+        // A session another session's agent started is held to the folder it was allowed (see SessionInfo.Within).
+        string Moved(string path) => FolderMove.Inside(path, from) ? FolderMove.Rebase(path, from, to) : path;
+        if (moving.FirstOrDefault(x => x.Info.Within is { } within && !FolderMove.Inside(Moved(x.Info.Directory), Moved(within))) is { } held)
+            throw new InvalidOperationException($"“{held.Info.Name}” was started by another session and has to stay inside {held.Info.Within}, so the folder can't move there.");
+        var running = moving.Where(x => x.IsRunning).ToList();
+        if (running.Count > 0 && !stop)
+            throw new InvalidOperationException($"Stop {string.Join(", ", running.Select(x => $"“{x.Info.Name}”"))} first: {(running.Count == 1 ? "its program has" : "their programs have")} the folder open.");
+        foreach (var x in running)
+        {
+            CatchUpConversation(x);
+            NoteRunning(x, false);
+            if (x.Stop()) Post(new { type = "exited", id = x.Id, code = (int?)null });
+        }
+        if (running.Count > 0)
+        {
+            FlushOutput();
+            RunningChanged?.Invoke();
+        }
+        // Every session's Git watch lets go: one in another worktree of a repository being moved watches inside it too.
+        foreach (var x in sessions.Values) x.StopGitWatch();
+        try
+        {
+            await FolderMove.MoveAsync(from, to);
+            foreach (var x in moving)
+            {
+                x.Info.Directory = Moved(x.Info.Directory);
+                if (x.Info.Within is { } within) x.Info.Within = Moved(within);
+            }
+            // A session a folder above may show a repository in it (see SessionInfo.GitRepo).
+            foreach (var x in sessions.Values) if (x.Info.GitRepo is { } repo) x.Info.GitRepo = Moved(repo);
+            SaveSessions();
+            Post(SessionList());
+            // The conversations can take a moment (a long one is rewritten); the session's place is already saved.
+            await Task.Run(() =>
+            {
+                FolderMove.MoveClaudeConversations(from, to);
+                FolderMove.MoveCodexConversations(from, to);
+            });
+        }
+        finally
+        {
+            foreach (var x in sessions.Values.ToList()) _ = x.InitGitAsync();
+        }
+    }
+
     /// <summary>Removes a session here: its process ends, its panels go with it (its conversation stays, to resume).</summary>
     private void RemoveSession(TerminalSession s)
     {
@@ -1052,6 +1109,9 @@ internal sealed partial class AppHost
                 Post(SessionList());
                 return null;
             }
+            case "moveSession":
+                await MoveSessionFolderAsync(Get(msg), Str(msg, "directory").Trim(), Bool(msg, "stop"));
+                return null;
 
             // ---- projects (a grouping of sessions; deleting one never removes sessions)
             case "projects.add":

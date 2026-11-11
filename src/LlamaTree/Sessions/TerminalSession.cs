@@ -189,6 +189,20 @@ internal sealed partial class TerminalSession : IDisposable
         await RefreshStatusAsync();
     }
 
+    /// <summary>
+    /// Stops watching the folder until the next <see cref="InitGitAsync"/>: a folder being watched can't be moved on
+    /// Windows. A refresh still under way finds itself outdated and installs nothing.
+    /// </summary>
+    public void StopGitWatch()
+    {
+        lock (gitLock)
+        {
+            gitGeneration++;
+            watcher?.Dispose();
+            watcher = null;
+        }
+    }
+
     /// <summary>The picked repository while it is still there; otherwise the folder's own repository, or the first one inside it.</summary>
     internal static string? ChooseRepository(IReadOnlyList<string> repos, string? picked) =>
         repos.FirstOrDefault(r => string.Equals(r, picked, StringComparison.OrdinalIgnoreCase)) ?? repos.FirstOrDefault();

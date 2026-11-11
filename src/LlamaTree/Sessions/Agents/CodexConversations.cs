@@ -183,6 +183,13 @@ internal static class CodexConversations
         }
     }
 
+    /// <summary>The rollouts of conversations had in <paramref name="folder"/> or a folder inside it (see <see cref="FolderMove"/>).</summary>
+    internal static List<string> RolloutsIn(string folder) =>
+        Rollouts(SessionsRoot).Where(f => Read(f)?.Cwd is { } cwd && FolderMove.Inside(cwd, folder)).Select(f => f.FullName).ToList();
+
+    /// <summary>Reads the rollout again next time: its start has been rewritten (a cached one is otherwise kept once its prompt is known).</summary>
+    internal static void Forget(string file) => Cache.TryRemove(file, out _);
+
     private static IEnumerable<FileInfo> Rollouts(string folder)
     {
         try

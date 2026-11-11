@@ -366,13 +366,42 @@ function projectTag(s) {
   return h('span', { class: 'proj-tag', style: `--proj:${projectColor(p)}`, title: `Project: ${p.name}` }, p.name);
 }
 
-/** Visible sessions, grouped by project in project order (no project last), keeping their own order within a group. */
+/**
+ * Visible sessions, grouped by project in project order (no project last), keeping their own order within a group,
+ * except that a session another started (start_session) comes straight after the one that started it, and its siblings.
+ */
 function visibleSessions() {
-  return state.sessions
+  return nestStarted(state.sessions
     .map((s, i) => ({ s, i }))
     .filter(({ s }) => isVisible(s))
     .sort((a, b) => projectIndex(a.s) - projectIndex(b.s) || a.i - b.i)
-    .map(({ s }) => s);
+    .map(({ s }) => s));
+}
+
+/**
+ * The sessions with each one another started moved beneath the one that started it, and its `nestDepth` set: how many
+ * levels down it is (0 for one you made). Only beneath a starter that's in the list and in the same project, so a
+ * session never leaves its project's group; one whose starter is hidden or gone stays where it was.
+ */
+function nestStarted(list) {
+  const shown = new Map(list.map((s) => [s.id, s]));
+  const starterOf = (s) => {
+    const by = s.startedBy && shown.get(s.startedBy);
+    return by && by !== s && groupOf(by) === groupOf(s) ? by : null;
+  };
+  const children = new Map();
+  for (const s of list) { const by = starterOf(s); if (by) children.set(by.id, [...(children.get(by.id) ?? []), s]); }
+  const out = [], placed = new Set();
+  const place = (s, depth) => {
+    if (placed.has(s.id)) return;
+    placed.add(s.id);
+    s.nestDepth = depth;
+    out.push(s);
+    for (const c of children.get(s.id) ?? []) place(c, depth + 1);
+  };
+  for (const s of list) if (!starterOf(s)) place(s, 0);
+  for (const s of list) place(s, 0);   // only ever a loop of starters (each started by another of them): left as they were
+  return out;
 }
 
 function saveHiddenProjects() {
@@ -639,7 +668,15 @@ function renderNav() {
   const tree = state.navLayout === 'left';
   const groups = projectGroups();
   const shown = tree ? visibleSessions() : [];
-  const tabOf = (s) => sessionTab(s, shown.indexOf(s), true);   // the index gives its Ctrl+1…9, as in the tab row
+  const tabOf = (s) => {
+    const tab = sessionTab(s, shown.indexOf(s), true);   // the index gives its Ctrl+1…9, as in the tab row
+    // One another session started sits beneath it (see nestStarted).
+    if (s.nestDepth > 0) {
+      tab.classList.add('nested');
+      tab.style.setProperty('--depth', String(s.nestDepth));
+    }
+    return tab;
+  };
   const rows = groups.map((p) => {
     const members = shown.filter((s) => groupOf(s) === p.id);
     return h('div', { class: 'nav-group' + (p.unknown ? ' unknown' : ''), style: p.unknown ? null : `--proj:${projectColor(p)}` },
@@ -2132,7 +2169,8 @@ function renderTileHeader(s) {
 }
 
 function sessionTabTitle(s) {
-  return [s.directory, s.git?.branch && `Branch: ${s.git.branch}`, s.server && serverTitle(serverOf(s)), statusText(s), conversationLine(s), 'Click again to go back to all sessions · middle-click to close'].filter(Boolean).join('\n');
+  const by = s.startedBy && state.byId.get(s.startedBy);
+  return [s.directory, s.git?.branch && `Branch: ${s.git.branch}`, by && `Started by “${by.name}”`, s.server && serverTitle(serverOf(s)), statusText(s), conversationLine(s), 'Click again to go back to all sessions · middle-click to close'].filter(Boolean).join('\n');
 }
 
 /**
@@ -2914,6 +2952,15 @@ function showEditDialog(s, focus) {
   const command = h('input', { value: s.command, spellcheck: 'false' });
   const project = projectField(s.project);
   const starts = agent && !s.server ? startsField(s.startWithApp) : null;   // a server's session runs with its own LlamaTree
+  // A session on this computer can move: its folder is moved on disk (a worktree by git), and the session with it.
+  const folder = h('input', { value: s.directory, readonly: !!s.server, spellcheck: 'false' });
+  const browse = !s.server && h('button', {
+    class: 'btn', title: 'Pick the folder to move it into; it keeps its name there',
+    onclick: async () => {
+      const parent = await request('pickFolder', { initial: parentFolder(folder.value.trim() || s.directory) });
+      if (parent) folder.value = parent.replace(/[\\/]+$/, '') + pathSep(parent) + leafName(s.directory.replace(/[\\/]+$/, ''));
+    },
+  }, 'Browse…');
   const error = h('div', { class: 'form-error', hidden: true });
   const save = async () => {
     let projectId;
@@ -2924,19 +2971,23 @@ function showEditDialog(s, focus) {
       error.textContent = e.message;
       return;
     }
+    const target = folder.value.trim();
+    const moving = !s.server && target && normPath(target) !== normPath(s.directory);
     request('updateSession', {
       id: s.id, name: name.value, command: command.value, project: projectId ?? '', ...(starts && { startWithApp: starts.select.value }),
     }).catch((e) => toast(e.message, true));
     closeModal();
-    if (s.running && command.value.trim() !== s.command) toast('Command changes apply the next time the session starts.');
+    if (moving) confirmMoveFolder(s, target);
+    else if (s.running && command.value.trim() !== s.command) toast('Command changes apply the next time the session starts.');
     if (projectId && state.hiddenProjects.has(projectId)) toast(`"${s.name}" moved to a project that's hidden; tick it above to see the session.`);
   };
-  for (const i of [name, command, project.newName]) i.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+  for (const i of [name, command, project.newName, folder]) i.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
   openModal('Edit session', [
     field('Name', name),
     field('Command', command, 'For example: claude, claude --model opus, codex'),
     project.el,
-    field('Folder', h('input', { value: s.directory, readonly: true })),
+    field('Folder', s.server ? folder : h('div', { class: 'inline' }, folder, browse),
+      !s.server && 'Change it to move the folder itself on disk, and the session with it (a worktree is moved with git). Its conversations go along.'),
     agent && field('Conversation',
       h('input', {
         value: s.conversation ?? '', readonly: true, spellcheck: 'false',
@@ -2959,6 +3010,48 @@ function agentTag(id) {
 }
 
 const leafName = (path) => (path || '').split(/[\\/]/).filter(Boolean).pop() || path;
+/** The separator the path is written with. */
+const pathSep = (path) => /^[a-z]:|\\/i.test(path) ? '\\' : '/';
+/** The folder the path is in (itself for a drive or the root). */
+const parentFolder = (path) => {
+  const p = (path || '').replace(/[\\/]+$/, '');
+  const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'));
+  return i > 0 && !/^[a-z]:$/i.test(p.slice(0, i)) ? p.slice(0, i) : p.slice(0, i + 1) || p;
+};
+
+/**
+ * Moving a session's folder (Edit session): what goes with it, then the move. Every session on this computer in the
+ * folder or inside it moves too, and running ones are stopped first, since their programs hold the folder.
+ */
+function confirmMoveFolder(s, target) {
+  const from = s.directory;
+  const along = state.sessions.filter((x) => x !== s && !x.server && underPath(x.directory, from));
+  const running = [s, ...along].filter((x) => x.running);
+  const names = (list) => list.map((x) => `“${x.name}”`).join(', ');
+  openModal('Move folder', [
+    h('div', {}, `Move the folder of “${s.name}” on disk, with everything in it?`),
+    field('From', h('input', { value: from, readonly: true })),
+    field('To', h('input', { value: target, readonly: true })),
+    h('div', { class: 'dim' }, s.git?.isRepo && normPath(s.git.root) === normPath(from)
+      ? 'It’s a Git repository folder: a worktree is moved with git worktree move, and a repository’s main folder has its other worktrees repaired afterwards.'
+      : 'Nothing else changes: the folder is renamed to its new place.'),
+    along.length > 0 && h('div', {}, `${along.length === 1 ? 'This session moves' : 'These sessions move'} with it: ${names(along)}.`),
+    running.length > 0 && h('div', { class: 'form-error' }, `${names(running)} ${running.length === 1 ? 'is' : 'are'} running and will be stopped first. Start ${running.length === 1 ? 'it' : 'them'} again afterwards: the conversation carries on.`),
+    h('div', { class: 'dim' }, 'Claude and Codex conversations had in the folder move with it, so the session reopens its conversation there. Anything else with the folder open (an editor, a build server) has to let go of it first.'),
+  ], [
+    h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
+    h('button', {
+      class: 'btn primary' + (running.length ? ' danger' : ''),
+      onclick: () => {
+        closeModal();
+        toast(`Moving ${from}…`);
+        request('moveSession', { id: s.id, directory: target, stop: running.length > 0 })
+          .then(() => toast(`Moved to ${target}.`))
+          .catch((e) => toast(e.message, true));
+      },
+    }, running.length ? 'Stop and move' : 'Move'),
+  ]);
+}
 
 /**
  * Searchable list of Claude Code's and Codex's saved conversations (optionally limited to one folder, or one agent's).
