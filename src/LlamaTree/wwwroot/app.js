@@ -105,6 +105,9 @@ const store = {
   set(key, v) { localStorage.setItem('ct.' + key, JSON.stringify(v)); },
 };
 
+/** The app's first launch ever: nothing saved yet. (Read before anything is saved below.) */
+const firstLaunch = (() => { try { return !Object.keys(localStorage).some((k) => k.startsWith('ct.')); } catch { return false; } })();
+
 function debounce(fn, ms) {
   let t;
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
@@ -304,7 +307,8 @@ const state = {
   projects: [],                                        // [{ id, name }] in display order
   hiddenProjects: new Set(store.get('hiddenProjects', [])),   // hidden rather than shown, so new projects start visible
   // Where projects and sessions go (see NAV_LAYOUTS): 'top', 'hybrid' (projects on the left) or 'left' (both, as a tree).
-  navLayout: ['hybrid', 'left'].includes(store.get('navLayout')) ? store.get('navLayout') : 'top',
+  // New installs start in Left; those from before it was the default, with no layout saved, keep Top.
+  navLayout: ['top', 'hybrid', 'left'].includes(store.get('navLayout')) ? store.get('navLayout') : firstLaunch ? 'left' : 'top',
   navWidth: store.get('navWidth', 230),
   navBranches: store.get('navBranches', true),   // each session's branch beneath its name, down the left
   // In the Top layout, projects as tabs (a click shows only that project) rather than as filters to tick.
@@ -312,6 +316,8 @@ const state = {
   // Projects (and Unknown) taken off the tab row into its ▾ list. Unpinned rather than pinned, so new projects start pinned.
   unpinnedProjects: new Set(store.get('unpinnedProjects', [])),
 };
+// Saved at once: from the next launch on there's something saved, and with no layout saved it would fall back to Top.
+if (firstLaunch) store.set('navLayout', state.navLayout);
 
 // ------------------------------------------------------------------ projects: which sessions are visible
 
