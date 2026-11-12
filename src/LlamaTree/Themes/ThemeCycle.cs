@@ -11,14 +11,14 @@ namespace LlamaTree.Themes;
 /// </summary>
 /// <param name="Image">The picture, or null for the app's own.</param>
 /// <param name="Size">How many cells wide it's drawn, 1 to <see cref="MaxSize"/>, one row high.</param>
-/// <param name="Offset">How far right of the cursor it rides, in pixels, 0 to 60: clear of what you're typing.</param>
+/// <param name="Offset">How far right of the cursor it rides, in pixels, 0 to 60. At 0 it is the cursor: it sits on the cursor's cell and blinks in place of the terminal's own.</param>
 /// <param name="Glow">How far its glow reaches, in pixels, 0 to 20.</param>
 /// <param name="Trail">The ribbon it leaves, or null for none.</param>
 internal sealed partial record ThemeCycle(CycleImage? Image, int Size, int Offset, double Glow, CycleTrail? Trail)
 {
     public const int MaxSize = 6, MaxShapes = 64, MaxPath = 4000, MaxPoints = 200;
     public static readonly CycleTrail DefaultTrail = new(2, 10, 800, 0.69, "cursor");
-    public static readonly ThemeCycle Default = new(null, 3, 25, 6, DefaultTrail);
+    public static readonly ThemeCycle Default = new(null, 1, 0, 6, DefaultTrail);
 
     /// <summary>
     /// The colours a shape or the ribbon can take: "cursor" (the terminal's cursor colour, as the app's own cycle has),
