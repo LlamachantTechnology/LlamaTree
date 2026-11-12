@@ -278,7 +278,7 @@ Its messages reach an agent as from the plugin ("Messenger (plugin)"), never fro
 | `sendMessage` `{ to, text, replyTo }` | Sends `text` to the session `to` (an id from `messageTargets`), as a reply to `replyTo` if given: `{ outcome, id }`, `outcome` being `delivered` or `denied`, and `id` the message's, which an answer names as its `replyTo`. |
 | `readMessages` | The messages sent to it since it last read them, each read once: `[{ id, from, fromName, text, sent, replyTo, turn }]`. |
 
-When a message comes for it, the app sends `message` `{ unread, from, fromName }` to its page (once it has loaded, if it isn't open yet); read them with `readMessages`. [`samples/plugins/messenger`](../samples/plugins/messenger) is a plugin that uses them: pick a session, send it a message, and see its answer. To try it, copy the folder into your plugins folder.
+When a message comes for it, the app sends `message` `{ unread, from, fromName }` to its page (once it has loaded, if it isn't open yet); read them with `readMessages`. [Messenger](../plugins/messenger) is a plugin that uses them: pick a session, send it a message, and see its answer. To try it, download its release and unzip it into your plugins folder.
 
 ### Asking Claude about your sessions
 

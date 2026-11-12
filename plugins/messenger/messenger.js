@@ -86,6 +86,19 @@ async function readAll() {
   }
 }
 
+/** This page's colours by the app's names for them (see the theme message in the app's docs); its own dark and light sets stand in for an older app. */
+const THEME_COLORS = { bg: 'chrome', panel: 'panel', border: 'border', text: 'text', dim: 'text-dim', accent: 'accent-strong' };
+
+/** Dresses the page for the app's theme: its colours and font when the app sends them (Tron in your accent colour), else the dark or light set in index.html. */
+function dress(m) {
+  const root = document.documentElement, c = m.colors ?? {};
+  root.dataset.theme = m.theme === 'light' ? 'light' : 'dark';
+  for (const [mine, theirs] of Object.entries(THEME_COLORS)) { if (c[theirs]) root.style.setProperty('--' + mine, c[theirs]); else root.style.removeProperty('--' + mine); }
+  if (c.accent && c.chrome) root.style.setProperty('--you', `color-mix(in srgb, ${c.accent} 16%, ${c.chrome})`);   // your messages: a wash of the accent
+  else root.style.removeProperty('--you');
+  document.body.style.fontFamily = m.font ? `"${m.font}", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif` : '';
+}
+
 addEventListener('message', (e) => {
   if (e.source !== parent) return;
   const m = e.data;
@@ -95,7 +108,7 @@ addEventListener('message', (e) => {
     pending.delete(m.requestId);
     if ('error' in m) p.reject(new Error(m.error)); else p.resolve(m.result);
   } else if (m?.type === 'llamatree:theme') {
-    document.documentElement.dataset.theme = m.theme;
+    dress(m);
   } else if (m?.type === 'llamatree:message') {
     readAll();
   } else if (m?.type === 'llamatree:command' && m.command === 'to' && m.context?.sessionId) {
@@ -103,7 +116,7 @@ addEventListener('message', (e) => {
   }
 });
 
-document.documentElement.dataset.theme = new URLSearchParams(location.search).get('theme') ?? 'dark';
+dress({ theme: new URLSearchParams(location.search).get('theme') });   // the app says the theme on the address too, so the first paint matches
 $('send').addEventListener('click', send);
 $('refresh').addEventListener('click', () => loadTargets());
 $('text').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.ctrlKey) send(); });
