@@ -2710,9 +2710,12 @@ function showMenu(x, y, items) {
         lead && h('span', { class: 'menu-icon' }, it.checked ? '✓' : typeof it.icon === 'string' ? iconEl(it.icon) : it.icon ?? ''),
         it.label, it.kbd && h('span', { class: 'kbd' }, it.kbd))));
   $('#menuHost').append(menu);
+  // Kept inside the window: moved up or left when it would run off the bottom or right, and never above the top. A menu
+  // taller than the window (the palette menu with many themes and plugins on a small screen) scrolls instead of being cut off.
+  menu.style.maxHeight = innerHeight - 8 + 'px';
   const r = menu.getBoundingClientRect();
-  menu.style.left = Math.min(x, innerWidth - r.width - 4) + 'px';
-  menu.style.top = Math.min(y, innerHeight - r.height - 4) + 'px';
+  menu.style.left = Math.max(4, Math.min(x, innerWidth - r.width - 4)) + 'px';
+  menu.style.top = Math.max(4, Math.min(y, innerHeight - r.height - 4)) + 'px';
   // Opened from the keyboard (a focused button's Enter or Space reports no click count): start on the first item.
   if (window.event?.type === 'click' && window.event.detail === 0) menu.querySelector('.menu-item')?.classList.add('active');
   openMenuEl = menu;

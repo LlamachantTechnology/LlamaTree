@@ -855,7 +855,7 @@ span.combo-btn { pointer-events: none; }   /* a list's arrow only shows; the lis
 .wt-item.exists { opacity: .5; }
 .form-error { color: var(--danger); }
 
-.menu { position: fixed; z-index: 200; min-width: 200px; padding: 4px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+.menu { position: fixed; z-index: 200; min-width: 200px; padding: 4px; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
 .menu-item { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
 .menu-item:hover, .menu-item.active { background: var(--accent-strong); color: #fff; }
 .menu-item.danger:hover, .menu-item.danger.active { background: var(--danger-fill); }
