@@ -2237,6 +2237,7 @@ function renderTileHeader(s) {
     relayTileMark(s),
     startedByMark(s),
     h('span', { class: 'tile-title', title: s.title }, s.title),
+    contextChip(s),
     gs && h(gitTabOn('changes') ? 'button' : 'span', {
       class: 'chip', title: `${gs.count} changed file(s) on ${gs.branch}${gitTabOn('changes') ? ' — show in Git Changes' : ''}`,
       onclick: gitTabOn('changes') && (() => showGit(s.id)),
@@ -2254,9 +2255,202 @@ function renderTileHeader(s) {
   syncControlStatus(s);
 }
 
+// ---- the context meter
+//
+// How full a Claude session's conversation is, on its tile: the tokens Claude holds against where it would compact on
+// its own (see ContextUsage in ActivityReader.cs). A conversation answers worse long before it is full, so the meter
+// turns amber, then red, well ahead of that, and a click offers three ways to cut it down. The app can't take things
+// out of a conversation; it types what you could type (/compact with what to keep, or a hand-off note and /clear), and
+// shows you what it will send first.
+
+const CONTEXT_POLL_MS = 10_000;
+const CONTEXT_WARM = 50, CONTEXT_HOT = 80;   // percent of the limit
+const CONTEXT_KINDS = [
+  { id: 'tidy', name: 'Tidy', label: 'Tidy: compact, keeping most of it', help: 'Claude replaces the conversation with a summary that keeps most of the working state.' },
+  { id: 'trim', name: 'Trim', label: 'Trim: compact down to the current task', help: 'Claude replaces the conversation with a summary of the current task only.' },
+  { id: 'fresh', name: 'Fresh start', label: 'Fresh start: a hand-off note, then a new conversation', help: 'Claude writes a hand-off note, which you see and can edit. Then the conversation is cleared and the new one is given the note.' },
+];
+const CONTEXT_SENDS = {
+  tidy: '/compact Keep the decisions made and why, the files changed and their paths, what is unfinished, instructions I gave that still apply, and the detail of the last few exchanges. Drop tool output, file contents that can be read again and dead ends.',
+  trim: '/compact Keep only what the current task needs: its goal, the files involved, what is done, what is next, and instructions I gave that still apply. Drop everything about earlier, finished tasks.',
+  fresh: 'Write a hand-off note for a fresh conversation that will have none of this one. Say what we are working on and why, what is done, what is left, the files and commands that matter, the decisions made and the instructions I gave that still apply. Write only the note, as your whole reply, and use no tools.',
+};
+const CONTEXT_CARRY = 'Carry on from this hand-off note, written at the end of the previous conversation:\n\n';
+const contextSends = () => ({ ...CONTEXT_SENDS, ...store.get('context.sends', {}) });
+const contextPct = (c) => Math.min(100, Math.round(c.tokens / c.limit * 100));
+const contextLevel = (c) => { const p = contextPct(c); return p >= CONTEXT_HOT ? 'hot' : p >= CONTEXT_WARM ? 'warm' : ''; };
+const kTokens = (n) => (n >= 1_000_000 ? (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(n));
+
+/** The meter's numbers in words: for its tooltip, its menu and the session's tab. */
+function contextLine(s) {
+  const c = s.ctx;
+  if (!c) return null;
+  const of = c.learned ? `${kTokens(c.limit)}, where Claude last compacted on its own` : `${kTokens(c.limit)}, the model's window`;
+  const compacted = !c.compactions ? 'never compacted' : `compacted ${c.compactions === 1 ? 'once' : c.compactions + ' times'}${c.compactedAt ? `, last ${relTime(c.compactedAt)}` : ''}`;
+  return `Context: ${kTokens(c.tokens)} tokens of ${of} (${contextPct(c)}%) · ${compacted}`;
+}
+
+/** The meter on a session's tile: a bar and a percentage, amber then red as it fills; a click opens its menu. */
+function contextChip(s) {
+  const c = s.ctx;
+  if (!c) return null;
+  const waiting = !!s.ctxFresh;
+  return h('button', {
+    class: 'chip ctx ' + contextLevel(c) + (waiting ? ' waiting' : ''),
+    title: `${contextLine(s)}${waiting ? '\nWaiting for the hand-off note' : ''}\nClick to clean it up`,
+    onclick: (e) => { const r = e.currentTarget.getBoundingClientRect(); contextMenu(s, r.left, r.bottom + 2); },
+  }, h('span', { class: 'ctx-bar' }, h('span', { style: `width: ${Math.max(6, contextPct(c))}%` })), waiting ? 'note…' : contextPct(c) + '%',
+  c.compactions ? h('span', { class: 'ctx-n' }, '↻' + c.compactions) : null);
+}
+
+/** Asks the app how full the session's conversation is, and redraws its tile's header when the answer has changed. */
+async function loadContext(s) {
+  if (agentOf(s.command)?.id !== 'claude' || s.ctxLoading) return;
+  s.ctxLoading = true;
+  let c = null;
+  try { const r = await request('context', { id: s.id }); c = r?.found ? r : null; } catch { /* the session went away, or its server can't say */ } finally { s.ctxLoading = false; }
+  const key = (x) => (x ? [x.conversation, x.tokens, x.limit, x.compactions].join('|') : '');
+  const changed = key(c) !== key(s.ctx ?? null);
+  s.ctx = c;
+  if (!changed || state.byId.get(s.id) !== s || !s.header) return;
+  renderTileHeader(s);
+  const tab = $(`.session-tab[data-id="${s.id}"]`);
+  if (tab) tab.title = sessionTabTitle(s);
+  tab?.querySelector('.tab-ctx')?.remove();
+  const mark = contextMark(s);
+  if (mark) tab?.querySelector('.tab-text')?.after(mark);
+}
+
+/** In the list down the left: the percentage once the conversation is filling up (amber, then red), nothing before. */
+function contextMark(s) {
+  const level = s.ctx && contextLevel(s.ctx);
+  return level ? h('span', { class: 'tab-ctx ' + level, title: contextLine(s) }, contextPct(s.ctx) + '%') : null;
+}
+
+setInterval(() => {
+  if (document.hidden) return;
+  for (const s of state.sessions) if (s.running || s.ctx === undefined) loadContext(s);
+}, CONTEXT_POLL_MS);
+setTimeout(() => { for (const s of state.sessions) loadContext(s); }, 1500);
+
+function contextMenu(s, x, y) {
+  showMenu(x, y, [
+    { header: s.ctx ? `Context ${contextPct(s.ctx)}% · ${kTokens(s.ctx.tokens)} of ${kTokens(s.ctx.limit)} tokens` : 'Context' },
+    ...(s.ctxFresh
+      ? [{ header: 'Waiting for the hand-off note…' }, { label: 'Cancel the fresh start', action: () => { s.ctxFresh = null; renderTileHeader(s); } }]
+      : CONTEXT_KINDS.map((k) => ({ label: k.label, action: () => contextCleanUp(s, k) }))),
+    '-',
+    { label: 'What these send…', action: contextSettings },
+  ]);
+}
+
+/** Whether a clean-up can be typed into the session now: it has to be at its prompt, not working or asking you something. */
+function contextReady(s) {
+  const why = !s.running ? 'isn’t running' : s.asking ? 'is asking you something' : s.act.state === 'working' ? 'is working' : null;
+  if (why) toast(`“${s.name}” ${why}. Clean up its context when it’s idle.`, true);
+  return !why;
+}
+
+const contextText = (value, rows) => { const t = h('textarea', { class: 'ctx-text', spellcheck: 'false', rows }); t.value = value; return t; };
+
+/** One of the three clean-ups: shows what will be sent, which you can change for this once, and sends it on your say. */
+function contextCleanUp(s, kind) {
+  if (!contextReady(s)) return;
+  const box = contextText(contextSends()[kind.id], kind.id === 'fresh' ? 6 : 5);
+  const send = () => {
+    const fresh = kind.id === 'fresh';
+    const text = fresh ? typeable(box.value, '\n\t').trim() : typeable(box.value.replace(/\s+/g, ' ')).trim();   // a slash command is one line
+    if (!text) return;
+    closeModal();
+    if (!contextReady(s)) return;
+    s.term.paste(text);
+    enterAfterTyping(s);
+    if (fresh) awaitHandoff(s, text);
+    else toast(`Asked “${s.name}” to compact its conversation.`);
+  };
+  openModal(`${kind.name}: “${s.name}”`, [
+    h('div', {}, kind.help),
+    h('div', { class: 'field' }, h('label', {}, 'This is sent to the session'), box,
+      h('div', { class: 'help' }, kind.id === 'fresh' ? 'Nothing is cleared until you have seen the note.' : 'A summary can’t be undone, though the conversation’s file keeps what was said.')),
+  ], [
+    h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
+    h('button', { class: 'btn primary', onclick: send }, 'Send'),
+  ]);
+}
+
+/**
+ * A fresh start's wait: once Claude has answered the request for a note and is idle again, the note is shown for you
+ * to edit, and only then is the conversation cleared and the new one given it. The wait ends if you cancel it, the
+ * session stops, or ten minutes pass.
+ */
+async function awaitHandoff(s, asked) {
+  const mine = s.ctxFresh = { since: Date.now() };
+  renderTileHeader(s);
+  toast(`Asked “${s.name}” for a hand-off note. You’ll see it before anything is cleared.`);
+  const head = asked.replace(/\s+/g, ' ').slice(0, 60);
+  let last = null;
+  const done = (message) => { if (s.ctxFresh === mine) { s.ctxFresh = null; if (state.byId.get(s.id) === s) renderTileHeader(s); if (message) toast(message, true); } };
+  while (s.ctxFresh === mine) {
+    await new Promise((r) => setTimeout(r, 2000));
+    if (s.ctxFresh !== mine) return;
+    if (!s.running || state.byId.get(s.id) !== s) return done();
+    if (Date.now() - mine.since > 600_000) return done(`No hand-off note from “${s.name}” after ten minutes; nothing was cleared.`);
+    await loadConversation(s, true);
+    const turn = (s.convFull?.turns ?? []).findLast((t) => (t.prompt ?? '').replace(/\s+/g, ' ').startsWith(head));
+    const note = turn?.items.findLast((it) => it.kind !== 'tool' && it.text?.trim())?.text.trim();
+    const idle = !s.asking && s.act.state !== 'working';
+    // The same note twice running, with Claude idle: it has finished writing it. A dialog you have open is left alone.
+    if (note && idle && note === last && $('#modalHost').hidden) { done(); return showHandoff(s, note); }
+    last = note ?? null;
+  }
+}
+
+function showHandoff(s, note) {
+  const box = contextText(note, 16);
+  const go = () => {
+    const text = typeable(box.value, '\n\t').trim();
+    if (!text) return;
+    closeModal();
+    if (!contextReady(s)) return;
+    s.term.paste('/clear');
+    enterAfterTyping(s);
+    // Claude clears at once; the note goes in when its empty prompt is up.
+    setTimeout(() => { if (!s.running) return; s.term.paste(CONTEXT_CARRY + text); enterAfterTyping(s); }, 2500);
+    toast(`“${s.name}” starts again from its hand-off note.`);
+  };
+  openModal(`Fresh start: “${s.name}”`, [
+    h('div', {}, 'This is the note the new conversation starts from. Add what it misses, then clear the conversation and carry on from it.'),
+    h('div', { class: 'field' }, h('label', {}, 'Hand-off note'), box,
+      h('div', { class: 'help' }, 'The old conversation stays saved: Resume a different conversation… in the session’s menu brings it back.')),
+  ], [
+    h('button', { class: 'btn', onclick: closeModal }, 'Cancel, keep the conversation'),
+    h('button', { class: 'btn primary', onclick: go }, 'Clear and carry on'),
+  ]);
+}
+
+/** What the three clean-ups send, for you to word your own way. Kept on this machine. */
+function contextSettings() {
+  const sends = contextSends();
+  const boxes = Object.fromEntries(CONTEXT_KINDS.map((k) => [k.id, contextText(sends[k.id], 4)]));
+  const save = () => {
+    const own = {};
+    for (const k of CONTEXT_KINDS) { const v = boxes[k.id].value.trim(); if (v && v !== CONTEXT_SENDS[k.id]) own[k.id] = v; }
+    store.set('context.sends', own);
+    closeModal();
+  };
+  openModal('What the context clean-ups send', [
+    h('div', {}, 'Each is typed into the session as if you had typed it. Tidy and Trim are Claude’s /compact with what to keep; Fresh start asks for a note first.'),
+    ...CONTEXT_KINDS.map((k) => h('div', { class: 'field' }, h('label', {}, k.name), boxes[k.id])),
+  ], [
+    h('button', { class: 'btn', onclick: () => { for (const k of CONTEXT_KINDS) boxes[k.id].value = CONTEXT_SENDS[k.id]; } }, 'Back to the app’s own'),
+    h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
+    h('button', { class: 'btn primary', onclick: save }, 'Save'),
+  ]);
+}
+
 function sessionTabTitle(s) {
   const by = s.startedBy && state.byId.get(s.startedBy);
-  return [s.directory, s.git?.branch && `Branch: ${s.git.branch}`, by && `Started by “${by.name}”`, s.server && serverTitle(serverOf(s)), statusText(s), conversationLine(s), 'Click again to go back to all sessions · middle-click to close'].filter(Boolean).join('\n');
+  return [s.directory, s.git?.branch && `Branch: ${s.git.branch}`, by && `Started by “${by.name}”`, s.server && serverTitle(serverOf(s)), statusText(s), conversationLine(s), contextLine(s), 'Click again to go back to all sessions · middle-click to close'].filter(Boolean).join('\n');
 }
 
 /**
@@ -2312,6 +2506,7 @@ function sessionTab(s, i, marks = false) {
     statusDot(s),
     // Down the left, its branch beneath the name.
     marks ? h('span', { class: 'tab-text' }, h('span', { class: 'tab-name' }, s.name), tabBranch(s)) : h('span', { class: 'tab-name' }, s.name),
+    marks ? contextMark(s) : null,   // how full its conversation is, once it's filling up
     // Down the left, icons for its agent and where it runs; across the top, the server's name for a session on one.
     marks ? sessionMarks(s) : s.server &&h('span', { class: 'tab-server' + (serverDown(s) ? ' down' : ''), title: serverTitle(serverOf(s)) }, iconEl('server'), h('span', {}, serverName(serverOf(s)))),
     i < 9 ? h('span', { class: 'key' }, `Ctrl+${i + 1}`) : null),

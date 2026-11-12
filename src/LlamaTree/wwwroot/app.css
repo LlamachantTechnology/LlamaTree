@@ -582,6 +582,19 @@ button.chip { cursor: pointer; }
 span.chip { cursor: default; }   /* the branch chip, with the Git tabs off */
 button.chip:hover { border-color: var(--border); color: var(--text); }
 .chip svg.ic { width: 12px; height: 12px; }
+/* The context meter (contextChip in app.js): how full the session's conversation is, amber then red as it fills. */
+.chip.ctx { --ctx: var(--text-dim); gap: 5px; font-variant-numeric: tabular-nums; }
+.chip.ctx.warm { --ctx: var(--attention); color: var(--attention); }
+.chip.ctx.hot { --ctx: var(--danger); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, transparent); background: color-mix(in srgb, var(--danger) 12%, var(--panel-2)); }
+.ctx-bar { width: 26px; height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--ctx) 25%, transparent); overflow: hidden; }
+.ctx-bar span { display: block; height: 100%; border-radius: 3px; background: var(--ctx); }
+.ctx-n { opacity: .75; }
+.chip.ctx.waiting { font-style: italic; }
+textarea.ctx-text {
+  width: 100%; resize: vertical; background: var(--chrome-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; font: inherit; line-height: 1.45; padding: 6px; outline: none; user-select: text;
+}
+textarea.ctx-text:focus { border-color: var(--focus); }
 .chip .add { color: var(--st-a); }
 .chip .mod { color: var(--st-m); }
 .chip .del { color: var(--st-d); }
@@ -1097,6 +1110,10 @@ body.no-nav-branches #navList .tab-branch { display: none; }   /* Layout ▸ Sho
 :root[data-theme="light"] .session-mark.agent.colored { --agent: var(--agent-light); }
 .session-mark.where.remote { color: var(--link); }   /* a session elsewhere stands out from the ones here, as its tab's server chip does */
 .session-mark.where.down { color: var(--danger); }
+/* How full a session's conversation is, from amber on (contextMark in app.js): it keeps its room, as the status dot does. */
+.tab-ctx { flex: none; margin-left: auto; font-size: 10px; font-variant-numeric: tabular-nums; color: var(--attention); }
+.tab-ctx.hot { color: var(--danger); font-weight: 600; }
+#navList .tab-ctx + .session-marks { margin-left: 4px; }
 #navList .session-add { align-self: flex-start; margin: 2px 0 2px 6px; }
 .nav-group .session-add { color: var(--proj); border-color: color-mix(in srgb, var(--proj) 45%, transparent); }
 .nav-group .session-add:hover { border-color: color-mix(in srgb, var(--proj) 75%, transparent); background: color-mix(in srgb, var(--proj) 16%, transparent); }

@@ -96,6 +96,20 @@ Clicking a tick (or right-click › *Show conversation*) opens the session's **C
 
 Both come from the agent's saved transcript (a Claude session's process names it in `~/.claude/sessions`), so they work in Claude's full-screen mode, which keeps no terminal scrollback. Nothing is sent anywhere.
 
+## Context meter
+
+A long conversation answers worse well before it is full: early detail gets crowded out, and each automatic compaction is a summary of a summary. The chip on a Claude session's tile shows how full its conversation is: a bar, a percentage, and ↻ with the number of times it has been compacted. It turns amber at 50% and red at 80%, and from amber on the percentage also shows beside the session in the list down the left. Hovering shows the tokens Claude holds and what they are measured against: where Claude last compacted on its own in this conversation, or the model's window (200k, or 1M once the conversation has held more) until it has.
+
+Clicking the chip offers three ways to cut the conversation down, from light to thorough:
+
+- **Tidy** sends `/compact`, telling Claude to keep decisions, changed files, unfinished work, your standing instructions and the last few exchanges.
+- **Trim** sends `/compact`, telling Claude to keep only what the current task needs.
+- **Fresh start** asks Claude for a hand-off note. When it has written one you're shown it and can edit it; only then is the conversation cleared (`/clear`) and the new one given the note. The old conversation stays saved, and *Resume a different conversation…* brings it back.
+
+Each shows what it will send before it sends, and you can change the wording for that once. *What these send…* in the same menu changes it for good (kept on this machine). A clean-up is typed into the session as if you had typed it, so the session has to be idle: not working, and not asking you something.
+
+The numbers come from Claude's saved transcript, as the conversation rail does. Codex sessions have no meter yet.
+
 ## Projects
 
 Projects group sessions, for example one product across its worktrees. Tick projects on and off in the Projects row; **All** and **None** do what they say, and <kbd>Ctrl</kbd>+click (or right-click › *Show only this project*) shows only one. Sessions with no project are grouped under **Unknown**, which you tick and untick like a project. Each session's tab and tile carry a tag in its project's colour, so two sessions with the same name in different projects can be told apart. Hidden sessions keep running, and each project's tab counts its sessions waiting for you, so a hidden project still gets noticed.
