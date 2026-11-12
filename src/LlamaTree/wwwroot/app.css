@@ -595,6 +595,7 @@ textarea.ctx-text {
   border-radius: 4px; font: inherit; line-height: 1.45; padding: 6px; outline: none; user-select: text;
 }
 textarea.ctx-text:focus { border-color: var(--focus); }
+label.ctx-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .chip .add { color: var(--st-a); }
 .chip .mod { color: var(--st-m); }
 .chip .del { color: var(--st-d); }

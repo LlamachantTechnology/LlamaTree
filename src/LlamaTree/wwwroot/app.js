@@ -271,6 +271,7 @@ host.addEventListener('message', (e) => {
     case 'git.status': onGitStatus(m); break;
     case 'panels': onPanels(m); break;
     case 'typePrompt': typePrompt(m.id, m.text); break;
+    case 'notes.tell': notesTell(m.id); break;
     case 'newConversations': showNewConversations(m.ids); break;
     case 'relay': relayChanged(m.state); break;
     case 'relay.ask': askRelay(m.from, m.to); break;
@@ -2340,6 +2341,7 @@ function contextMenu(s, x, y) {
       ? [{ header: 'Waiting for the hand-off note…' }, { label: 'Cancel the fresh start', action: () => { s.ctxFresh = null; renderTileHeader(s); } }]
       : CONTEXT_KINDS.map((k) => ({ label: k.label, action: () => contextCleanUp(s, k) }))),
     '-',
+    { label: 'Session notes…', action: () => sessionNotes(s) },
     { label: 'What these send…', action: contextSettings },
   ]);
 }
@@ -2412,6 +2414,7 @@ function showHandoff(s, note) {
     if (!text) return;
     closeModal();
     if (!contextReady(s)) return;
+    request('notes.add', { id: s.id, text, heading: 'Hand-off note' }).catch(() => {});   // kept with the session's notes, whatever becomes of the conversation
     s.term.paste('/clear');
     enterAfterTyping(s);
     // Claude clears at once; the note goes in when its empty prompt is up.
@@ -2421,11 +2424,57 @@ function showHandoff(s, note) {
   openModal(`Fresh start: “${s.name}”`, [
     h('div', {}, 'This is the note the new conversation starts from. Add what it misses, then clear the conversation and carry on from it.'),
     h('div', { class: 'field' }, h('label', {}, 'Hand-off note'), box,
-      h('div', { class: 'help' }, 'The old conversation stays saved: Resume a different conversation… in the session’s menu brings it back.')),
+      h('div', { class: 'help' }, 'The note is kept in the session’s notes. The old conversation stays saved: Resume a different conversation… in the session’s menu brings it back.')),
   ], [
     h('button', { class: 'btn', onclick: closeModal }, 'Cancel, keep the conversation'),
     h('button', { class: 'btn primary', onclick: go }, 'Clear and carry on'),
   ]);
+}
+
+/**
+ * A session's notes (SessionNotes.cs): a record outside its conversation, which a compaction or a fresh start can't
+ * touch. Here you read and edit them, and say whether the session's agent is to keep them itself.
+ */
+async function sessionNotes(s) {
+  let r;
+  try { r = await request('notes.get', { id: s.id }); } catch (e) { toast(e.message, true); return; }
+  const box = contextText(r.text, 14);
+  box.placeholder = 'No notes yet.';
+  const keep = h('input', { type: 'checkbox' });
+  keep.checked = r.enabled;
+  const save = async () => {
+    try { await request('notes.set', { id: s.id, enabled: keep.checked, text: box.value }); } catch (e) { toast(e.message, true); return; }
+    closeModal();
+    if (!keep.checked || r.enabled) return;
+    // Its agent gets the note tools when it starts, and is then told in its conversation (see notesTell).
+    if (!s.running) toast(`“${s.name}” keeps notes from its next start.`);
+    else confirmDialog('Start keeping notes now?', `“${s.name}” gets its note tools when it next starts. Restart it now? It carries on its conversation and is told to keep notes.`,
+      'Restart', false, () => restartSession(s));
+  };
+  openModal(`Session notes: “${s.name}”`, [
+    h('div', {}, 'Notes are kept outside the conversation, so they are still there after it is compacted or cleared.'),
+    h('label', { class: 'ctx-check' }, keep, 'Have the agent keep notes, and read them back after a compaction or a fresh start'),
+    h('div', { class: 'field' }, h('label', {}, 'Notes'), box,
+      h('div', { class: 'help' }, 'Kept on this computer, and removed with the session. Hand-off notes from a fresh start are added here too.')),
+  ], [
+    h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
+    h('button', { class: 'btn primary', onclick: save }, 'Save'),
+  ]);
+}
+
+const NOTES_TELL = 'From now on keep notes for this session with the llamatree tools: call save_note when a piece of work is finished, a decision is made or the task changes, and read_notes when this conversation starts from a summary or a hand-off note. Start by saving a note of where things stand now.';
+
+/**
+ * Notes were turned on for the session and its agent has just started with the tools for them: tells it so in its
+ * conversation, once it's at its prompt and you aren't typing in it. Given up after two minutes of it being busy.
+ */
+function notesTell(id, tries = 0) {
+  const s = state.byId.get(id);
+  if (!s?.running) return;
+  const busy = s.asking || s.act.state === 'working' || performance.now() - s.act.lastIn < 5000 || tries < 6;   // six seconds for its screen to come up
+  if (busy) { if (tries < 120) setTimeout(() => notesTell(id, tries + 1), 1000); return; }
+  s.term.paste(NOTES_TELL);
+  enterAfterTyping(s);
 }
 
 /** What the three clean-ups send, for you to word your own way. Kept on this machine. */
@@ -2953,6 +3002,7 @@ function sessionMenu(s, x, y, from = 'session') {
     state.expandedId === s.id ? { label: 'Back to all sessions', kbd: 'Shift+Esc', action: collapse } : { label: 'Expand', action: () => expand(s.id) },
     gitTabOn('changes') && { label: 'Show Git changes', action: () => showGit(s.id) },
     { label: 'Show conversation', action: () => openConversation(s) },
+    agentOf(s.command) && { label: 'Session notes…', action: () => sessionNotes(s) },
     { label: 'Permissions…', action: () => openPermissions('session', s.id) },
     { label: `Project view: ${projectName(groupOf(s))}${projectName(groupOf(s)).endsWith('s') ? '’' : '’s'} worktrees side by side`, action: () => openProjectView(groupOf(s)) },
     '-',

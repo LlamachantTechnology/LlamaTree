@@ -110,6 +110,14 @@ Each shows what it will send before it sends, and you can change the wording for
 
 The numbers come from Claude's saved transcript, as the conversation rail does. Codex sessions have no meter yet.
 
+### Session notes
+
+A summary keeps the gist and loses the detail. **Session notes** are a record outside the conversation that a compaction or a fresh start can't touch: a Markdown file per session in LlamaTree's data folder (`notes`).
+
+*Session notes…* in a session's menu, or in the context meter's, shows the notes and lets you edit them. Tick **Have the agent keep notes** and the session's agent is given two tools from its next start (you're offered a restart, which carries on the conversation, and the agent is then told once in that conversation): `save_note`, which it is asked to call when a piece of work is finished, a decision is made or the task changes, and `read_notes`, which it is asked to call when its conversation starts from a summary or a hand-off note. It is off until you turn it on, since it has the agent do a little more on each task. Hand-off notes from *Fresh start* are kept there either way.
+
+The notes stay on your computer and go when you remove the session.
+
 ## Projects
 
 Projects group sessions, for example one product across its worktrees. Tick projects on and off in the Projects row; **All** and **None** do what they say, and <kbd>Ctrl</kbd>+click (or right-click › *Show only this project*) shows only one. Sessions with no project are grouped under **Unknown**, which you tick and untick like a project. Each session's tab and tile carry a tag in its project's colour, so two sessions with the same name in different projects can be told apart. Hidden sessions keep running, and each project's tab counts its sessions waiting for you, so a hidden project still gets noticed.
