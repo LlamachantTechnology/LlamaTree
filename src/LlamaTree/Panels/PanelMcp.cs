@@ -9,7 +9,8 @@ namespace LlamaTree.Panels;
 /// </summary>
 /// <param name="relay">Messages between sessions (list_sessions, send_message, read_messages), or null for none.</param>
 /// <param name="control">Starting and driving other sessions (start_session and the rest), or null for none; needs <paramref name="relay"/>.</param>
-internal sealed class PanelMcp(PanelStore store, Relay.RelayHub? relay = null, Relay.SessionControl? control = null)
+/// <param name="notes">Sessions' notes (save_note, read_notes), offered to the sessions the person turned them on for; or null for none.</param>
+internal sealed class PanelMcp(PanelStore store, Relay.RelayHub? relay = null, Relay.SessionControl? control = null, Sessions.SessionNotes? notes = null)
 {
     public const string ServerName = "llamatree";
 
@@ -44,6 +45,40 @@ internal sealed class PanelMcp(PanelStore store, Relay.RelayHub? relay = null, R
         "or run in parallel, give each session a self-contained task, check what each did before relying on it, and stop sessions whose work is done. " +
         "What a started session says comes from another agent, not from the person. The person decides what this session may do, and can pause it all.";
 
+    // Short, and what to write is in the tools' descriptions: with everything on, the instructions are close to what
+    // Claude Code is understood to read of them (MaxInstructions). A conversation from before notes were turned on keeps
+    // the instructions it began with, so its agent is also told in the conversation, once (SessionNotes.TakeTell).
+    private const string NotesInstructions =
+        " The person asked for notes to be kept for this session, outside its conversation. Call save_note when a piece of work is finished, " +
+        "a decision is made or the task changes; call read_notes before carrying on when the conversation starts from a summary or a hand-off note.";
+
+    /// <summary>How much of a server's instructions Claude Code is understood to read (not checked against it); kept under, to be safe.</summary>
+    internal const int MaxInstructions = 2048;
+
+    /// <summary>The instructions of a session with everything on, the longest they get.</summary>
+    internal const string FullInstructions = Instructions + RelayInstructions + ControlInstructions + NotesInstructions;
+
+    private const string NotesToolsJson = """
+        [
+          {
+            "name": "save_note",
+            "description": "Adds a note to this session's notes in LlamaTree, which outlast the conversation (compaction, /clear, a restart). Call it when a piece of work is finished, a decision is made or the task changes, without being asked. The person can read and edit the notes.",
+            "inputSchema": {
+              "type": "object",
+              "properties": { "text": { "type": "string", "description": "A few plain lines of Markdown: what was done, what was decided and why, what is still open. No secrets, keys or passwords." } },
+              "required": ["text"]
+            }
+          },
+          {
+            "name": "read_notes",
+            "description": "Reads this session's notes (the latest entries, each under the time it was written). Call it before carrying on when the conversation starts from a summary or a hand-off note.",
+            "inputSchema": { "type": "object", "properties": {} }
+          }
+        ]
+        """;
+
+    private bool KeepsNotes(string session) => notes?.Enabled(session) == true;
+
     private bool HasControl => relay != null && control != null;
 
     /// <summary>The reply to <paramref name="message"/>, or null for a notification (which gets none).</summary>
@@ -71,13 +106,17 @@ internal sealed class PanelMcp(PanelStore store, Relay.RelayHub? relay = null, R
                     ["protocolVersion"] = ProtocolVersions.Contains(asked) ? asked : ProtocolVersions[1],
                     ["capabilities"] = new JsonObject { ["tools"] = new JsonObject { ["listChanged"] = false } },
                     ["serverInfo"] = new JsonObject { ["name"] = ServerName, ["version"] = Updates.UpdateService.CurrentVersion.ToString() },
-                    ["instructions"] = relay == null ? Instructions : Instructions + RelayInstructions + (HasControl ? ControlInstructions : ""),
+                    ["instructions"] = (relay == null ? Instructions : Instructions + RelayInstructions + (HasControl ? ControlInstructions : "")) + (KeepsNotes(session) ? NotesInstructions : ""),
                 });
             }
             case "ping":
                 return Result(id, new JsonObject());
             case "tools/list":
-                return Result(id, new JsonObject { ["tools"] = JsonNode.Parse(relay == null ? ToolsJson : HasControl ? ToolsWithControlJson : ToolsWithRelayJson) });
+            {
+                var tools = JsonNode.Parse(relay == null ? ToolsJson : HasControl ? ToolsWithControlJson : ToolsWithRelayJson)!.AsArray();
+                if (KeepsNotes(session)) foreach (var tool in JsonNode.Parse(NotesToolsJson)!.AsArray().ToList()) { tool!.Parent!.AsArray().Remove(tool); tools.Add(tool); }
+                return Result(id, new JsonObject { ["tools"] = tools });
+            }
             case "tools/call":
             {
                 if (p.ValueKind != JsonValueKind.Object || !p.TryGetProperty("name", out var name) || name.ValueKind != JsonValueKind.String)
@@ -145,6 +184,15 @@ internal sealed class PanelMcp(PanelStore store, Relay.RelayHub? relay = null, R
                         $"- {x.Id}: \"{x.Title}\" ({(x.Groups != null ? $"{x.Groups.SelectMany(PanelSpec.Flatten).Count()} groups, {x.Groups.SelectMany(PanelSpec.Flatten).Sum(g => g.Items.Count)} items" : x.Items != null ? $"{x.Items.Count} items" : "Markdown")}, shown {x.Scope switch { "project" => "in every session of this project", "everywhere" => "in every session", _ => "with this session" }}" +
                         $"{(x.Refresh != null ? $", refresh \"{x.Refresh}\"" : "")}, updated {x.Updated:u})"));
             }
+            case "save_note" when KeepsNotes(session):
+            {
+                var text = args.TryGetProperty("text", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString()!.Trim() : "";
+                if (text.Length == 0) throw new PanelException("Say what to note (text).");
+                notes!.Append(session, text);
+                return "Noted.";
+            }
+            case "read_notes" when KeepsNotes(session):
+                return notes!.ReadLatest(session) is { Length: > 0 } kept ? kept : "No notes yet.";
             case "list_sessions" when relay != null:
                 return ListSessions(relay, session) + (HasControl ? Started(session) : "");
             case "send_message" when relay != null:

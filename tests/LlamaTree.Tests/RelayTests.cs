@@ -341,6 +341,79 @@ public class RelayTests
         finally { File.Delete(path); }
     }
 
+    // ---- a session's notes
+
+    [Fact]
+    public void NotesAreOfferedOnlyToTheSessionsThatKeepThem()
+    {
+        using var temp = new TempFolder();
+        var notes = new LlamaTree.Sessions.SessionNotes(temp.File("notes"));
+        notes.SetEnabled("a", true);
+        var mcp = new PanelMcp(new PanelStore(temp.File("panels.json")), notes: notes);
+        List<string> Tools(string session)
+        {
+            using var list = JsonDocument.Parse("""{ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }""");
+            return mcp.Handle(session, list.RootElement)!["result"]!["tools"]!.AsArray().Select(t => t!["name"]!.GetValue<string>()).ToList();
+        }
+        string Told(string session)
+        {
+            using var init = JsonDocument.Parse("""{ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }""");
+            return mcp.Handle(session, init.RootElement)!["result"]!["instructions"]!.GetValue<string>();
+        }
+        Assert.Contains("save_note", Tools("a"));
+        Assert.Contains("read_notes", Tools("a"));
+        Assert.Contains("show_panel", Tools("a"));
+        Assert.DoesNotContain("save_note", Tools("b"));
+        Assert.Contains("save_note", Told("a"));
+        Assert.DoesNotContain("save_note", Told("b"));
+
+        Assert.Equal("No notes yet.", Call(mcp, "a", "read_notes"));
+        Assert.Equal("Noted.", Call(mcp, "a", "save_note", new { text = "Chose the queue over polling: fewer calls." }));
+        Assert.Contains("Chose the queue over polling", Call(mcp, "a", "read_notes"));
+        Assert.StartsWith("### ", notes.Read("a"));
+        Assert.Equal("", notes.Read("b"));
+        // Turned off, the tools are gone; the notes stay for the person, until the session is removed.
+        notes.SetEnabled("a", false);
+        Assert.DoesNotContain("save_note", Tools("a"));
+        Assert.Contains("Chose the queue", notes.Read("a"));
+        notes.Forget("a");
+        Assert.Equal("", notes.Read("a"));
+    }
+
+    [Fact]
+    public void TheInstructionsFitWhatClaudeCodeReadsWithEverythingOn()
+    {
+        var told = PanelMcp.FullInstructions;
+        Assert.EndsWith("hand-off note.", told);
+        Assert.True(told.Length <= PanelMcp.MaxInstructions, $"{told.Length} characters of instructions; Claude Code reads {PanelMcp.MaxInstructions}");
+    }
+
+    [Fact]
+    public void NotesKeepTheirSwitchAndHandBackTheLatestEntries()
+    {
+        using var temp = new TempFolder();
+        var notes = new LlamaTree.Sessions.SessionNotes(temp.File("notes"));
+        notes.SetEnabled("s 1/x", true);
+        notes.Append("s 1/x", "first", "Hand-off note", new DateTime(2026, 11, 1, 9, 30, 0, DateTimeKind.Utc));
+        Assert.Equal("### 2026-11-01 09:30 UTC · Hand-off note\n\nfirst\n\n", notes.Read("s 1/x"));
+        // Another run of the app finds the switch and the notes, and that the agent is still to be told, once.
+        var again = new LlamaTree.Sessions.SessionNotes(temp.File("notes"));
+        Assert.True(again.Enabled("s 1/x"));
+        Assert.True(again.TakeTell("s 1/x"));
+        Assert.False(again.TakeTell("s 1/x"));
+        Assert.False(new LlamaTree.Sessions.SessionNotes(temp.File("notes")).TakeTell("s 1/x"));
+        Assert.False(again.TakeTell("other"));
+        Assert.False(again.Enabled("other"));
+        for (var i = 0; i < 12; i++) again.Append("s 1/x", new string((char)('a' + i), 4000));
+        var latest = again.ReadLatest("s 1/x");
+        Assert.True(latest.Length <= LlamaTree.Sessions.SessionNotes.MaxRead + 40);
+        Assert.StartsWith("(Older notes are left out.)\n\n### ", latest);
+        Assert.DoesNotContain("first", latest);
+        Assert.Contains(new string('l', 4000), latest);
+        again.Write("s 1/x", "  ");
+        Assert.Equal("", again.Read("s 1/x"));
+    }
+
     // ---- the tools, as an agent calls them
 
     private static string Call(PanelMcp mcp, string session, string tool, object? args = null)

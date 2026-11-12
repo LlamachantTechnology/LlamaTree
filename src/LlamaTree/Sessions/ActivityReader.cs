@@ -20,6 +20,14 @@ internal sealed record ActivityEvent(DateTime T, string K, string? File, string?
     public int? Out { get; set; }
 }
 
+/// <summary>
+/// How full a conversation's context is, for the meter on a session's tile. <see cref="Tokens"/> is what the agent holds
+/// now: what it was sent at its last reply plus what it wrote, or what a compaction since left. <see cref="Limit"/> is
+/// what that is measured against: where the agent last compacted on its own in this conversation when it has
+/// (<see cref="Learned"/>), else the model's window as far as it can be told (200k, or 1M once it has held more).
+/// </summary>
+internal sealed record ContextUsage(int Tokens, int Limit, bool Learned, int Compactions, DateTime? CompactedAt, string? Model);
+
 /// <summary>The events of one conversation. <see cref="Version"/> is the count, so a plugin can ask for what's new.</summary>
 internal sealed record ActivityEvents(long Version, IReadOnlyList<ActivityEvent> Events);
 
@@ -42,6 +50,31 @@ internal static partial class ActivityReader
         /// <summary>The reply the last assistant line belonged to, and the index of the event carrying its cost (-1 while it has none).</summary>
         public string? LastReply;
         public int CostAt = -1;
+        /// <summary>The context's size now (0 until a reply says), the most it has been, and where the agent last compacted on its own (0 if never).</summary>
+        public int Tokens, Peak, AutoAt;
+        public int Compactions;
+        public DateTime? CompactedAt;
+        public string? Model;
+
+        public void Clear()
+        {
+            Offset = 0;
+            Events.Clear();
+            Pending.Clear();
+            LastReply = null;
+            CostAt = -1;
+            Tokens = Peak = AutoAt = Compactions = 0;
+            CompactedAt = null;
+            Model = null;
+        }
+
+        public ContextUsage Usage()
+        {
+            const int Window = 200_000, BigWindow = 1_000_000;
+            var learned = AutoAt > 0 && Tokens <= AutoAt;
+            var limit = learned ? AutoAt : Math.Max(Peak, Tokens) > Window || (Model?.Contains("[1m]", StringComparison.OrdinalIgnoreCase) ?? false) ? BigWindow : Window;
+            return new ContextUsage(Tokens, limit, learned, Compactions, CompactedAt, Model);
+        }
     }
 
     private static readonly ConcurrentDictionary<string, Cached> Cache = new(StringComparer.OrdinalIgnoreCase);
@@ -51,28 +84,38 @@ internal static partial class ActivityReader
         var c = Cache.GetOrAdd(path, _ => new Cached());
         lock (c.Gate)
         {
-            try
-            {
-                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                if (stream.Length < c.Offset)
-                {
-                    c.Offset = 0;
-                    c.Events.Clear();
-                    c.Pending.Clear();
-                    c.LastReply = null;
-                    c.CostAt = -1;
-                }
-                if (stream.Length > c.Offset)
-                {
-                    stream.Seek(c.Offset, SeekOrigin.Begin);
-                    ConversationReader.ReadLines(stream, ref c.Offset, line => AddLine(line, c));
-                }
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // Keep what was read before.
-            }
+            Refresh(path, c);
             return new ActivityEvents(c.Events.Count, c.Events.Select(e => e with { }).ToList());
+        }
+    }
+
+    /// <summary>How full the conversation's context is (see <see cref="ContextUsage"/>), reading only what's new in its file.</summary>
+    public static ContextUsage Context(string path)
+    {
+        var c = Cache.GetOrAdd(path, _ => new Cached());
+        lock (c.Gate)
+        {
+            Refresh(path, c);
+            return c.Usage();
+        }
+    }
+
+    /// <summary>Reads the lines added to the file since last time. Called with the cache's gate held.</summary>
+    private static void Refresh(string path, Cached c)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length < c.Offset) c.Clear();
+            if (stream.Length > c.Offset)
+            {
+                stream.Seek(c.Offset, SeekOrigin.Begin);
+                ConversationReader.ReadLines(stream, ref c.Offset, line => AddLine(line, c));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Keep what was read before.
         }
     }
 
@@ -109,7 +152,17 @@ internal static partial class ActivityReader
         switch (Str(e, "type"))
         {
             case "system":
-                if (Str(e, "subtype") == "compact_boundary") c.Events.Add(new ActivityEvent(t, "compact", null, null, null));
+                if (Str(e, "subtype") == "compact_boundary")
+                {
+                    c.Events.Add(new ActivityEvent(t, "compact", null, null, null));
+                    // What the summary left is the context until the next reply says. Where Claude compacted on its own
+                    // is where it would again, which is what the meter measures against.
+                    ConversationReader.Obj(e, "compactMetadata", out var meta);
+                    c.Compactions++;
+                    c.CompactedAt = t;
+                    c.Tokens = Int(meta, "postTokens");
+                    if (Str(meta, "trigger") == "auto" && Int(meta, "preTokens") is > 0 and var pre) c.AutoAt = pre;
+                }
                 break;
             case "user":
                 if (Results(e, c)) break;
@@ -149,6 +202,14 @@ internal static partial class ActivityReader
         if (!m.TryGetProperty("usage", out var u) || u.ValueKind != JsonValueKind.Object) return;
         var ctx = Int(u, "input_tokens") + Int(u, "cache_creation_input_tokens") + Int(u, "cache_read_input_tokens");
         var output = Int(u, "output_tokens");
+        if (ctx > 0)
+        {
+            // What it was sent and what it wrote are both in its context from here on. A line Claude Code writes itself
+            // (an interruption, an error) has no usage and leaves the size as it was.
+            c.Tokens = ctx + output;
+            c.Peak = Math.Max(c.Peak, c.Tokens);
+            if (Str(m, "model") is { Length: > 0 } model) c.Model = model;
+        }
         var reply = Str(m, "id");
         if (reply != null && reply == c.LastReply && c.CostAt >= 0)
         {

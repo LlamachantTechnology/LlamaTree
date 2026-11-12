@@ -28,6 +28,57 @@ public sealed class ActivityTests
         return c.Events;
     }
 
+    private static string Reply(string id, int input, int cached, int output, string model = "claude-opus-5-5") => Line(new
+    {
+        type = "assistant", timestamp = Time,
+        message = new { id, model, role = "assistant", content = new[] { Text("Done.") }, usage = new { input_tokens = input, cache_creation_input_tokens = 0, cache_read_input_tokens = cached, output_tokens = output } },
+    });
+
+    private static string Compacted(string trigger, int pre, int post) =>
+        Line(new { type = "system", subtype = "compact_boundary", timestamp = Time, compactMetadata = new { trigger, preTokens = pre, postTokens = post } });
+
+    private static ContextUsage Usage(params string[] lines)
+    {
+        var c = new ActivityReader.Cached();
+        foreach (var l in lines) ActivityReader.AddLine(Encoding.UTF8.GetBytes(l.TrimEnd('\n')), c);
+        return c.Usage();
+    }
+
+    [Fact]
+    public void Context_is_what_the_last_reply_was_sent_plus_what_it_wrote()
+    {
+        var u = Usage(User("go"), Reply("m1", 10, 40_000, 500), User("more"), Reply("m2", 20, 90_000, 1_000));
+        Assert.Equal(91_020, u.Tokens);
+        Assert.Equal(200_000, u.Limit);
+        Assert.False(u.Learned);
+        Assert.Equal(0, u.Compactions);
+        Assert.Equal("claude-opus-5-5", u.Model);
+        // A line Claude Code wrote itself has no usage and changes nothing.
+        Assert.Equal(91_020, Usage(User("go"), Reply("m2", 20, 90_000, 1_000), Reply("m3", 0, 0, 0, "<synthetic>")).Tokens);
+    }
+
+    [Fact]
+    public void Context_past_the_small_window_is_measured_against_the_big_one()
+    {
+        Assert.Equal(1_000_000, Usage(User("go"), Reply("m1", 10, 250_000, 500)).Limit);
+        // Having been there counts too: it's still the same model after you compact by hand.
+        var u = Usage(User("go"), Reply("m1", 10, 250_000, 500), Compacted("manual", 250_510, 20_000));
+        Assert.Equal((20_000, 1_000_000, 1), (u.Tokens, u.Limit, u.Compactions));
+    }
+
+    [Fact]
+    public void Context_after_a_compaction_is_what_it_left_and_where_claude_compacted_is_the_limit()
+    {
+        var u = Usage(User("go"), Reply("m1", 10, 300_000, 500), Compacted("auto", 300_500, 30_000));
+        Assert.Equal((30_000, 300_500, true, 1), (u.Tokens, u.Limit, u.Learned, u.Compactions));
+        Assert.NotNull(u.CompactedAt);
+        u = Usage(User("go"), Reply("m1", 10, 300_000, 500), Compacted("auto", 300_500, 30_000), User("on"), Reply("m2", 5, 60_000, 200));
+        Assert.Equal((60_205, 300_500), (u.Tokens, u.Limit));
+        // Past where it compacted before (another model since): the window again.
+        u = Usage(Compacted("auto", 150_000, 20_000), User("on"), Reply("m2", 5, 180_000, 200));
+        Assert.Equal((200_000, false), (u.Limit, u.Learned));
+    }
+
     [Fact]
     public void Prompts_reads_edits_and_commands_become_events_with_their_files()
     {

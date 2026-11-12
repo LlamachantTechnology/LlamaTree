@@ -235,6 +235,7 @@ internal sealed partial class AppHost
     // ---------------------------------------------------------------- panels
 
     private readonly PanelStore panelStore = new(Path.Combine(SessionStore.AppDataFolder, "panels.json"));
+    private readonly SessionNotes notes = new(Path.Combine(SessionStore.AppDataFolder, "notes"));
 
     /// <summary>Messages between sessions, through the panel server's tools; which session may message which is kept in relay.json.</summary>
     private readonly RelayHub relay = new(new RelayPolicy(Path.Combine(SessionStore.AppDataFolder, "relay.json")),
@@ -551,11 +552,13 @@ internal sealed partial class AppHost
         Driving.Settled += id => RunOnUi(() => Post(new { type = "control.settled", id }));
         Driving.Changed += () => RunOnUi(() => Post(new { type = "control", state = ControlState() }));
         Driving.Policy.Changed += () => RunOnUi(() => Post(new { type = "control", state = ControlState() }));
-        mcp = new PanelMcp(panelStore, relay, Driving);
+        mcp = new PanelMcp(panelStore, relay, Driving, notes);
         // A first prompt that couldn't go on the command line is typed once Claude is up (it connects as it starts).
         mcp.Initialized += id => RunOnUi(async () =>
         {
             Post(new { type = "agent.ready", id });   // the page tells a session it woke of its messages once it's up
+            // Notes turned on since it last started: the page tells it so in its conversation, once it's at its prompt.
+            if (notes.TakeTell(id)) Post(new { type = "notes.tell", id });
             if (!sessions.TryGetValue(id, out var s) || s.PromptToType is not { } prompt) return;
             s.PromptToType = null;
             await Task.Delay(1500);
@@ -803,6 +806,7 @@ internal sealed partial class AppHost
         RunningChanged?.Invoke();
         SaveSessions();
         ForgetPanels(s.Id);
+        notes.Forget(s.Id);
         Post(SessionList());
     }
 
@@ -1410,6 +1414,38 @@ internal sealed partial class AppHost
                 if (s.Info.Conversation is not { } id) return null;
                 var c = await Task.Run(() => s.Agent?.FindConversation(id, s.Info.Directory));
                 return new { id, saved = c != null, title = c?.Title, started = c?.Started, modified = c?.Modified };
+            }
+            case "notes.get":
+            {
+                // The session's notes (see SessionNotes) and whether its agent is told to keep them.
+                var s = Get(msg);
+                return new { enabled = notes.Enabled(s.Id), text = await Task.Run(() => notes.Read(s.Id)) };
+            }
+            case "notes.set":
+            {
+                // From the notes dialog: the switch, and the notes as the person edited them.
+                var s = Get(msg);
+                notes.SetEnabled(s.Id, Bool(msg, "enabled"));
+                if (OptStr(msg, "text") is { } text) await Task.Run(() => notes.Write(s.Id, text));
+                return null;
+            }
+            case "notes.add":
+            {
+                // A hand-off note from a fresh start: kept whether or not the agent keeps notes of its own.
+                var s = Get(msg);
+                var text = Str(msg, "text");
+                await Task.Run(() => notes.Append(s.Id, text, OptStr(msg, "heading")));
+                return null;
+            }
+            case "context":
+            {
+                // How full the session's conversation is, for the meter on its tile: read from Claude's transcript, so
+                // only a Claude session with a saved conversation has one.
+                var s = Get(msg);
+                if (s.Agent != Agents.Claude || s.Info.Conversation is not { } id) return new { found = false };
+                var usage = await Task.Run(() => ConversationReader.FindTranscript(id, s.Info.Directory) is { } path ? ActivityReader.Context(path) : null);
+                if (usage == null || usage.Tokens == 0 && usage.Compactions == 0) return new { found = false };
+                return new { found = true, conversation = id, tokens = usage.Tokens, limit = usage.Limit, learned = usage.Learned, compactions = usage.Compactions, compactedAt = usage.CompactedAt, model = usage.Model };
             }
             case "openFolder":
                 OpenFolder(Get(msg).Info.Directory);
