@@ -3683,7 +3683,7 @@ function newSessionItems(s) {
   const p = projectOf(s);
   return [
     { header: p ? `New session in ${p.name}` : 'New session with no project' },
-    { label: 'In the same folder', action: () => quickSession(s) },
+    { label: 'In the same folder…', action: () => quickSession(s) },
     s.git?.isRepo && { label: 'In a new worktree…', action: () => showWorktreeDialog(s) },   // worktrees need a Git repository
     '-',
     { label: 'A different folder…', action: () => showAddDialog('new', { directory: s.directory, project: s.project ?? null, server: s.server ?? null }) },
@@ -3724,10 +3724,22 @@ async function addAndOpen(item) {
   if (added) expand(added.id);
 }
 
-/** One click: another session in the same folder and project, with a conversation of its own. */
+/**
+ * Another session in the same folder and project, with a conversation of its own: it only asks for a name, offering
+ * the next free one ("checkout-api 2"), selected so typing replaces it and Enter takes it.
+ */
 function quickSession(s) {
-  addAndOpen({ directory: s.directory, name: freeName(s.name), command: ownOptionsOnly(s.command), project: s.project ?? '', server: s.server ?? undefined })
-    .catch((e) => toast(e.message, true));
+  const suggested = freeName(s.name);
+  const name = h('input', { value: suggested, spellcheck: 'false' });
+  const add = () => {
+    closeModal();
+    addAndOpen({ directory: s.directory, name: name.value.trim() || suggested, command: ownOptionsOnly(s.command), project: s.project ?? '', server: s.server ?? undefined })
+      .catch((e) => toast(e.message, true));
+  };
+  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+  openModal('New session', [field('Name', name, `In ${s.directory}`)],
+    [h('button', { class: 'btn', onclick: closeModal }, 'Cancel'), h('button', { class: 'btn primary', onclick: add }, 'Add')]);
+  setTimeout(() => name.select(), 30);   // after openModal's focus
 }
 
 /**
