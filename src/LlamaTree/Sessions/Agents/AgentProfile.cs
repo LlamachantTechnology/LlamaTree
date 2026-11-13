@@ -93,6 +93,9 @@ internal abstract class AgentProfile
     /// </summary>
     public virtual bool ShowsConversation => false;
 
+    /// <summary>Whether the app follows its conversations at all (the session's conversation, resuming, the list to resume).</summary>
+    public virtual bool TracksConversations => true;
+
     /// <summary>
     /// The conversation the running session's agent is in, as prompts and answers, or null while there's none to show.
     /// An agent whose transcript is JSONL reads it with <see cref="ConversationReader.Read"/> and a <see cref="TranscriptParser"/>
@@ -110,6 +113,15 @@ internal abstract class AgentProfile
 
     /// <summary>Whether it reads the panel server from a file written for the session (Claude's --mcp-config) rather than its command line.</summary>
     public virtual bool PanelsFromFile => false;
+
+    /// <summary>
+    /// For an agent that can't be given an MCP server for one start (agy): the command that lists the MCP servers
+    /// registered with it, to see whether the panel bridge (<see cref="Panels.PanelBridge"/>) is one. Null for the rest.
+    /// </summary>
+    public virtual string? McpListCommand => null;
+
+    /// <summary>The command that registers the panel bridge, <paramref name="program"/> (this app) run with "mcp-bridge", as its llamatree server.</summary>
+    public virtual string? McpAddCommand(string program) => null;
 
     // ---------------------------------------------------------------- one-off prompts
 
@@ -147,7 +159,7 @@ internal abstract class AgentProfile
     {
         id = Id, name = Name, programs = Programs, color = Color, choosesId = ChoosesConversationId, follows = Follows,
         ownConversation = OwnConversationPattern, @continue = ContinuePattern, showsConversation = ShowsConversation, asks = Asks,
-        suggests = HeadlessCommand != null,
+        suggests = HeadlessCommand != null, tracks = TracksConversations,
     };
 
     // ---------------------------------------------------------------- shared helpers
@@ -168,8 +180,9 @@ internal static class Agents
 {
     public static readonly ClaudeAgent Claude = new();
     public static readonly CodexAgent Codex = new();
+    public static readonly AntigravityAgent Antigravity = new();
 
-    public static IReadOnlyList<AgentProfile> All { get; } = [Claude, Codex];
+    public static IReadOnlyList<AgentProfile> All { get; } = [Claude, Codex, Antigravity];
 
     /// <summary>The agent <paramref name="command"/> starts, from its first word, or null for any other command.</summary>
     public static AgentProfile? For(string? command)

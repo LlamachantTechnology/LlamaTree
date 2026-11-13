@@ -33,7 +33,7 @@ internal sealed partial class CodexAgent : AgentProfile
     public override string HeadlessCommand => "codex exec --ephemeral -s read-only --skip-git-repo-check --color never -c model_reasoning_effort=low -";
 
     /// <summary>The environment variable Codex reads its panel token from (so it isn't on the command line).</summary>
-    internal const string PanelTokenVariable = "LLAMATREE_PANEL_TOKEN";
+    internal const string PanelTokenVariable = Panels.PanelBridge.TokenVariable;
 
     /// <summary>Codex's subcommands: anything but the interactive interface, except resume and fork (which pick their own conversation).</summary>
     private static readonly HashSet<string> Subcommands = new(StringComparer.OrdinalIgnoreCase)

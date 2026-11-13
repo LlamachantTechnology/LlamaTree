@@ -2265,7 +2265,7 @@ function sessionTabTitle(s) {
  */
 function conversationLine(s) {
   const agent = agentOf(s.command);
-  if (!agent) return null;
+  if (!agent?.tracks) return null;
   if (!s.conversation) {
     if (hasOption(agent.continue, s.command)) return `Conversation: the folder's latest, once ${agent.name} has picked it`;
     return agent.choosesId || hasOption(agent.ownConversation, s.command) ? null : `Conversation: a new one, once ${agent.name} has started it`;
@@ -2279,7 +2279,7 @@ function conversationLine(s) {
 
 /** Fetches the session's conversation for its tooltips when the pointer reaches its tab or tile header, so it's current. */
 async function loadConversationInfo(s) {
-  if (!agentOf(s.command) || !s.conversation) return;
+  if (!agentOf(s.command)?.tracks || !s.conversation) return;
   try { s.convInfo = await request('conversationInfo', { id: s.id }); } catch { return; }
   const tab = $(`.session-tab[data-id="${s.id}"]`);
   if (tab) tab.title = sessionTabTitle(s);
@@ -3092,7 +3092,7 @@ function showEditDialog(s, focus) {
     project.el,
     field('Folder', s.server ? folder : h('div', { class: 'inline' }, folder, browse),
       !s.server && 'Change it to move the folder itself on disk, and the session with it (a worktree is moved with git). Its conversations go along.'),
-    agent && field('Conversation',
+    agent?.tracks && field('Conversation',
       h('input', {
         value: s.conversation ?? '', readonly: true, spellcheck: 'false',
         placeholder: agent.choosesId ? `Learned from ${agent.name} once it has picked one (--continue)` : `Learned from ${agent.name} once it has started one`,
@@ -3622,7 +3622,8 @@ function showAddDialog(mode = 'new', from = null) {
     const cmd = command.value.trim() || DEFAULT_COMMAND;
     const agent = agentOf(cmd);
     let text;
-    if (firstPrompt) text = 'Starts a new conversation with the first prompt above, and reopens it each time the session starts.';
+    if (agent && !agent.tracks) text = `${firstPrompt ? `Starts ${agent.name} on the first prompt above` : `Runs ${agent.name}`} in the folder above; LlamaTree doesn't follow its conversations yet.`;
+    else if (firstPrompt) text = 'Starts a new conversation with the first prompt above, and reopens it each time the session starts.';
     else if (!agent) text = 'Runs in the folder above.';
     else if (hasOption(agent.ownConversation, cmd)) text = 'Your command picks its own conversation, so the app leaves that to it.';
     else if (mode === 'resume') text = picked

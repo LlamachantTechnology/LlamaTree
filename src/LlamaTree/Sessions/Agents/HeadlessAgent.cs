@@ -38,7 +38,11 @@ internal static class HeadlessAgent
 
     /// <param name="dir">The folder to run in: one the user already trusts, such as a session's.</param>
     /// <param name="task">What the agent was asked to do, for the error when it can't: "suggest a message", "answer".</param>
-    public static async Task<string> RunAsync(AgentProfile agent, string dir, string prompt, string task, CancellationToken ct)
+    public static Task<string> RunAsync(AgentProfile agent, string dir, string prompt, string task, CancellationToken ct) =>
+        RunCommandAsync(agent, agent.HeadlessCommand!, dir, prompt, task, ct);
+
+    /// <summary>Runs one of the agent's own commands (<paramref name="command"/>, such as "agy mcp list") as <see cref="RunAsync"/> runs its headless one.</summary>
+    public static async Task<string> RunCommandAsync(AgentProfile agent, string command, string dir, string input, string task, CancellationToken ct)
     {
         var env = SessionEnvironment.Build();
         var psi = new ProcessStartInfo
@@ -56,10 +60,10 @@ internal static class HeadlessAgent
         try
         {
             if (OperatingSystem.IsWindows())
-                (psi.FileName, psi.Arguments) = SplitProgram(CommandLineResolver.Resolve(agent.HeadlessCommand!, env));
+                (psi.FileName, psi.Arguments) = SplitProgram(CommandLineResolver.Resolve(command, env));
             else
             {
-                var argv = CommandLineResolver.ResolveArgv(agent.HeadlessCommand!, env);   // /bin/sh -c "<command>"
+                var argv = CommandLineResolver.ResolveArgv(command, env);   // /bin/sh -c "<command>"
                 psi.FileName = argv[0];
                 foreach (var a in argv[1..]) psi.ArgumentList.Add(a);
             }
@@ -79,7 +83,7 @@ internal static class HeadlessAgent
         {
             var stdout = process.StandardOutput.ReadToEndAsync(timer.Token);
             var stderr = process.StandardError.ReadToEndAsync(timer.Token);
-            await process.StandardInput.WriteAsync(prompt.AsMemory(), timer.Token);
+            await process.StandardInput.WriteAsync(input.AsMemory(), timer.Token);
             process.StandardInput.Close();
             var output = await stdout;
             var error = await stderr;

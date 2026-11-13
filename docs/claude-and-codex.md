@@ -53,6 +53,13 @@ The conversation rail and tab read Claude's saved transcript, so they work in Cl
 - **Suggest** runs `codex exec --ephemeral -s read-only` with low reasoning: read-only and not saved as a conversation, using a little of your Codex plan.
 - **Commands that choose for themselves:** `codex resume …` and `codex fork …` keep their own choice of conversation, and Codex's other subcommands (`codex exec`, say) run as they are.
 
+## Antigravity (agy)
+
+- **Panels and messages.** `agy` can't be given an MCP server for one start, so before its first session starts in a run LlamaTree checks `agy mcp list` and, if there's no `llamatree` server (or it points at another copy of LlamaTree), runs `agy mcp add llamatree "<LlamaTree's program>" mcp-bridge`. The server it adds has no port or token in it: each session's environment (`LLAMATREE_PANEL_URL`, `LLAMATREE_PANEL_TOKEN`) tells it where to connect, and started outside LlamaTree it offers no tools. Turn it off with `agy mcp disable llamatree`: a disabled server is left alone.
+- **The panel tools don't ask each time.** Each session starts with `--settings` allowing `mcp(llamatree/*)`, as Claude's sessions allow `mcp__llamatree`. The file is your own `permissions` from `~/.gemini/antigravity-cli/settings.json` (which is only read) with that rule added, so your other rules still apply. `agy` uses it for that session only and never saves it; a command that passes its own `--settings` is left alone.
+- **Conversations aren't followed yet.** An `agy` session runs its command as it is: `-c` and `--conversation <id>` work as `agy` describes them, but there's no resume picker, rail or Conversation tab for it.
+- A panel's button that starts an `agy` session gives it the prompt with `-i`, so the session carries on afterwards.
+
 ## Other agents: the needs your answer dot
 
 Any program can report that it's blocked on you by writing an `OSC 7501` sequence with `state=blocked` to the terminal, which is how Codex does it. LlamaTree shows the pink dot for it, without reading the screen.
