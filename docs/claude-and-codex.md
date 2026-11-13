@@ -1,37 +1,37 @@
-# Claude Code and Codex
+# Claude Code, Codex and Antigravity
 
-A session's command decides what it runs: `claude` for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), `codex` for OpenAI's [Codex CLI](https://github.com/openai/codex) (each with any options you add), or anything else, such as a shell or a dev server. They can sit side by side, in the same project or even the same folder.
+A session's command decides what it runs: `claude` for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), `codex` for OpenAI's [Codex CLI](https://github.com/openai/codex), `agy` for Google's Antigravity CLI (each with any options you add), or anything else, such as a shell or a dev server. They can sit side by side, in the same project or even the same folder.
 
 ## What each gets
 
-| | Claude Code | Codex | Any other command |
-|---|---|---|---|
-| **Sessions and window** | | | |
-| Tiles, tabs, projects, shortcuts | ✓ | ✓ | ✓ |
-| Working, waiting, idle and not running dots | ✓ | ✓ | ✓ |
-| *Needs your answer* dot | ✓ permissions, questions, plans, the folder trust check | ✓ approvals and questions (Codex reports them), the folder trust check | with [OSC 7501](#other-agents-the-needs-your-answer-dot) |
-| Starts when you first click on its terminal, after the app restarts | ✓ | ✓ | No, starts straight away |
-| **Conversations** | | | |
-| A conversation of its own, even several in one folder | ✓ the app picks its id | ✓ learned once Codex saves it | No |
-| Reopens it when the app or the session restarts | ✓ `--resume <id>` | ✓ `codex resume <id>` | No |
-| Follows you to another conversation | ✓ `/clear`, `/resume` | ✓ `/new`; `/resume` once you send a prompt in it | No |
-| Resume picker | ✓ | ✓ tagged *Codex* | No |
-| Conversation title on hover, and in the closing question | ✓ | ✓ | No |
-| **Conversation rail and tab** | | | |
-| Rail of prompts and the Conversation tab | ✓ | ✓ | No |
-| Works in full-screen mode | ✓ | ✓ | No |
-| Project view: latest prompt and answer | ✓ | ✓ | status only |
-| **Panels and messages** | | | |
-| Panels beside the terminal, their buttons, and messages between sessions | ✓ | ✓ | No |
-| **Theme** | | | |
-| App, terminal and diff colours, accent, themes | ✓ | ✓ | ✓ |
-| The agent itself started in matching light or dark colours | ✓ | not yet | No |
-| **Git** | | | |
-| Git Changes, Git Repository, diffs, fetch/pull/push, pull requests, Project view | ✓ | ✓ | ✓ |
-| **Suggest** writes the commit message | ✓ Claude Code | ✓ Codex | ✓ Claude Code, if installed |
-| **App** | | | |
-| Plugins | ✓ | ✓ | ✓ |
-| Updates: sessions carry on in their conversations | ✓ | ✓ | restarted |
+| | Claude Code | Codex | Antigravity (agy) | Any other command |
+|---|---|---|---|---|
+| **Sessions and window** | | | | |
+| Tiles, tabs, projects, shortcuts | ✓ | ✓ | ✓ | ✓ |
+| Working, waiting, idle and not running dots | ✓ | ✓ | ✓ | ✓ |
+| *Needs your answer* dot | ✓ permissions, questions, plans, the folder trust check | ✓ approvals and questions (Codex reports them), the folder trust check | not yet | with [OSC 7501](#other-agents-the-needs-your-answer-dot) |
+| Starts when you first click on its terminal, after the app restarts | ✓ | ✓ | ✓ | No, starts straight away |
+| **Conversations** | | | | |
+| A conversation of its own, even several in one folder | ✓ the app picks its id | ✓ learned once Codex saves it | not yet: `-c` or `--conversation <id>` in its command | No |
+| Reopens it when the app or the session restarts | ✓ `--resume <id>` | ✓ `codex resume <id>` | not yet | No |
+| Follows you to another conversation | ✓ `/clear`, `/resume` | ✓ `/new`; `/resume` once you send a prompt in it | not yet | No |
+| Resume picker | ✓ | ✓ tagged *Codex* | not yet | No |
+| Conversation title on hover, and in the closing question | ✓ | ✓ | not yet | No |
+| **Conversation rail and tab** | | | | |
+| Rail of prompts and the Conversation tab | ✓ | ✓ | not yet | No |
+| Works in full-screen mode | ✓ | ✓ | not yet | No |
+| Project view: latest prompt and answer | ✓ | ✓ | status only | status only |
+| **Panels and messages** | | | | |
+| Panels beside the terminal, their buttons, and messages between sessions | ✓ | ✓ | ✓ [through a bridge](#antigravity-agy) | No |
+| **Theme** | | | | |
+| App, terminal and diff colours, accent, themes | ✓ | ✓ | ✓ | ✓ |
+| The agent itself started in matching light or dark colours | ✓ | not yet | not yet | No |
+| **Git** | | | | |
+| Git Changes, Git Repository, diffs, fetch/pull/push, pull requests, Project view | ✓ | ✓ | ✓ | ✓ |
+| **Suggest** writes the commit message | ✓ Claude Code | ✓ Codex | ✓ Claude Code, if installed | ✓ Claude Code, if installed |
+| **App** | | | | |
+| Plugins | ✓ | ✓ | ✓ | ✓ |
+| Updates: sessions carry on in their conversations | ✓ | ✓ | restarted | restarted |
 
 ## Claude Code
 
@@ -52,6 +52,13 @@ The conversation rail and tab read Claude's saved transcript, so they work in Cl
 - **Needs your answer:** Codex reports in the terminal when it's waiting on you, so the dot doesn't depend on reading its screen (see [below](#other-agents-the-needs-your-answer-dot)).
 - **Suggest** runs `codex exec --ephemeral -s read-only` with low reasoning: read-only and not saved as a conversation, using a little of your Codex plan.
 - **Commands that choose for themselves:** `codex resume …` and `codex fork …` keep their own choice of conversation, and Codex's other subcommands (`codex exec`, say) run as they are.
+
+## Antigravity (agy)
+
+- **Panels and messages.** `agy` can't be given an MCP server for one start, so before its first session starts in a run LlamaTree checks `agy mcp list` and, if there's no `llamatree` server (or it points at another copy of LlamaTree), runs `agy mcp add llamatree "<LlamaTree's program>" mcp-bridge`. The server it adds has no port or token in it: each session's environment (`LLAMATREE_PANEL_URL`, `LLAMATREE_PANEL_TOKEN`) tells it where to connect, and started outside LlamaTree it offers no tools. Turn it off with `agy mcp disable llamatree`: a disabled server is left alone.
+- **The panel tools don't ask each time.** Each session starts with `--settings` allowing `mcp(llamatree/*)`, as Claude's sessions allow `mcp__llamatree`. The file is your own `permissions` from `~/.gemini/antigravity-cli/settings.json` (which is only read) with that rule added, so your other rules still apply. `agy` uses it for that session only and never saves it; a command that passes its own `--settings` is left alone.
+- **Conversations aren't followed yet.** An `agy` session runs its command as it is: `-c` and `--conversation <id>` work as `agy` describes them, but there's no resume picker, rail or Conversation tab for it.
+- A panel's button that starts an `agy` session gives it the prompt with `-i`, so the session carries on afterwards.
 
 ## Other agents: the needs your answer dot
 
