@@ -95,23 +95,40 @@ public class PanelBridgeTests
         Assert.Contains("restart the session", reply.GetProperty("error").GetProperty("message").GetString());
     }
 
+    /// <summary>Output that says when the agent has been given the answer to <paramref name="id"/>.</summary>
+    private sealed class Watched(int id) : MemoryStream
+    {
+        public TaskCompletionSource Answered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Every write reaches this one (MemoryStream's other writes call it in a class derived from it).
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            base.Write(buffer, offset, count);
+            if (Encoding.UTF8.GetString(ToArray()).Contains($"\"id\":{id},")) Answered.TrySetResult();
+        }
+    }
+
     [Fact]
     public async Task A_slow_call_doesnt_hold_up_the_next()
     {
-        var release = new TaskCompletionSource();
+        // wait_for_reply is only answered once the ping's answer has reached the agent: if the bridge took one
+        // message at a time, the ping would never be answered, and the wait would give up after 10 seconds.
+        using var output = new Watched(2);
         var server = new Server((_, body) =>
         {
-            if (body.Contains("wait_for_reply")) release.Task.Wait(TimeSpan.FromSeconds(10));
-            else release.TrySetResult();
+            if (body.Contains("wait_for_reply")) output.Answered.Task.Wait(TimeSpan.FromSeconds(10));
             var id = JsonDocument.Parse(body).RootElement.GetProperty("id").GetInt32();
             return Json($$$"""{"jsonrpc":"2.0","id":{{{id}}},"result":{}}""");
         });
-        var replies = await Run("""
+        await PanelBridge.RunAsync(new MemoryStream(Encoding.UTF8.GetBytes("""
             {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wait_for_reply"}}
             {"jsonrpc":"2.0","id":2,"method":"ping"}
-            """, Url, "tok", server);
+            """)), output, Url, "tok", server, TimeSpan.FromSeconds(30));
 
-        Assert.Equal([2, 1], replies.Select(r => r.GetProperty("id").GetInt32()));
+        Assert.True(output.Answered.Task.IsCompleted);
+        var replies = Encoding.UTF8.GetString(output.ToArray()).Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => JsonDocument.Parse(l).RootElement.GetProperty("id").GetInt32());
+        Assert.Equal([2, 1], replies);
     }
 
     private sealed class Endless : HttpMessageHandler
