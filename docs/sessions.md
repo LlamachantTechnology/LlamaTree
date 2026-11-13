@@ -45,11 +45,11 @@ A new Claude session's command is just `claude` (plus any options you add). Llam
 - Commands with their own `--resume`, `--session-id` or `--fork-session` are left alone.
 - **Older sessions:** a session made with `claude --continue` (the previous default) starts on the folder's latest conversation once, then keeps that one. A plain `claude` session saved before 1.1.0 never told the app which conversation it was in, so it gets a new one of its own, and the app says once which sessions those are; *Resume a different conversation…* takes one back to an earlier conversation.
 
-Codex sessions work the same way, with a few differences: see [Claude Code and Codex](claude-and-codex.md#codex).
+Codex and Antigravity (`agy`) sessions work the same way, with a few differences: see [Claude Code, Codex and Antigravity](claude-and-codex.md#codex).
 
 ### Resuming a conversation
 
-In **New session**, or a session's ⋯ menu › *Resume a different conversation…*, pick any saved conversation from the list. That makes it the session's conversation; *New conversation* gives the session a fresh one instead. The list reads Claude Code's saved conversations from `~/.claude/projects`, and Codex conversations, tagged *Codex*. Conversations used in the last few minutes are tagged *active now*: close them in any other terminal first.
+In **New session**, or a session's ⋯ menu › *Resume a different conversation…*, pick any saved conversation from the list. That makes it the session's conversation; *New conversation* gives the session a fresh one instead. The list reads Claude Code's saved conversations from `~/.claude/projects`, Codex conversations, tagged *Codex*, and Antigravity conversations, tagged *Antigravity*. Conversations used in the last few minutes are tagged *active now*: close them in any other terminal first.
 
 ![Resuming a saved Claude Code conversation](images/resume.png)
 
@@ -57,7 +57,7 @@ In **New session**, or a session's ⋯ menu › *Resume a different conversation
 
 Change the **Folder** in *Edit session* (or *Browse…* to the folder to move it into) to move the folder itself on disk, and the session with it. A worktree is moved with `git worktree move`, so its repository keeps track of it; a repository's main folder is moved and its other worktrees repaired (`git worktree repair`). Any other session in the folder or inside it moves too. Running ones are stopped first, after you confirm, since their programs hold the folder.
 
-The Claude and Codex conversations had in the folder go with it, so each session reopens its conversation in the new place. The new folder must not exist yet, and has to be on the same drive. Claude may ask once whether you trust the new folder.
+The Claude and Codex conversations had in the folder go with it (Antigravity's don't yet), so each session reopens its conversation in the new place. The new folder must not exist yet, and has to be on the same drive. Claude may ask once whether you trust the new folder.
 
 ### Sessions started by another session
 
@@ -76,7 +76,7 @@ Tick *Don't ask again* to always do one or the other; the version menu (top righ
 
 ### Restarting
 
-After a restart, the sessions come back, each in its own conversation. A Claude or Codex session brought back after a restart waits until you first click on its terminal (its tile says *Starts when you click it*; pressing Enter in it works too). Its start-up context, such as hooks, the date and Git status, is then fresh when you use the session, and a session you don't click on costs nothing. A message from another session starts it too, so the sender isn't left waiting. New sessions, and sessions running other commands (a dev server, say), start straight away.
+After a restart, the sessions come back, each in its own conversation. A Claude, Codex or Antigravity session brought back after a restart waits until you first click on its terminal (its tile says *Starts when you click it*; pressing Enter in it works too). Its start-up context, such as hooks, the date and Git status, is then fresh when you use the session, and a session you don't click on costs nothing. A message from another session starts it too, so the sender isn't left waiting. New sessions, and sessions running other commands (a dev server, say), start straight away.
 
 To have a Claude or Codex session start as soon as LlamaTree opens instead, set **Starts** when you add it in *New session*, or later in its ⋯ menu › *Rename / edit command…*:
 

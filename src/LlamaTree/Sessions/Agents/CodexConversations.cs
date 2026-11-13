@@ -283,14 +283,14 @@ internal static class CodexConversations
         }
     }
 
-    private static string? NormalizeDir(string? directory)
+    internal static string? NormalizeDir(string? directory)
     {
         if (string.IsNullOrWhiteSpace(directory)) return null;
         try { return PathText.TrimEnd(Path.GetFullPath(directory)); }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return null; }
     }
 
-    private static bool SameDir(string? cwd, string normalizedDir) =>
+    internal static bool SameDir(string? cwd, string normalizedDir) =>
         cwd != null && string.Equals(PathText.TrimEnd(cwd), normalizedDir, StringComparison.OrdinalIgnoreCase);
 
     private static bool TryParse(string line, out JsonElement element)

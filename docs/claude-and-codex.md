@@ -12,15 +12,15 @@ A session's command decides what it runs: `claude` for [Claude Code](https://doc
 | *Needs your answer* dot | ✓ permissions, questions, plans, the folder trust check | ✓ approvals and questions (Codex reports them), the folder trust check | not yet | with [OSC 7501](#other-agents-the-needs-your-answer-dot) |
 | Starts when you first click on its terminal, after the app restarts | ✓ | ✓ | ✓ | No, starts straight away |
 | **Conversations** | | | | |
-| A conversation of its own, even several in one folder | ✓ the app picks its id | ✓ learned once Codex saves it | not yet: `-c` or `--conversation <id>` in its command | No |
-| Reopens it when the app or the session restarts | ✓ `--resume <id>` | ✓ `codex resume <id>` | not yet | No |
-| Follows you to another conversation | ✓ `/clear`, `/resume` | ✓ `/new`; `/resume` once you send a prompt in it | not yet | No |
-| Resume picker | ✓ | ✓ tagged *Codex* | not yet | No |
-| Conversation title on hover, and in the closing question | ✓ | ✓ | not yet | No |
+| A conversation of its own, even several in one folder | ✓ the app picks its id | ✓ learned once Codex saves it | ✓ learned once agy saves it | No |
+| Reopens it when the app or the session restarts | ✓ `--resume <id>` | ✓ `codex resume <id>` | ✓ `--conversation <id>` | No |
+| Follows you to another conversation | ✓ `/clear`, `/resume` | ✓ `/new`; `/resume` once you send a prompt in it | ✓ a new one, or one picked with `/resume`, once you send a prompt in it | No |
+| Resume picker | ✓ | ✓ tagged *Codex* | ✓ tagged *Antigravity* | No |
+| Conversation title on hover, and in the closing question | ✓ | ✓ | ✓ | No |
 | **Conversation rail and tab** | | | | |
-| Rail of prompts and the Conversation tab | ✓ | ✓ | not yet | No |
-| Works in full-screen mode | ✓ | ✓ | not yet | No |
-| Project view: latest prompt and answer | ✓ | ✓ | status only | status only |
+| Rail of prompts and the Conversation tab | ✓ | ✓ | ✓ | No |
+| Works in full-screen mode | ✓ | ✓ | ✓ | No |
+| Project view: latest prompt and answer | ✓ | ✓ | ✓ | status only |
 | **Panels and messages** | | | | |
 | Panels beside the terminal, their buttons, and messages between sessions | ✓ | ✓ | ✓ [through a bridge](#antigravity-agy) | No |
 | **Theme** | | | | |
@@ -31,7 +31,7 @@ A session's command decides what it runs: `claude` for [Claude Code](https://doc
 | **Suggest** writes the commit message | ✓ Claude Code | ✓ Codex | ✓ Claude Code, if installed | ✓ Claude Code, if installed |
 | **App** | | | | |
 | Plugins | ✓ | ✓ | ✓ | ✓ |
-| Updates: sessions carry on in their conversations | ✓ | ✓ | restarted | restarted |
+| Updates: sessions carry on in their conversations | ✓ | ✓ | ✓ | restarted |
 
 ## Claude Code
 
@@ -57,7 +57,11 @@ The conversation rail and tab read Claude's saved transcript, so they work in Cl
 
 - **Panels and messages.** `agy` can't be given an MCP server for one start, so before its first session starts in a run LlamaTree checks `agy mcp list` and, if there's no `llamatree` server (or it points at another copy of LlamaTree), runs `agy mcp add llamatree "<LlamaTree's program>" mcp-bridge`. The server it adds has no port or token in it: each session's environment (`LLAMATREE_PANEL_URL`, `LLAMATREE_PANEL_TOKEN`) tells it where to connect, and started outside LlamaTree it offers no tools. Turn it off with `agy mcp disable llamatree`: a disabled server is left alone.
 - **The panel tools don't ask each time.** Each session starts with `--settings` allowing `mcp(llamatree/*)`, as Claude's sessions allow `mcp__llamatree`. The file is your own `permissions` from `~/.gemini/antigravity-cli/settings.json` (which is only read) with that rule added, so your other rules still apply. `agy` uses it for that session only and never saves it; a command that passes its own `--settings` is left alone.
-- **Conversations aren't followed yet.** An `agy` session runs its command as it is: `-c` and `--conversation <id>` work as `agy` describes them, but there's no resume picker, rail or Conversation tab for it.
+- **Its own conversation.** `agy` can't be told which conversation id to use, so a new session learns its conversation once `agy` has saved it: the latest one started in its folder since the session started. From then on it's reopened with `--conversation <id>`, in place of any `-c`. A command with its own `--conversation <id>` hands that conversation to the session.
+- **Following you.** A new conversation is followed once you send its first prompt; one picked with `/resume` (or carried on with `-c`) once you send a prompt in it.
+- **Saved conversations** are read from `~/.gemini/antigravity-cli`, without `agy`'s databases: the transcript in `brain/<id>/.system_generated/logs`, the title from `annotations/<id>.pbtxt`, and the folder from the prompt history, `history.jsonl` (the only place `agy` records it). So a conversation `agy -p` ran, which isn't in the prompt history, isn't listed, and a conversation whose prompts aren't in it can't be told apart by folder.
+- **The rail and the Conversation tab** read the transcript: your prompts, `agy`'s answers and the tools it ran. Tool output and messages from other sessions aren't shown.
+- **Not yet:** **Suggest** uses Claude Code, since `agy -p` can't read its prompt from standard input and saves a conversation of each run. Moving a session's folder doesn't move its `agy` conversations, which `agy` keeps the folder of in its own databases; they're still listed under the old folder.
 - A panel's button that starts an `agy` session gives it the prompt with `-i`, so the session carries on afterwards.
 
 ## Other agents: the needs your answer dot

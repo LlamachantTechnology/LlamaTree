@@ -14,16 +14,52 @@ public class AntigravityTests
     [InlineData("agyx", "none")]
     public void The_agent_is_the_program(string command, string expected) => Assert.Equal(expected, Agents.For(command)?.Id ?? "none");
 
+    private const string Id = "11111111-2222-3333-4444-555555555555";
+
     [Theory]
-    [InlineData("agy")]
-    [InlineData("agy --conversation 11111111-2222-3333-4444-555555555555")]
-    [InlineData("agy -c")]
-    public void Its_conversations_are_not_followed(string command)
+    [InlineData("agy", true)]
+    [InlineData("agy -c --model x", true)]
+    [InlineData("agy --conversation " + Id, false)]
+    [InlineData("agy --conversation=" + Id, false)]
+    [InlineData("agy -p hello", false)]
+    [InlineData("agy mcp list", false)]
+    public void The_app_tracks_an_interactive_agy(string command, bool expected)
     {
-        Assert.False(Agents.Antigravity.CanTrackConversation(command));
-        Assert.False(Agents.Antigravity.TracksConversations);
-        Assert.Equal((command, (string?)null), Agents.Antigravity.TakeConversation(command));
+        Assert.True(Agents.Antigravity.TracksConversations);
+        Assert.Equal(expected, Agents.Antigravity.CanTrackConversation(command));
     }
+
+    [Theory]
+    [InlineData("agy --conversation " + Id + " --model x")]
+    [InlineData("agy --model x --conversation=" + Id)]
+    public void Conversation_typed_as_the_command_becomes_the_sessions_conversation(string command) =>
+        Assert.Equal(("agy --model x", (string?)Id), Agents.Antigravity.TakeConversation(command));
+
+    [Theory]
+    [InlineData("agy --conversation not-an-id")]
+    [InlineData("agy -p hi --conversation " + Id)]
+    public void A_conversation_the_app_cant_keep_is_left_in_the_command(string command) =>
+        Assert.Equal((command, (string?)null), Agents.Antigravity.TakeConversation(command));
+
+    [Theory]
+    [InlineData("agy -c --model x")]
+    [InlineData("agy --continue --model x")]
+    public void Continue_is_dropped_once_the_conversation_is_known(string command) =>
+        Assert.Equal("agy --model x", Agents.Antigravity.StripContinue(command));
+
+    [Theory]
+    [InlineData("agy --model x", true, "agy --model x --conversation " + Id)]
+    [InlineData("agy -c --model x", true, "agy --model x --conversation " + Id)]
+    [InlineData("agy -c --model x", false, "agy -c --model x")]   // not saved yet: agy starts as its command says
+    [InlineData("agy --conversation 99999999-2222-3333-4444-555555555555", true, "agy --conversation 99999999-2222-3333-4444-555555555555")]
+    [InlineData("agy -p hello", true, "agy -p hello")]
+    public void A_session_reopens_its_conversation_once_agy_has_saved_it(string command, bool saved, string expected) =>
+        Assert.Equal(expected, AntigravityAgent.PrepareCommand(command, null, conversation: Id, isSaved: _ => saved));
+
+    [WindowsFact]
+    public void A_panels_new_conversation_isnt_the_sessions_old_one() =>
+        Assert.Equal("agy -i \"fix it\" --model x",
+            AntigravityAgent.PrepareCommand("agy --model x", "fix it", newConversation: true, conversation: Id, isSaved: _ => true));
 
     [Theory]
     [InlineData("agy -c", true)]
