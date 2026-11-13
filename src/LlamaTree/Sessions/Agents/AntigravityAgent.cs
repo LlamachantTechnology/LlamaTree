@@ -19,7 +19,7 @@ internal sealed partial class AntigravityAgent : AgentProfile
     public override IReadOnlyList<string> Programs { get; } = ["agy", "agy.exe", "agy.cmd"];
     public override AgentColor Color { get; } = new("#34a853", "#188038");
     public override bool ChoosesConversationId => false;
-    public override string Follows => "to new conversations and through /resume";
+    public override string Follows => "through /new, /clear, /resume and /switch";
     public override string OwnConversationPattern => @"\s+--conversation(?:=\S+|\s+[^-\s]\S*)?(?=\s|$)";
     public override string? ContinuePattern => @"\s+(?:-c|--continue)(?=\s|$)";
 

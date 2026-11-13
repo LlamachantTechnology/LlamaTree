@@ -64,8 +64,8 @@ internal static partial class AntigravityConversations
 
     /// <summary>
     /// The conversation the agy started in <paramref name="directory"/> at <paramref name="startedUtc"/> is in now, of
-    /// those since then: the latest one started there (its first, or a new one after that), or the latest one a prompt was
-    /// sent in there (one carried on with -c or picked with /resume), whichever came last. Never one another session is in
+    /// those since then: the latest one started there (its first, or one after /new or /clear), or the latest one a prompt was
+    /// sent in there (one carried on with -c or picked with /resume or /switch), whichever came last. Never one another session is in
     /// (<paramref name="taken"/>). Null when there is none.
     /// </summary>
     public static string? Live(string directory, DateTime startedUtc, IReadOnlySet<string> taken)

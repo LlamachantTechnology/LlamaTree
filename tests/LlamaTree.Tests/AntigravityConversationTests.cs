@@ -121,7 +121,7 @@ public sealed class AntigravityConversationTests : IDisposable
         Assert.Equal(mine, AntigravityConversations.Live(work, started, new HashSet<string>()));
         Assert.Null(AntigravityConversations.Live(work, started, new HashSet<string> { mine }));   // another session is in it
 
-        var next = NewId();   // a new conversation, then a prompt
+        var next = NewId();   // /new (or /clear), then a prompt
         Conversation(next, started.AddSeconds(30), work, "again");
         Assert.Equal(next, AntigravityConversations.Live(work, started, new HashSet<string>()));
     }
@@ -139,14 +139,14 @@ public sealed class AntigravityConversationTests : IDisposable
         Prompted(old, started.AddMinutes(-30), work);   // before the session: not this session's doing
         Assert.Equal(mine, AntigravityConversations.Live(work, started, new HashSet<string>()));
 
-        Prompted(old, started.AddSeconds(40), work);   // /resume (or -c), then a prompt
+        Prompted(old, started.AddSeconds(40), work);   // /resume or /switch (or -c), then a prompt
         Assert.Equal(old, AntigravityConversations.Live(work, started, new HashSet<string>()));
         Assert.Equal(mine, AntigravityConversations.Live(work, started, new HashSet<string> { old }));   // another session is in it
 
         Prompted(elsewhere, started.AddSeconds(50), Path.GetTempPath());   // an agy in another folder
         Assert.Equal(old, AntigravityConversations.Live(work, started, new HashSet<string>()));
 
-        var next = NewId();   // a new conversation after that
+        var next = NewId();   // /new after that
         Conversation(next, started.AddSeconds(60), work, "fresh start");
         Assert.Equal(next, AntigravityConversations.Live(work, started, new HashSet<string>()));
     }
