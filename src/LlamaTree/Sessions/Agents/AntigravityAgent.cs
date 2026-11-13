@@ -8,18 +8,18 @@ namespace LlamaTree.Sessions;
 /// <summary>
 /// Google's Antigravity CLI (agy). It has no option that adds an MCP server for one start, so panels reach it through
 /// the stdio bridge (<see cref="Panels.PanelBridge"/>), registered with agy's own "agy mcp add" before its first
-/// session (<see cref="Panels.PanelRegistration"/>); each session's environment then names this run's panel server and the session's token. The app doesn't follow
-/// its conversations yet (agy keeps them in databases of its own), so a session runs agy as its command says.
+/// session (<see cref="Panels.PanelRegistration"/>); each session's environment then names this run's panel server and the session's token. agy
+/// can't be told which id a new conversation gets, so a session learns it from agy's prompt history and transcripts (see
+/// <see cref="AntigravityConversations.Live"/>) and reopens it with --conversation.
 /// </summary>
-internal sealed class AntigravityAgent : AgentProfile
+internal sealed partial class AntigravityAgent : AgentProfile
 {
     public override string Id => "agy";
     public override string Name => "Antigravity";
     public override IReadOnlyList<string> Programs { get; } = ["agy", "agy.exe", "agy.cmd"];
     public override AgentColor Color { get; } = new("#34a853", "#188038");
     public override bool ChoosesConversationId => false;
-    public override bool TracksConversations => false;
-    public override string Follows => "only while it runs";
+    public override string Follows => "through /new, /clear, /resume and /switch";
     public override string OwnConversationPattern => @"\s+--conversation(?:=\S+|\s+[^-\s]\S*)?(?=\s|$)";
     public override string? ContinuePattern => @"\s+(?:-c|--continue)(?=\s|$)";
 
@@ -38,7 +38,9 @@ internal sealed class AntigravityAgent : AgentProfile
         return !tokens.Any(t => print.Contains(t.Split('=')[0], StringComparer.OrdinalIgnoreCase));
     }
 
-    public override bool CanTrackConversation(string command) => false;
+    /// <summary>The interactive interface, without --conversation (which picks a conversation of its own).</summary>
+    public override bool CanTrackConversation(string command) =>
+        IsInteractive(command) && !Tokens(command).Skip(1).Any(t => t.Split('=')[0].Equals("--conversation", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>--continue or --conversation.</summary>
     public override bool CarriesOnConversation(string command)
@@ -47,24 +49,45 @@ internal sealed class AntigravityAgent : AgentProfile
         return Tokens(command).Skip(1).Any(t => carryOn.Contains(t.Split('=')[0], StringComparer.OrdinalIgnoreCase));
     }
 
-    public override (string Command, string? Conversation) TakeConversation(string command) => (command, null);
+    /// <summary>"--conversation &lt;id&gt;" or --conversation=&lt;id&gt;.</summary>
+    public override (string Command, string? Conversation) TakeConversation(string command)
+    {
+        var m = ConversationFlag().Match(command);
+        if (!m.Success || !TerminalSession.IsConversationId(m.Groups[1].Value)) return (command, null);
+        var rest = (command[..m.Index] + command[(m.Index + m.Length)..]).Trim();
+        return CanTrackConversation(rest) ? (rest, m.Groups[1].Value) : (command, null);
+    }
 
+    [GeneratedRegex(@"\s+--conversation(?:=|\s+)([0-9A-Fa-f-]{36})(?=\s|$)", RegexOptions.IgnoreCase)]
+    private static partial Regex ConversationFlag();
+
+    /// <summary>Without -c / --continue.</summary>
+    public override string StripContinue(string command) => Regex.Replace(command.Trim(), ContinuePattern!, "", RegexOptions.IgnoreCase);
+
+    /// <summary>The session's conversation, or after an update the one it was in.</summary>
     public override string CommandLine(string command, Launch launch) =>
-        PrepareCommand(command, launch.FirstPrompt, launch.Panels != null ? PanelSettingsFile() : null, launch.NewConversation);
+        PrepareCommand(command, launch.FirstPrompt, launch.Panels != null ? PanelSettingsFile() : null, launch.NewConversation,
+            launch.Conversation ?? launch.ResumeOnce, AntigravityConversations.IsSaved);
 
     /// <summary>
     /// The command, starting on <paramref name="firstPrompt"/> (-i, which keeps the session going) when a panel gave
     /// one, with <paramref name="settingsFile"/> (see <see cref="PanelSettingsFile"/>) as its --settings unless it
     /// passes its own. A <paramref name="newConversation"/> (a session a panel started) drops -c and --conversation,
-    /// so it doesn't carry on an old one. Anything but the interactive interface is left alone.
+    /// so it doesn't carry on an old one. Otherwise a <paramref name="conversation"/> agy has saved
+    /// (<paramref name="isSaved"/>) is reopened with --conversation, in place of any -c; before agy has saved it, agy
+    /// starts a new one, which the app learns once it has. A command with its own --conversation keeps it. Anything but
+    /// the interactive interface is left alone.
     /// </summary>
-    internal static string PrepareCommand(string command, string? firstPrompt, string? settingsFile = null, bool newConversation = false)
+    internal static string PrepareCommand(string command, string? firstPrompt, string? settingsFile = null, bool newConversation = false,
+        string? conversation = null, Func<string, bool>? isSaved = null)
     {
-        if (Agents.For(command) is not AntigravityAgent || !IsInteractive(command)) return command.Trim();
+        if (Agents.For(command) is not AntigravityAgent agy || !IsInteractive(command)) return command.Trim();
         var result = command.Trim();
         if (newConversation || firstPrompt != null)
-            foreach (var carryOn in new[] { Agents.Antigravity.ContinuePattern!, Agents.Antigravity.OwnConversationPattern })
+            foreach (var carryOn in new[] { agy.ContinuePattern!, agy.OwnConversationPattern })
                 result = Regex.Replace(result, carryOn, "", RegexOptions.IgnoreCase);
+        else if (agy.CanTrackConversation(result) && TerminalSession.IsConversationId(conversation) && isSaved?.Invoke(conversation!) == true)
+            result = agy.StripContinue(result) + " --conversation " + conversation;
         if (firstPrompt != null) result = AfterProgram(result, "-i " + CommandLineResolver.QuoteArgument(firstPrompt));
         if (settingsFile != null && !Tokens(command).Any(t => t.Split('=')[0].Equals("--settings", StringComparison.OrdinalIgnoreCase)))
             result += " --settings " + CommandLineResolver.QuotePath(settingsFile);
@@ -140,9 +163,19 @@ internal sealed class AntigravityAgent : AgentProfile
     public override string McpAddCommand(string program) =>
         $"agy mcp add {Panels.PanelMcp.ServerName} {CommandLineResolver.QuotePath(program)} {Panels.PanelBridge.Argument}";
 
-    public override string? LiveConversation(TerminalSession session, int[] processIds, IReadOnlySet<string> others) => null;
+    /// <summary>The latest one started or prompted in the session's folder since the session started, unless another session is in it.</summary>
+    public override string? LiveConversation(TerminalSession session, int[] processIds, IReadOnlySet<string> others) =>
+        AntigravityConversations.Live(session.Info.Directory, session.StartedUtc, others);
 
-    public override List<ConversationInfo> ListConversations(string? directory, int max) => [];
+    public override List<ConversationInfo> ListConversations(string? directory, int max) => AntigravityConversations.List(directory, max);
 
-    public override ConversationInfo? FindConversation(string id, string directory) => null;
+    public override ConversationInfo? FindConversation(string id, string directory) => AntigravityConversations.Find(id);
+
+    public override bool ShowsConversation => true;
+
+    /// <summary>The session's own conversation, which the app follows (agy names no conversation for its process).</summary>
+    public override Conversation? ReadConversation(TerminalSession session, int[] processIds) =>
+        session.Info.Conversation is { } id ? AntigravityConversations.Read(id) : null;
+
+    public override Conversation? ReadSavedConversation(TerminalSession session) => ReadConversation(session, []);
 }
