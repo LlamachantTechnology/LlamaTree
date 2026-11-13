@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using LlamaTree.Terminal;
 
 namespace LlamaTree.Sessions;
@@ -14,7 +15,7 @@ internal sealed class AntigravityAgent : AgentProfile
 {
     public override string Id => "agy";
     public override string Name => "Antigravity";
-    public override IReadOnlyList<string> Programs { get; } = ["agy", "agy.exe"];
+    public override IReadOnlyList<string> Programs { get; } = ["agy", "agy.exe", "agy.cmd"];
     public override AgentColor Color { get; } = new("#34a853", "#188038");
     public override bool ChoosesConversationId => false;
     public override bool TracksConversations => false;
@@ -49,17 +50,21 @@ internal sealed class AntigravityAgent : AgentProfile
     public override (string Command, string? Conversation) TakeConversation(string command) => (command, null);
 
     public override string CommandLine(string command, Launch launch) =>
-        PrepareCommand(command, launch.FirstPrompt, launch.Panels != null ? PanelSettingsFile() : null);
+        PrepareCommand(command, launch.FirstPrompt, launch.Panels != null ? PanelSettingsFile() : null, launch.NewConversation);
 
     /// <summary>
     /// The command, starting on <paramref name="firstPrompt"/> (-i, which keeps the session going) when a panel gave
     /// one, with <paramref name="settingsFile"/> (see <see cref="PanelSettingsFile"/>) as its --settings unless it
-    /// passes its own. Anything but the interactive interface is left alone.
+    /// passes its own. A <paramref name="newConversation"/> (a session a panel started) drops -c and --conversation,
+    /// so it doesn't carry on an old one. Anything but the interactive interface is left alone.
     /// </summary>
-    internal static string PrepareCommand(string command, string? firstPrompt, string? settingsFile = null)
+    internal static string PrepareCommand(string command, string? firstPrompt, string? settingsFile = null, bool newConversation = false)
     {
         if (Agents.For(command) is not AntigravityAgent || !IsInteractive(command)) return command.Trim();
         var result = command.Trim();
+        if (newConversation || firstPrompt != null)
+            foreach (var carryOn in new[] { Agents.Antigravity.ContinuePattern!, Agents.Antigravity.OwnConversationPattern })
+                result = Regex.Replace(result, carryOn, "", RegexOptions.IgnoreCase);
         if (firstPrompt != null) result = AfterProgram(result, "-i " + CommandLineResolver.QuoteArgument(firstPrompt));
         if (settingsFile != null && !Tokens(command).Any(t => t.Split('=')[0].Equals("--settings", StringComparison.OrdinalIgnoreCase)))
             result += " --settings " + CommandLineResolver.QuotePath(settingsFile);

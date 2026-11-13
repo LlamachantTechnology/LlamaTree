@@ -32,7 +32,7 @@ internal sealed class PanelMcp(PanelStore store, Relay.RelayHub? relay = null, R
         "Panels stay after LlamaTree restarts until they are closed; list_panels shows this session's panels.";
 
     private const string RelayInstructions =
-        " Sessions can also message each other: list_sessions shows the other sessions (other agents, Claude or Codex, working for the same person), " +
+        " Sessions can also message each other: list_sessions shows the other sessions (other agents, Claude, Codex or Antigravity, working for the same person), " +
         "send_message sends one a message, and read_messages reads the messages sent to this one. The person decides which session may message which. " +
         "To ask another session something and get the answer now, send_message then wait_for_reply with the message's id. " +
         "When you're told this session has a message, call read_messages, and answer it with send_message (reply_to its id): " +
@@ -444,7 +444,7 @@ internal sealed class PanelMcp(PanelStore store, Relay.RelayHub? relay = null, R
     private const string RelayToolsJson = """
           {
             "name": "list_sessions",
-            "description": "Lists the other sessions in LlamaTree this session may message: other agents (Claude or Codex) working for the same person, each with its name, id, agent, project and whether it's running, and whether messaging it is allowed or the person is asked first.",
+            "description": "Lists the other sessions in LlamaTree this session may message: other agents (Claude, Codex or Antigravity) working for the same person, each with its name, id, agent, project and whether it's running, and whether messaging it is allowed or the person is asked first.",
             "inputSchema": { "type": "object", "properties": {} }
           },
           {

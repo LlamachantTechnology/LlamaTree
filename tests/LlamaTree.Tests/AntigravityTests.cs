@@ -10,6 +10,7 @@ public class AntigravityTests
     [Theory]
     [InlineData("agy", "agy")]
     [InlineData("agy.exe --model gemini-3-pro", "agy")]
+    [InlineData("agy.cmd", "agy")]
     [InlineData("agyx", "none")]
     public void The_agent_is_the_program(string command, string expected) => Assert.Equal(expected, Agents.For(command)?.Id ?? "none");
 
@@ -35,6 +36,18 @@ public class AntigravityTests
     [WindowsFact]
     public void A_panels_prompt_starts_an_interactive_session() =>
         Assert.Equal("agy -i \"fix it\" --model x", AntigravityAgent.PrepareCommand("agy --model x", "fix it"));
+
+    [WindowsTheory]
+    [InlineData("agy -c --model x")]
+    [InlineData("agy --continue --model x")]
+    [InlineData("agy --conversation 11111111-2222-3333-4444-555555555555 --model x")]
+    [InlineData("agy --conversation=11111111-2222-3333-4444-555555555555 --model x")]
+    public void A_panels_prompt_starts_a_new_conversation_not_an_old_one(string command) =>
+        Assert.Equal("agy -i \"fix it\" --model x", AntigravityAgent.PrepareCommand(command, "fix it", newConversation: true));
+
+    [Fact]
+    public void Otherwise_continue_is_kept() =>
+        Assert.Equal("agy -c", AntigravityAgent.PrepareCommand("agy -c", null));
 
     [Theory]
     [InlineData("agy -p hello")]
