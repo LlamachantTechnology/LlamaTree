@@ -7,7 +7,7 @@ Run agents on another machine (a build box, a cloud VM, a beefy desktop) and wor
 - **`ssh` on this computer.** Windows 10 and 11 have it built in, as do macOS and Linux.
 - **A Linux server** (x86-64), **or another Windows PC** (see [A Windows PC as the server](#a-windows-pc-as-the-server)), that you can reach with SSH. LlamaTree can't be installed on a Mac server yet.
 - **Key or ssh-agent sign-in.** LlamaTree can't type a password. Connect once from a terminal first (`ssh user@server`) so the server's host key is known. If you haven't set up a key, see [Setting up SSH](#setting-up-ssh).
-- **Claude Code or Codex on the server**, installed and signed in, since that's where they run.
+- **Claude Code, Codex, Antigravity or Grok on the server**, installed and signed in, since that's where they run. For Antigravity and Grok, the server's LlamaTree adds itself to their MCP servers there, as it does locally (see [Antigravity](claude-and-codex.md#antigravity)), so their panels and messages work too.
 - **LlamaTree on the server.** It gives the `llamatree` command that LlamaTree runs there. If it isn't there yet, LlamaTree says so and offers *Install LlamaTree on `<server>`…* (see [below](#installing-llamatree-on-the-server)). The server doesn't need a desktop.
 
 These are the same for sessions among your own and for a [server in a window of its own](#a-server-in-a-window-of-its-own).
