@@ -18,8 +18,12 @@ internal sealed class AntigravityAgent : AgentProfile
     public override AgentColor Color { get; } = new("#34a853", "#188038");
     public override string Follows => "to another conversation once you send a prompt in it";
 
-    /// <summary>agy asks with a menu whose last line is its key hint, as the folder trust check shows (agy 1.5.9).</summary>
-    public override AskingScreen Asks { get; } = new(@"↑/↓ Navigate · enter Confirm");
+    /// <summary>
+    /// agy asks with a menu in place of its prompt box, whose key hint starts "↑/↓ Navigate · " (then "enter Confirm" for
+    /// the folder trust check, "tab Amend" for a command to approve); while it waits for a prompt the hint is "? for shortcuts" (agy 1.5.9).
+    /// An answered menu's lines stay in the conversation, above its prompt box: a rule with "&gt;" under it.
+    /// </summary>
+    public override AskingScreen Asks { get; } = new(@"^\s*↑/↓ Navigate · ", @"^\s*─{8,}", @"^>(\s|$)");
 
     public override CommandShape Command { get; } = new()
     {

@@ -146,6 +146,22 @@ public class AgentCommandTests
         Assert.Empty(env);
     }
 
+    /// <summary>Lines from the agents' own screens (agy 1.5.9, grok 1.0.77), tried as the page tries them.</summary>
+    [Theory]
+    [InlineData("agy", "  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command", true)]   // a command to approve
+    [InlineData("agy", "  ↑/↓ Navigate · enter Confirm", true)]                             // the folder trust check
+    [InlineData("agy", "? for shortcuts                                    auto · Gemini 3.8 Flash · high", false)]
+    [InlineData("agy", "> Delete the file notes.txt in this folder using a shell command.", false)]
+    [InlineData("grok", "  1/5:select  │  Tab:next option  │  ←/→:scope  │  e:edit pattern  │  Ctrl+o:always-approve", true)]
+    [InlineData("grok", "  Tab/Space:permission  │  Ctrl+e:expand thinking  │  Ctrl+c:cancel  │  Ctrl+b:send to bg", true)]   // scrolled back, still asking
+    [InlineData("grok", "  Shift+Tab:mode  │  Ctrl+x:shortcuts", false)]
+    [InlineData("grok", "  │  3 (•) Yes, proceed", false)]
+    public void Its_screen_shows_when_it_is_asking(string id, string line, bool asking)
+    {
+        var asks = Agent(id).Asks!;
+        Assert.Equal(asking, new System.Text.RegularExpressions.Regex(asks.Choice, System.Text.RegularExpressions.RegexOptions.ECMAScript).IsMatch(line));
+    }
+
     [Fact]
     public void Agy_settings_keep_your_permissions_and_allow_the_panel_tools()
     {

@@ -16,6 +16,13 @@ internal sealed class GrokAgent : AgentProfile
     public override AgentColor Color { get; } = new("#b4b4b4", "#4d4d4d");
     public override string Follows => "through /new and /resume";
 
+    /// <summary>
+    /// Grok asks with a list of choices in place of its prompt box, under a key hint starting "1/5:select" (the choice
+    /// picked, of how many); while it waits for a prompt the hint is "Shift+Tab:mode" (grok 1.0.77). Scrolling back
+    /// through the conversation (Esc) leaves the question waiting, with "Tab/Space:permission" to return to it.
+    /// </summary>
+    public override AskingScreen Asks { get; } = new(@"^\s*(?:\d+/\d+:select|Tab/Space:permission)\b");
+
     public override CommandShape Command { get; } = new()
     {
         Subcommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
