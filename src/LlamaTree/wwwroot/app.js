@@ -105,6 +105,21 @@ const store = {
   set(key, v) { localStorage.setItem('ct.' + key, JSON.stringify(v)); },
 };
 
+/**
+ * The layout picked under Layout, else the default: Left (projects and sessions down the left) for a new install. A
+ * copy of LlamaTree that has run before without one picked had Top, its default then, and keeps it. Saved either way,
+ * so it doesn't change later.
+ */
+function initialNavLayout() {
+  const picked = store.get('navLayout');
+  if (['top', 'hybrid', 'left'].includes(picked)) return picked;
+  let ranBefore = false;
+  try { ranBefore = Object.keys(localStorage).some((k) => k.startsWith('ct.')); } catch { }
+  const layout = ranBefore ? 'top' : 'left';
+  try { store.set('navLayout', layout); } catch { }
+  return layout;
+}
+
 function debounce(fn, ms) {
   let t;
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
@@ -304,13 +319,15 @@ const state = {
   projects: [],                                        // [{ id, name }] in display order
   hiddenProjects: new Set(store.get('hiddenProjects', [])),   // hidden rather than shown, so new projects start visible
   // Where projects and sessions go (see NAV_LAYOUTS): 'top', 'hybrid' (projects on the left) or 'left' (both, as a tree).
-  navLayout: ['hybrid', 'left'].includes(store.get('navLayout')) ? store.get('navLayout') : 'top',
+  navLayout: initialNavLayout(),
   navWidth: store.get('navWidth', 230),
   navBranches: store.get('navBranches', true),   // each session's branch beneath its name, down the left
   // In the Top layout, projects as tabs (a click shows only that project) rather than as filters to tick.
   projectTabs: store.get('projectTabs', false),
   // Projects (and Unknown) taken off the tab row into its ▾ list. Unpinned rather than pinned, so new projects start pinned.
   unpinnedProjects: new Set(store.get('unpinnedProjects', [])),
+  // Sessions whose started sessions are folded away beneath them in the list down the left (see renderNav).
+  collapsedStarters: new Set(store.get('collapsedStarters', [])),
 };
 
 // ------------------------------------------------------------------ projects: which sessions are visible
@@ -366,13 +383,92 @@ function projectTag(s) {
   return h('span', { class: 'proj-tag', style: `--proj:${projectColor(p)}`, title: `Project: ${p.name}` }, p.name);
 }
 
-/** Visible sessions, grouped by project in project order (no project last), keeping their own order within a group. */
+/**
+ * Visible sessions, grouped by project in project order (no project last), keeping their own order within a group,
+ * except that a session another started (start_session) comes straight after the one that started it, and its siblings.
+ */
 function visibleSessions() {
-  return state.sessions
+  return nestStarted(state.sessions
     .map((s, i) => ({ s, i }))
     .filter(({ s }) => isVisible(s))
     .sort((a, b) => projectIndex(a.s) - projectIndex(b.s) || a.i - b.i)
-    .map(({ s }) => s);
+    .map(({ s }) => s));
+}
+
+/**
+ * The sessions with each one another started moved beneath the one that started it, and its `nestDepth` set: how many
+ * levels down it is (0 for one you made). Only beneath a starter that's in the list and in the same project, so a
+ * session never leaves its project's group; one whose starter is hidden or gone stays where it was. Also sets
+ * `nestParent`, the id of the one it's beneath (null at the top), and `nestKids`, how many sit directly beneath it.
+ */
+function nestStarted(list) {
+  const shown = new Map(list.map((s) => [s.id, s]));
+  const starterOf = (s) => {
+    const by = s.startedBy && shown.get(s.startedBy);
+    return by && by !== s && groupOf(by) === groupOf(s) ? by : null;
+  };
+  const children = new Map();
+  for (const s of list) { const by = starterOf(s); if (by) children.set(by.id, [...(children.get(by.id) ?? []), s]); }
+  const out = [], placed = new Set();
+  const place = (s, depth, parent) => {
+    if (placed.has(s.id)) return;
+    placed.add(s.id);
+    s.nestDepth = depth;
+    s.nestParent = parent;
+    s.nestKids = 0;
+    out.push(s);
+    for (const c of children.get(s.id) ?? []) { if (!placed.has(c.id)) s.nestKids++; place(c, depth + 1, s.id); }
+  };
+  for (const s of list) if (!starterOf(s)) place(s, 0, null);
+  for (const s of list) place(s, 0, null);   // only ever a loop of starters (each started by another of them): left as they were
+  return out;
+}
+
+/** Whether a session is folded away beneath a collapsed starter (one above it in nestStarted's tree). */
+function foldedAway(s) {
+  for (let up = s.nestParent, seen = 0; up && seen < 64; up = state.byId.get(up)?.nestParent, seen++)
+    if (state.collapsedStarters.has(up)) return true;
+  return false;
+}
+
+/** The sessions beneath a starter in nestStarted's tree, however far down. */
+function nestedUnder(s) {
+  return state.sessions.filter((x) => {
+    for (let up = x.nestParent, seen = 0; up && seen < 64; up = state.byId.get(up)?.nestParent, seen++) if (up === s.id) return true;
+    return false;
+  });
+}
+
+/** Folds a starter's sessions away beneath it in the list down the left, or shows them again. */
+function toggleStarter(id) {
+  const set = state.collapsedStarters;
+  if (!set.delete(id)) set.add(id);
+  for (const x of [...set]) if (!state.byId.has(x)) set.delete(x);   // sessions since closed
+  store.set('collapsedStarters', [...set]);
+  renderNav();
+}
+
+/**
+ * On a collapsed starter's row: how many sessions are folded beneath it, with the dot of one that asks or works and a
+ * count of those waiting for you, so a folded session still gets noticed.
+ */
+function nestFold(s) {
+  const under = nestedUnder(s).filter(isVisible);
+  const waiting = under.filter(waitingForYou).length;
+  return h('span', { class: 'nest-fold', 'data-id': s.id, title: `${under.length} session${under.length === 1 ? '' : 's'} started from here, folded away` },
+    `+${under.length}`, projectDot(under),
+    waiting ? h('span', { class: 'badge', title: `${waiting} waiting for you` }, String(waiting)) : null);
+}
+
+/** Refreshes the folded counts on collapsed starters after a session's status changes. */
+function updateNestFolds() {
+  for (const el of document.querySelectorAll('#navList .nest-fold')) {
+    const s = state.byId.get(el.dataset.id);
+    if (!s) continue;
+    const next = nestFold(s);
+    // The same dot and count stay, so the dot's animation isn't restarted on every update.
+    if (next.outerHTML !== el.outerHTML) { el.replaceWith(next); syncStatus(next); }
+  }
 }
 
 function saveHiddenProjects() {
@@ -638,8 +734,30 @@ function renderNav() {
   if (state.navLayout === 'top') return;
   const tree = state.navLayout === 'left';
   const groups = projectGroups();
-  const shown = tree ? visibleSessions() : [];
-  const tabOf = (s) => sessionTab(s, shown.indexOf(s), true);   // the index gives its Ctrl+1…9, as in the tab row
+  const all = tree ? visibleSessions() : [];
+  // Sessions folded away beneath a collapsed starter aren't listed; they still have their tiles and Ctrl+1…9.
+  const shown = all.filter((s) => !foldedAway(s));
+  const tabOf = (s) => {
+    const tab = sessionTab(s, all.indexOf(s), true);   // the index gives its Ctrl+1…9, as in the tab row
+    // One another session started sits beneath it (see nestStarted).
+    if (s.nestDepth > 0) {
+      tab.classList.add('nested');
+      tab.style.setProperty('--depth', String(s.nestDepth));
+    }
+    if (s.nestKids > 0) {
+      const open = !state.collapsedStarters.has(s.id);
+      tab.classList.add('starter');
+      tab.prepend(h('button', {
+        class: 'nest-toggle', 'aria-expanded': String(open),
+        title: `${open ? 'Hide' : 'Show'} the sessions ${s.name} started`,
+        onclick: (e) => { e.stopPropagation(); toggleStarter(s.id); },
+      }, iconEl('chevD')));
+      // Folded: how many beneath it, on the name's line.
+      const name = !open && tab.querySelector('.tab-text .tab-name');
+      if (name) { const line = h('span', { class: 'tab-line' }); name.replaceWith(line); line.append(name, nestFold(s)); }
+    }
+    return tab;
+  };
   const rows = groups.map((p) => {
     const members = shown.filter((s) => groupOf(s) === p.id);
     return h('div', { class: 'nav-group' + (p.unknown ? ' unknown' : ''), style: p.unknown ? null : `--proj:${projectColor(p)}` },
@@ -667,6 +785,8 @@ function renderNav() {
 function projectMenu(p, x, y) {
   if (p.unknown) {   // a group, not a project: nothing to rename, move or delete
     showMenu(x, y, [
+      ...projectNewSessionItems(UNKNOWN),
+      '-',
       { label: 'Project view: its worktrees side by side', action: () => openProjectView(UNKNOWN) },
       '-',
       { label: 'Show only sessions with no project', action: () => showOnlyProject(UNKNOWN) },
@@ -679,6 +799,8 @@ function projectMenu(p, x, y) {
   const i = state.projects.indexOf(p);
   const across = state.navLayout === 'top';   // a row of tabs; down the left, a list
   showMenu(x, y, [
+    ...projectNewSessionItems(p.id),
+    '-',
     { label: 'Project view: its worktrees side by side', action: () => openProjectView(p.id) },
     '-',
     { label: 'Show only this project', action: () => showOnlyProject(p.id) },
@@ -1956,11 +2078,17 @@ setInterval(() => {
       else renderTileState(s);
     }
     // Once the screen has settled after new output has been drawn (mid-redraw it can be half drawn), see whether the
-    // agent is asking. Only agents: a shell or a dev server can print text that looks like their menus.
-    const asks = s.running && !s.reportsState && a.drawnAt !== a.readAt && now - a.drawnAt > 250 && askingScreen(s.command);
+    // agent is asking. Only agents: a shell or a dev server can print text that looks like their menus. An agent that
+    // keeps redrawing while it asks (Grok ticks a timer) never settles, so its screen is read once a second anyway, and
+    // such a reading only counts once the next one agrees, so a half-drawn screen can't flip the dot.
+    const settled = now - a.drawnAt > 250;
+    const asks = s.running && !s.reportsState && a.drawnAt !== a.readAt && (settled || now - (a.readTime ?? 0) > 1000) && askingScreen(s.command);
     if (asks) {
       a.readAt = a.drawnAt;
-      setAsking(s, isAsking(s.term, asks));
+      a.readTime = now;
+      const on = isAsking(s.term, asks);
+      if (settled || a.lastReading === on) setAsking(s, on);
+      a.lastReading = on;
     }
   }
 }, 500);
@@ -2000,15 +2128,16 @@ function askingScreen(command) {
 }
 
 // An agent asks by putting a menu on screen, with a line its profile recognises (Claude's picked numbered choice, say).
-// While its prompt box (a rule with the prompt under it) is there, it wants a prompt instead, so text like that in the
-// conversation above doesn't count.
+// A menu above its prompt box (a rule with the prompt under it) has been answered, and the box wants a prompt, so text
+// like that in the conversation above doesn't count; a menu below the last prompt box does (agy keeps an answered
+// menu's lines in the conversation, and its prompts there sit under a rule like the box's).
 function isAsking(term, asks) {
   const b = term.buffer.active;
   let choice = false, prev = '';
   for (let y = b.baseY; y < b.baseY + term.rows; y++) {
     const line = b.getLine(y)?.translateToString(true) ?? '';
-    if (asks.promptRule?.test(prev) && asks.promptLine?.test(line)) return false;
-    if (asks.choice.test(line)) choice = true;
+    if (asks.promptRule?.test(prev) && asks.promptLine?.test(line)) choice = false;
+    else if (asks.choice.test(line)) choice = true;
     prev = line;
   }
   return choice;
@@ -2076,6 +2205,7 @@ function renderTileState(s) {
   syncStatus(s.header);
   if (tab) syncStatus(tab);
   updateProjectIndicators(groupOf(s));
+  if (s.nestParent) updateNestFolds();
   projectViewChanged(s);
   relayNotify(s);   // an idle session told of messages it has
 }
@@ -2139,7 +2269,8 @@ function renderTileHeader(s) {
 }
 
 function sessionTabTitle(s) {
-  return [s.directory, s.git?.branch && `Branch: ${s.git.branch}`, s.server && serverTitle(serverOf(s)), statusText(s), conversationLine(s), 'Click again to go back to all sessions · middle-click to close'].filter(Boolean).join('\n');
+  const by = s.startedBy && state.byId.get(s.startedBy);
+  return [s.directory, s.git?.branch && `Branch: ${s.git.branch}`, by && `Started by “${by.name}”`, s.server && serverTitle(serverOf(s)), statusText(s), conversationLine(s), 'Click again to go back to all sessions · middle-click to close'].filter(Boolean).join('\n');
 }
 
 /**
@@ -2683,6 +2814,10 @@ function terminalMenuItems(s) {
 // Both are looked for, as apostrophes in prose can look like quotes around a path.
 const PATH_WORD = /[^\s"'`<>|,;()[\]{}]+/g;
 const QUOTED_PATH = /"([^"\n]{2,})"|'([^'\n]{2,})'|`([^`\n]{2,})`/g;
+// Where an unquoted absolute path starts (C:\, \\server, ~/ or /), at the start of a word. Such a path may have spaces
+// in it (C:\My Files\a.txt), so it's also tried with the next few words added on; the longest one there is the link.
+const ABS_PATH_START = /(?<![^\s(\[{<,;=])(?:[A-Za-z]:[\\/]|\\\\(?=[^\\\s])|~[\\/]|\/(?=[^\s/]))/g;
+const ABS_PATH_MAX_SPACES = 6;
 
 /**
  * The path in a word of terminal output, or null if it can't be one: unless it was quoted, it needs a folder
@@ -2769,6 +2904,20 @@ function pathLinkProvider(s) {
       };
       for (const m of text.matchAll(QUOTED_PATH)) add(m[1] ?? m[2] ?? m[3], m.index + 1, true);
       for (const m of text.matchAll(PATH_WORD)) add(m[0], m.index);
+      for (const m of text.matchAll(ABS_PATH_START)) {
+        // The path with 1, 2, ... more words on it (single spaces only), stopping at anything a path word can't have.
+        let end = m.index;
+        for (let spaces = 0; spaces <= ABS_PATH_MAX_SPACES; spaces++) {
+          PATH_WORD.lastIndex = end;
+          const w = PATH_WORD.exec(text);
+          if (!w || w.index !== end) break;
+          end = w.index + w[0].length;
+          if (spaces > 0) add(text.slice(m.index, end), m.index);
+          if (text[end] !== ' ' || text[end + 1] === ' ') break;
+          end++;
+        }
+      }
+      PATH_WORD.lastIndex = 0;
       if (!words.length) return callback(undefined);
       const ask = [...new Set(words.map((w) => w.path).filter((p) => !fresh(cache.get(p))))];
       const lookup = ask.length ? request('terminal.paths', { id: s.id, paths: ask }) : Promise.resolve([]);
@@ -2949,6 +3098,15 @@ function showEditDialog(s, focus) {
   const project = projectField(s.project);
   const starts = agent && !s.server ? startsField(s.startWithApp, s.project) : null;   // a server's session runs with its own LlamaTree
   if (starts) startsFollowProject(starts, project);
+  // A session on this computer can move: its folder is moved on disk (a worktree by git), and the session with it.
+  const folder = h('input', { value: s.directory, readonly: !!s.server, spellcheck: 'false' });
+  const browse = !s.server && h('button', {
+    class: 'btn', title: 'Pick the folder to move it into; it keeps its name there',
+    onclick: async () => {
+      const parent = await request('pickFolder', { initial: parentFolder(folder.value.trim() || s.directory) });
+      if (parent) folder.value = parent.replace(/[\\/]+$/, '') + pathSep(parent) + leafName(s.directory.replace(/[\\/]+$/, ''));
+    },
+  }, 'Browse…');
   const error = h('div', { class: 'form-error', hidden: true });
   const save = async () => {
     let projectId;
@@ -2959,19 +3117,23 @@ function showEditDialog(s, focus) {
       error.textContent = e.message;
       return;
     }
+    const target = folder.value.trim();
+    const moving = !s.server && target && normPath(target) !== normPath(s.directory);
     request('updateSession', {
       id: s.id, name: name.value, command: command.value, project: projectId ?? '', ...(starts && { startWithApp: starts.select.value }),
     }).catch((e) => toast(e.message, true));
     closeModal();
-    if (s.running && command.value.trim() !== s.command) toast('Command changes apply the next time the session starts.');
+    if (moving) confirmMoveFolder(s, target);
+    else if (s.running && command.value.trim() !== s.command) toast('Command changes apply the next time the session starts.');
     if (projectId && state.hiddenProjects.has(projectId)) toast(`"${s.name}" moved to a project that's hidden; tick it above to see the session.`);
   };
-  for (const i of [name, command, project.newName]) i.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+  for (const i of [name, command, project.newName, folder]) i.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
   openModal('Edit session', [
     field('Name', name),
     field('Command', command, 'For example: claude, claude --model opus, codex'),
     project.el,
-    field('Folder', h('input', { value: s.directory, readonly: true })),
+    field('Folder', s.server ? folder : h('div', { class: 'inline' }, folder, browse),
+      !s.server && 'Change it to move the folder itself on disk, and the session with it (a worktree is moved with git). Its conversations go along.'),
     agent && field('Conversation',
       h('input', {
         value: s.conversation ?? '', readonly: true, spellcheck: 'false',
@@ -2994,6 +3156,48 @@ function agentTag(id) {
 }
 
 const leafName = (path) => (path || '').split(/[\\/]/).filter(Boolean).pop() || path;
+/** The separator the path is written with. */
+const pathSep = (path) => /^[a-z]:|\\/i.test(path) ? '\\' : '/';
+/** The folder the path is in (itself for a drive or the root). */
+const parentFolder = (path) => {
+  const p = (path || '').replace(/[\\/]+$/, '');
+  const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'));
+  return i > 0 && !/^[a-z]:$/i.test(p.slice(0, i)) ? p.slice(0, i) : p.slice(0, i + 1) || p;
+};
+
+/**
+ * Moving a session's folder (Edit session): what goes with it, then the move. Every session on this computer in the
+ * folder or inside it moves too, and running ones are stopped first, since their programs hold the folder.
+ */
+function confirmMoveFolder(s, target) {
+  const from = s.directory;
+  const along = state.sessions.filter((x) => x !== s && !x.server && underPath(x.directory, from));
+  const running = [s, ...along].filter((x) => x.running);
+  const names = (list) => list.map((x) => `“${x.name}”`).join(', ');
+  openModal('Move folder', [
+    h('div', {}, `Move the folder of “${s.name}” on disk, with everything in it?`),
+    field('From', h('input', { value: from, readonly: true })),
+    field('To', h('input', { value: target, readonly: true })),
+    h('div', { class: 'dim' }, s.git?.isRepo && normPath(s.git.root) === normPath(from)
+      ? 'It’s a Git repository folder: a worktree is moved with git worktree move, and a repository’s main folder has its other worktrees repaired afterwards.'
+      : 'Nothing else changes: the folder is renamed to its new place.'),
+    along.length > 0 && h('div', {}, `${along.length === 1 ? 'This session moves' : 'These sessions move'} with it: ${names(along)}.`),
+    running.length > 0 && h('div', { class: 'form-error' }, `${names(running)} ${running.length === 1 ? 'is' : 'are'} running and will be stopped first. Start ${running.length === 1 ? 'it' : 'them'} again afterwards: the conversation carries on.`),
+    h('div', { class: 'dim' }, 'Claude and Codex conversations had in the folder move with it, so the session reopens its conversation there. Anything else with the folder open (an editor, a build server) has to let go of it first.'),
+  ], [
+    h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
+    h('button', {
+      class: 'btn primary' + (running.length ? ' danger' : ''),
+      onclick: () => {
+        closeModal();
+        toast(`Moving ${from}…`);
+        request('moveSession', { id: s.id, directory: target, stop: running.length > 0 })
+          .then(() => toast(`Moved to ${target}.`))
+          .catch((e) => toast(e.message, true));
+      },
+    }, running.length ? 'Stop and move' : 'Move'),
+  ]);
+}
 
 /**
  * Searchable list of Claude Code's and Codex's saved conversations (optionally limited to one folder, or one agent's).
@@ -3514,14 +3718,30 @@ function showAddDialog(mode = 'new', from = null) {
  */
 function quickAddMenu(s, anchor) {
   const r = anchor.getBoundingClientRect();
+  showMenu(r.left, r.bottom + 2, newSessionItems(s));
+}
+
+/** What quickAddMenu offers: a header naming the project, then where the new session goes. */
+function newSessionItems(s) {
   const p = projectOf(s);
-  showMenu(r.left, r.bottom + 2, [
+  return [
     { header: p ? `New session in ${p.name}` : 'New session with no project' },
-    { label: 'In the same folder', action: () => quickSession(s) },
+    { label: 'In the same folder…', action: () => quickSession(s) },
     s.git?.isRepo && { label: 'In a new worktree…', action: () => showWorktreeDialog(s) },   // worktrees need a Git repository
     '-',
     { label: 'A different folder…', action: () => showAddDialog('new', { directory: s.directory, project: s.project ?? null, server: s.server ?? null }) },
-  ]);
+  ];
+}
+
+/**
+ * New session items for a project's right-click menu: as its + offers, like its current session (else its first, shown
+ * or not); a project with no sessions has no + and nothing to be like, so it opens New session with the project picked.
+ */
+function projectNewSessionItems(projectId) {
+  const members = state.sessions.filter((s) => groupOf(s) === projectId);
+  const like = members.find((s) => s.id === state.currentId) || members[0];
+  if (like) return newSessionItems(like);
+  return [{ label: 'New session…', action: () => showAddDialog('new', { project: projectId === UNKNOWN ? null : projectId }) }];
 }
 
 /** The session's command without anything that picks a conversation: a new session gets one of its own. */
@@ -3547,10 +3767,22 @@ async function addAndOpen(item) {
   if (added) expand(added.id);
 }
 
-/** One click: another session in the same folder and project, with a conversation of its own. */
+/**
+ * Another session in the same folder and project, with a conversation of its own: it only asks for a name, offering
+ * the next free one ("checkout-api 2"), selected so typing replaces it and Enter takes it.
+ */
 function quickSession(s) {
-  addAndOpen({ directory: s.directory, name: freeName(s.name), command: ownOptionsOnly(s.command), project: s.project ?? '', server: s.server ?? undefined })
-    .catch((e) => toast(e.message, true));
+  const suggested = freeName(s.name);
+  const name = h('input', { value: suggested, spellcheck: 'false' });
+  const add = () => {
+    closeModal();
+    addAndOpen({ directory: s.directory, name: name.value.trim() || suggested, command: ownOptionsOnly(s.command), project: s.project ?? '', server: s.server ?? undefined })
+      .catch((e) => toast(e.message, true));
+  };
+  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+  openModal('New session', [field('Name', name, `In ${s.directory}`)],
+    [h('button', { class: 'btn', onclick: closeModal }, 'Cancel'), h('button', { class: 'btn primary', onclick: add }, 'Add')]);
+  setTimeout(() => name.select(), 30);   // after openModal's focus
 }
 
 /**
@@ -3831,17 +4063,31 @@ function loadDock() {
       // Each tab once, and only tabs the app knows how to show.
       tabs: g.tabs.filter((t) => typeof t === 'string' && (t in GIT_TABS || isPanelTab(t) || isPluginDockTab(t)) && !seen.has(t) && seen.add(t)),
       active: typeof g.active === 'string' ? g.active : null,
+      bySession: Object.fromEntries(Object.entries(g.bySession && typeof g.bySession === 'object' ? g.bySession : {})
+        .filter(([, t]) => typeof t === 'string')),
       size: Number(g.size) > 0 ? Number(g.size) : 1,
       folded: g.folded === true,
     }))
     .filter((g) => g.tabs.length);
-  if (!groups.length) groups.push({ tabs: [], active: 'changes', size: 1 });
+  if (!groups.length) groups.push({ tabs: [], active: 'changes', bySession: {}, size: 1 });
   for (const t of Object.keys(GIT_TABS)) if (!seen.has(t)) groups[0].tabs.push(t);
   return groups;
 }
 
 function saveDock() {
-  store.set('dock', { groups: dock.groups.map((g) => ({ tabs: g.tabs, active: g.active, size: g.size, folded: !!g.folded })) });
+  // A removed session's choices go (once the sessions are known).
+  const known = (id) => !state.byId?.size || state.byId.has(id);
+  for (const g of dock.groups) for (const id of Object.keys(g.bySession ?? {})) if (!known(id)) delete g.bySession[id];
+  store.set('dock', { groups: dock.groups.map((g) => ({ tabs: g.tabs, active: g.active, bySession: g.bySession ?? {}, size: g.size, folded: !!g.folded })) });
+}
+
+/**
+ * Opens tab t in group g for a session (the selected one unless said): each session keeps the tab it had open, since
+ * a panel shows with its own session only, and the last choice anywhere is what a session with none of its own opens.
+ */
+function chooseTab(g, t, sessionId = state.currentId) {
+  g.active = t;
+  if (sessionId) (g.bySession ??= {})[sessionId] = t;
 }
 
 const groupOfTab = (t) => dock.groups.find((g) => g.tabs.includes(t));
@@ -3870,10 +4116,15 @@ const groupTabs = (g) => g.tabs.filter((t) => isPluginDockTab(t) ? !!pluginById(
   : gitTabOn(t));
 
 /**
- * The tab a group has open: its chosen one, or its first while the chosen one isn't shown for this session. The choice
- * itself is kept, so a panel tab opens again when its session (or the panel list, at start) comes back.
+ * The tab a group has open: the one the selected session last had open there, else the latest chosen in any session,
+ * else its first. A choice is kept while its tab isn't shown, so a panel tab opens again when its session (or the panel
+ * list, at start) comes back.
  */
-const shownActive = (g) => { const tabs = groupTabs(g); return tabs.includes(g.active) ? g.active : tabs[0] ?? null; };
+const shownActive = (g) => {
+  const tabs = groupTabs(g);
+  const mine = g.bySession?.[state.currentId];
+  return tabs.includes(mine) ? mine : tabs.includes(g.active) ? g.active : tabs[0] ?? null;
+};
 
 /** Whether a tab is on screen now: open in its group (not folded), with the side panel showing. */
 const isTabShown = (t) => state.gitVisible && dock.groups.some((g) => !g.folded && shownActive(g) === t);
@@ -3990,7 +4241,7 @@ function renderDockTabs(g, tabs, open) {
 }
 
 function activateTab(g, t) {
-  g.active = t;
+  chooseTab(g, t);
   g.folded = false;   // opening a tab in a folded group unfolds it
   saveDock();
   const s = currentSession();
@@ -4020,12 +4271,12 @@ function moveTab(tab, to) {
     from.tabs.splice(from.tabs.indexOf(tab), 1);
     const at = to.before ? to.group.tabs.indexOf(to.before) : -1;
     to.group.tabs.splice(at < 0 ? to.group.tabs.length : at, 0, tab);
-    to.group.active = tab;
+    chooseTab(to.group, tab);
   } else {
     if (to.group === from && from.tabs.length === 1) return;   // splitting a group off itself changes nothing
     from.tabs.splice(from.tabs.indexOf(tab), 1);
     to.group.size /= 2;
-    const fresh = { tabs: [tab], active: tab, size: to.group.size };
+    const fresh = { tabs: [tab], active: tab, bySession: state.currentId ? { [state.currentId]: tab } : {}, size: to.group.size };
     const i = dock.groups.indexOf(to.group);
     dock.groups.splice(to.kind === 'above' ? i : i + 1, 0, fresh);
   }
@@ -4056,7 +4307,7 @@ function reopenItems() {
 function resetDock() {
   const tabs = ['changes', 'repo', ...dock.groups.flatMap((g) => g.tabs).filter((t) => isPanelTab(t) || isPluginDockTab(t))];
   for (const g of dock.groups) { g.el?.remove(); g.divider?.remove(); }
-  dock.groups = [{ tabs, active: 'changes', size: 1 }];
+  dock.groups = [{ tabs, active: 'changes', bySession: {}, size: 1 }];
   saveDock();
   renderGit();
 }
@@ -5135,7 +5386,7 @@ function onPanels(m) {
   if (c?.created && c.owner === state.currentId) {
     placePanels();   // its tab goes to the bottom group, and opens there
     const g = groupOfTab(panelTab(c));
-    if (g) { g.active = panelTab(c); saveDock(); }
+    if (g) { chooseTab(g, panelTab(c), c.owner); saveDock(); }
     if (!state.gitVisible) { state.gitVisible = true; store.set('gitVisible', true); applyGitVisibility(); }
   }
   renderGit();

@@ -4,7 +4,7 @@ A session is one agent (or any command) running in its own real terminal, in a f
 
 ## Working with sessions
 
-Click a session's tile, or its tab in the title bar, to work in it full-size; click its tab again, or press <kbd>Shift</kbd>+<kbd>Esc</kbd>, to go back to all sessions. **New session** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd>) starts a new conversation, optionally one session per worktree, or resumes an existing one. [Keyboard shortcuts](shortcuts.md) lists the rest.
+Click a session's tile, or its tab (in the list down the left, or across the top in that layout), to work in it full-size; click its tab again, or press <kbd>Shift</kbd>+<kbd>Esc</kbd>, to go back to all sessions. **New session** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd>) starts a new conversation, optionally one session per worktree, or resumes an existing one. [Keyboard shortcuts](shortcuts.md) lists the rest.
 
 ![An expanded session with its Git Changes](images/session.png)
 
@@ -45,13 +45,25 @@ A new Claude session's command is just `claude` (plus any options you add). Llam
 - Commands with their own `--resume`, `--session-id` or `--fork-session` are left alone.
 - **Older sessions:** a session made with `claude --continue` (the previous default) starts on the folder's latest conversation once, then keeps that one. A plain `claude` session saved before 1.1.0 never told the app which conversation it was in, so it gets a new one of its own, and the app says once which sessions those are; *Resume a different conversation…* takes one back to an earlier conversation.
 
-Codex sessions work the same way, with a few differences: see [Claude Code and Codex](claude-and-codex.md#codex).
+Codex, Antigravity and Grok sessions work the same way, with a few differences: see [Codex](claude-and-codex.md#codex), [Antigravity](claude-and-codex.md#antigravity) and [Grok](claude-and-codex.md#grok).
 
 ### Resuming a conversation
 
 In **New session**, or a session's ⋯ menu › *Resume a different conversation…*, pick any saved conversation from the list. That makes it the session's conversation; *New conversation* gives the session a fresh one instead. The list reads Claude Code's saved conversations from `~/.claude/projects`, and Codex conversations, tagged *Codex*. Conversations used in the last few minutes are tagged *active now*: close them in any other terminal first.
 
 ![Resuming a saved Claude Code conversation](images/resume.png)
+
+### Moving a session's folder
+
+Change the **Folder** in *Edit session* (or *Browse…* to the folder to move it into) to move the folder itself on disk, and the session with it. A worktree is moved with `git worktree move`, so its repository keeps track of it; a repository's main folder is moved and its other worktrees repaired (`git worktree repair`). Any other session in the folder or inside it moves too. Running ones are stopped first, after you confirm, since their programs hold the folder.
+
+The Claude and Codex conversations had in the folder go with it, so each session reopens its conversation in the new place. The new folder must not exist yet, and has to be on the same drive. Claude may ask once whether you trust the new folder.
+
+### Sessions started by another session
+
+A session another session's agent started (`start_session`) is listed beneath the one that started it, indented a step, in the list down the left. Its tooltip says which session started it.
+
+Click the arrow beside a session that started others to fold them away beneath it, and again to show them. While they're folded, the session's row shows how many there are, with a dot when one is working or asking you something and a count of those waiting for you. Folded sessions keep running, and still have their tiles and <kbd>Ctrl</kbd>+number keys.
 
 ### Closing the window
 
@@ -97,7 +109,7 @@ Projects group sessions, for example one product across its worktrees. Tick proj
 - **Put a session in a project** when you add it, by dragging its tab into the project's group, or right-click its tab › *Move to project…*
 - **Rename, recolour, reorder or delete** a project by right-clicking it. *Edit project* sets its name and colour (a swatch, a custom colour or Automatic). Deleting a project keeps its sessions; they just have no project.
 - **Add a session to a project** with the **+** at the end of its tab group (at the end of the row when there are no projects). It works from that project's current session, or its first:
-  - *In the same folder* adds a session there in one click, with a conversation of its own.
+  - *In the same folder…* asks for the new session's name (the next free one is filled in, so Enter takes it) and adds it there, with a conversation of its own.
   - *In a new worktree…* (only in a Git repository) creates a worktree on a new branch, next to the repository by default, and opens a session there, unless you untick *Start a session in it*.
   - *A different folder…* opens New session with the project chosen.
 

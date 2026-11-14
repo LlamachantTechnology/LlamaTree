@@ -2,6 +2,7 @@ using LlamaTree.Platform;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json;
+using static LlamaTree.Sessions.JsonLines;
 
 namespace LlamaTree.Sessions;
 
@@ -43,12 +44,12 @@ internal static class CodexConversations
     /// <summary>Codex's saved conversations, latest first; only those started in <paramref name="directory"/> when one is given.</summary>
     public static List<ConversationInfo> List(string? directory, int max)
     {
-        var normalizedDir = NormalizeDir(directory);
+        var normalizedDir = PathText.NormalizeFolder(directory);
         var result = new List<ConversationInfo>();
         foreach (var file in Rollouts(SessionsRoot).OrderByDescending(f => f.LastWriteTimeUtc))
         {
             if (Read(file) is not { Interactive: true } meta) continue;
-            if (normalizedDir != null && !SameDir(meta.Cwd, normalizedDir)) continue;
+            if (normalizedDir != null && !PathText.SameFolder(meta.Cwd, normalizedDir)) continue;
             result.Add(ToInfo(file, meta));
             if (result.Count >= max) break;
         }
@@ -83,27 +84,24 @@ internal static class CodexConversations
     /// folder a prompt was sent in (one picked with /resume, which carries on in its old rollout), whichever came last.
     /// Never one another session is in (<paramref name="taken"/>). Null when there is none.
     /// </summary>
-    public static string? Live(string directory, DateTime startedUtc, IReadOnlySet<string> taken)
+    public static string? Live(string directory, DateTime startedUtc, IReadOnlySet<string> taken) =>
+        LatestInFolder.Pick(RecentActivity, directory, startedUtc, taken);
+
+    /// <summary>Interactive conversations started since <paramref name="since"/>, and the latest prompt sent in each one since then.</summary>
+    internal static IEnumerable<ConversationActivity> RecentActivity(DateTime since)
     {
-        var dir = NormalizeDir(directory);
-        if (dir == null) return null;
-        // A little slack: the session's clock starts just before Codex's own (and prompts' times are whole seconds).
-        var since = startedUtc - TimeSpan.FromSeconds(2);
         var started = RecentRollouts(since)
             .Where(f => f.LastWriteTimeUtc >= since)
             .Select(Read)
-            .Where(m => m is { Interactive: true } && m.Started >= since && SameDir(m.Cwd, dir))
-            .Select(m => (m!.Id, At: m.Started));
+            .Where(m => m is { Interactive: true })
+            .Select(m => new ConversationActivity(m!.Id, m.Cwd, m.Started));
         var prompted = RecentPrompts()
-            .Where(p => p.At >= since && !taken.Contains(p.Id))
+            .Where(p => p.At >= since)
             .GroupBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
             .Select(g => (Id: g.Key, At: g.Max(p => p.At)))
-            .Where(p => FindRollout(p.Id) is { } file && Read(file) is { Interactive: true } m && SameDir(m.Cwd, dir));
-        return started.Concat(prompted)
-            .Where(c => !taken.Contains(c.Id))
-            .OrderByDescending(c => c.At)
-            .Select(c => c.Id)
-            .FirstOrDefault();
+            .Select(p => FindRollout(p.Id) is { } file && Read(file) is { Interactive: true } m ? new ConversationActivity(p.Id, m.Cwd, p.At) : null)
+            .OfType<ConversationActivity>();
+        return started.Concat(prompted);
     }
 
     /// <summary>A prompt typed into Codex: the conversation it was sent in, and when.</summary>
@@ -182,6 +180,13 @@ internal static class CodexConversations
             return null;
         }
     }
+
+    /// <summary>The rollouts of conversations had in <paramref name="folder"/> or a folder inside it (see <see cref="FolderMove"/>).</summary>
+    internal static List<string> RolloutsIn(string folder) =>
+        Rollouts(SessionsRoot).Where(f => Read(f)?.Cwd is { } cwd && FolderMove.Inside(cwd, folder)).Select(f => f.FullName).ToList();
+
+    /// <summary>Reads the rollout again next time: its start has been rewritten (a cached one is otherwise kept once its prompt is known).</summary>
+    internal static void Forget(string file) => Cache.TryRemove(file, out _);
 
     private static IEnumerable<FileInfo> Rollouts(string folder)
     {
@@ -276,39 +281,20 @@ internal static class CodexConversations
         }
     }
 
-    private static string? NormalizeDir(string? directory)
-    {
-        if (string.IsNullOrWhiteSpace(directory)) return null;
-        try { return PathText.TrimEnd(Path.GetFullPath(directory)); }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return null; }
-    }
+}
 
-    private static bool SameDir(string? cwd, string normalizedDir) =>
-        cwd != null && string.Equals(PathText.TrimEnd(cwd), normalizedDir, StringComparison.OrdinalIgnoreCase);
+/// <summary>Codex's conversations for the app (see <see cref="CodexConversations"/>).</summary>
+internal sealed class CodexConversationStore() : ConversationStore(new LatestInFolder(CodexConversations.RecentActivity))
+{
+    public override List<ConversationInfo> List(string? directory, int max) => CodexConversations.List(directory, max);
+    public override ConversationInfo? Find(string id, string directory) => CodexConversations.Find(id);
+    public override bool IsSaved(string id, string directory) => CodexConversations.IsSaved(id);
 
-    private static bool TryParse(string line, out JsonElement element)
-    {
-        element = default;
-        line = line.Trim();
-        if (line.Length < 2 || line[0] != '{') return false;
-        try
-        {
-            element = JsonDocument.Parse(line).RootElement;
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
+    /// <summary>A thread Codex started under a conversation (which codex resume refuses) reopens that conversation.</summary>
+    public override string? ResumeTarget(string id) => CodexConversations.Resumable(id);
 
-    private static string? Str(JsonElement e, string name) =>
-        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+    protected override Conversation? Read(string id, string directory) => CodexConversations.Read(id);
 
-    private static string? Truncate(string? s, int max)
-    {
-        if (s == null) return null;
-        s = s.ReplaceLineEndings(" ");
-        return s.Length <= max ? s : s[..max] + "…";
-    }
+    public override bool MovesWithFolder => true;
+    public override void MoveFolder(string from, string to) => FolderMove.MoveCodexConversations(from, to);
 }

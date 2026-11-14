@@ -26,7 +26,7 @@ public class CodexCommandTests
         {
             Assert.All(agent.Programs, p => Assert.Same(agent, Agents.For(p + " --some-option")));
             // The page runs these as JavaScript regexes; they keep to the syntax both share.
-            foreach (var pattern in new[] { agent.OwnConversationPattern, agent.ContinuePattern }.OfType<string>())
+            foreach (var pattern in new[] { agent.Command.OwnConversationPattern, agent.Command.ContinuePattern }.OfType<string>())
                 _ = new System.Text.RegularExpressions.Regex(pattern, System.Text.RegularExpressions.RegexOptions.ECMAScript | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         }
         Assert.Equal(Agents.All.Count, Agents.All.Select(a => a.Id).Distinct().Count());
