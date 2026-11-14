@@ -205,6 +205,25 @@ public class PanelBridgeTests
     public void Only_a_missing_bridge_or_one_whose_LlamaTree_is_gone_is_added(string listed, string expected) =>
         Assert.Equal(expected, PanelRegistration.Check(listed, Program, path => !path.Contains("gone")).ToString());
 
+    /// <summary>On a server: the Linux packages put LlamaTree in /opt/llamatree (see tools/package-linux.cs).</summary>
+    [Theory]
+    [InlineData("llamatree  stdio  enabled  /opt/llamatree/LlamaTree mcp-bridge", "Ours")]
+    [InlineData("llamatree  stdio  enabled  /home/me/llamatree build/LlamaTree mcp-bridge", "AnotherCopy")]
+    [InlineData("llamatree  stdio  enabled  /tmp/gone/LlamaTree mcp-bridge", "Gone")]
+    [InlineData("""[{"name":"llamatree","command":"/tmp/gone/LlamaTree","args":["mcp-bridge"],"enabled":true}]""", "Gone")]
+    [InlineData("""[{"name":"llamatree","command":"/opt/llamatree/LlamaTree","args":["mcp-bridge"],"enabled":true,"scope":"user"}]""", "Ours")]
+    public void On_a_server_the_bridge_is_checked_the_same_way(string listed, string expected) =>
+        Assert.Equal(expected, PanelRegistration.Check(listed, "/opt/llamatree/LlamaTree", path => path is "/home/me/llamatree build/LlamaTree").ToString());
+
+    [UnixFact]
+    public void On_a_server_the_bridge_is_registered_with_a_shell_quoted_path()
+    {
+        var registered = Assert.IsType<PanelConnection.Registered>(Agents.Antigravity.Panels);
+        var add = registered.AddCommand("/opt/llama tree/LlamaTree");
+        Assert.StartsWith("agy mcp add llamatree '/opt/llama tree/LlamaTree'", add);
+        Assert.EndsWith(" mcp-bridge", add);
+    }
+
     [WindowsFact]
     public void A_list_in_JSON_is_read_by_entry()
     {

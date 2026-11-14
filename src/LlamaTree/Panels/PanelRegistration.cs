@@ -102,7 +102,10 @@ internal static partial class PanelRegistration
     [GeneratedRegex(@"(?<![\w-])" + PanelMcp.ServerName + @"(?![\w-])", RegexOptions.IgnoreCase)]
     private static partial Regex ServerName();
 
-    /// <summary>A LlamaTree program's full path, which may have spaces in it: up to the first "LlamaTree" or "LlamaTree.exe" that ends a word.</summary>
-    [GeneratedRegex(@"(?:[A-Za-z]:\\|/).*?LlamaTree(?:\.exe)?(?=[""'\s,]|$)", RegexOptions.IgnoreCase)]
+    /// <summary>
+    /// A LlamaTree program's full path, which may have spaces in it: up to the first "LlamaTree" or "LlamaTree.exe" that
+    /// ends a word. The program is always spelled so, which a folder called "llamatree" on the way isn't.
+    /// </summary>
+    [GeneratedRegex(@"(?:[A-Za-z]:\\|/).*?LlamaTree(?:\.[Ee][Xx][Ee])?(?=[""'\s,]|$)")]
     private static partial Regex ProgramPath();
 }
