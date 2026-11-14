@@ -4015,17 +4015,31 @@ function loadDock() {
       // Each tab once, and only tabs the app knows how to show.
       tabs: g.tabs.filter((t) => typeof t === 'string' && (t in GIT_TABS || isPanelTab(t) || isPluginDockTab(t)) && !seen.has(t) && seen.add(t)),
       active: typeof g.active === 'string' ? g.active : null,
+      bySession: Object.fromEntries(Object.entries(g.bySession && typeof g.bySession === 'object' ? g.bySession : {})
+        .filter(([, t]) => typeof t === 'string')),
       size: Number(g.size) > 0 ? Number(g.size) : 1,
       folded: g.folded === true,
     }))
     .filter((g) => g.tabs.length);
-  if (!groups.length) groups.push({ tabs: [], active: 'changes', size: 1 });
+  if (!groups.length) groups.push({ tabs: [], active: 'changes', bySession: {}, size: 1 });
   for (const t of Object.keys(GIT_TABS)) if (!seen.has(t)) groups[0].tabs.push(t);
   return groups;
 }
 
 function saveDock() {
-  store.set('dock', { groups: dock.groups.map((g) => ({ tabs: g.tabs, active: g.active, size: g.size, folded: !!g.folded })) });
+  // A removed session's choices go (once the sessions are known).
+  const known = (id) => !state.byId?.size || state.byId.has(id);
+  for (const g of dock.groups) for (const id of Object.keys(g.bySession ?? {})) if (!known(id)) delete g.bySession[id];
+  store.set('dock', { groups: dock.groups.map((g) => ({ tabs: g.tabs, active: g.active, bySession: g.bySession ?? {}, size: g.size, folded: !!g.folded })) });
+}
+
+/**
+ * Opens tab t in group g for a session (the selected one unless said): each session keeps the tab it had open, since
+ * a panel shows with its own session only, and the last choice anywhere is what a session with none of its own opens.
+ */
+function chooseTab(g, t, sessionId = state.currentId) {
+  g.active = t;
+  if (sessionId) (g.bySession ??= {})[sessionId] = t;
 }
 
 const groupOfTab = (t) => dock.groups.find((g) => g.tabs.includes(t));
@@ -4054,10 +4068,15 @@ const groupTabs = (g) => g.tabs.filter((t) => isPluginDockTab(t) ? !!pluginById(
   : gitTabOn(t));
 
 /**
- * The tab a group has open: its chosen one, or its first while the chosen one isn't shown for this session. The choice
- * itself is kept, so a panel tab opens again when its session (or the panel list, at start) comes back.
+ * The tab a group has open: the one the selected session last had open there, else the latest chosen in any session,
+ * else its first. A choice is kept while its tab isn't shown, so a panel tab opens again when its session (or the panel
+ * list, at start) comes back.
  */
-const shownActive = (g) => { const tabs = groupTabs(g); return tabs.includes(g.active) ? g.active : tabs[0] ?? null; };
+const shownActive = (g) => {
+  const tabs = groupTabs(g);
+  const mine = g.bySession?.[state.currentId];
+  return tabs.includes(mine) ? mine : tabs.includes(g.active) ? g.active : tabs[0] ?? null;
+};
 
 /** Whether a tab is on screen now: open in its group (not folded), with the side panel showing. */
 const isTabShown = (t) => state.gitVisible && dock.groups.some((g) => !g.folded && shownActive(g) === t);
@@ -4174,7 +4193,7 @@ function renderDockTabs(g, tabs, open) {
 }
 
 function activateTab(g, t) {
-  g.active = t;
+  chooseTab(g, t);
   g.folded = false;   // opening a tab in a folded group unfolds it
   saveDock();
   const s = currentSession();
@@ -4204,12 +4223,12 @@ function moveTab(tab, to) {
     from.tabs.splice(from.tabs.indexOf(tab), 1);
     const at = to.before ? to.group.tabs.indexOf(to.before) : -1;
     to.group.tabs.splice(at < 0 ? to.group.tabs.length : at, 0, tab);
-    to.group.active = tab;
+    chooseTab(to.group, tab);
   } else {
     if (to.group === from && from.tabs.length === 1) return;   // splitting a group off itself changes nothing
     from.tabs.splice(from.tabs.indexOf(tab), 1);
     to.group.size /= 2;
-    const fresh = { tabs: [tab], active: tab, size: to.group.size };
+    const fresh = { tabs: [tab], active: tab, bySession: state.currentId ? { [state.currentId]: tab } : {}, size: to.group.size };
     const i = dock.groups.indexOf(to.group);
     dock.groups.splice(to.kind === 'above' ? i : i + 1, 0, fresh);
   }
@@ -4240,7 +4259,7 @@ function reopenItems() {
 function resetDock() {
   const tabs = ['changes', 'repo', ...dock.groups.flatMap((g) => g.tabs).filter((t) => isPanelTab(t) || isPluginDockTab(t))];
   for (const g of dock.groups) { g.el?.remove(); g.divider?.remove(); }
-  dock.groups = [{ tabs, active: 'changes', size: 1 }];
+  dock.groups = [{ tabs, active: 'changes', bySession: {}, size: 1 }];
   saveDock();
   renderGit();
 }
@@ -5319,7 +5338,7 @@ function onPanels(m) {
   if (c?.created && c.owner === state.currentId) {
     placePanels();   // its tab goes to the bottom group, and opens there
     const g = groupOfTab(panelTab(c));
-    if (g) { g.active = panelTab(c); saveDock(); }
+    if (g) { chooseTab(g, panelTab(c), c.owner); saveDock(); }
     if (!state.gitVisible) { state.gitVisible = true; store.set('gitVisible', true); applyGitVisibility(); }
   }
   renderGit();
