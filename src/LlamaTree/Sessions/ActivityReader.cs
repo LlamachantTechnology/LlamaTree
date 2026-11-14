@@ -26,7 +26,11 @@ internal sealed record ActivityEvent(DateTime T, string K, string? File, string?
 /// what that is measured against: where the agent last compacted on its own in this conversation when it has
 /// (<see cref="Learned"/>), else the model's window as far as it can be told (200k, or 1M once it has held more).
 /// </summary>
-internal sealed record ContextUsage(int Tokens, int Limit, bool Learned, int Compactions, DateTime? CompactedAt, string? Model);
+internal sealed record ContextUsage(int Tokens, int Limit, bool Learned, int Compactions, DateTime? CompactedAt, string? Model)
+{
+    /// <summary>What <see cref="Limit"/> is, in words after the number: "where Claude last compacted on its own", "the model's window".</summary>
+    public string? LimitIs { get; init; }
+}
 
 /// <summary>The events of one conversation. <see cref="Version"/> is the count, so a plugin can ask for what's new.</summary>
 internal sealed record ActivityEvents(long Version, IReadOnlyList<ActivityEvent> Events);

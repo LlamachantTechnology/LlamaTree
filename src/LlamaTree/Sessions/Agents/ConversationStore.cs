@@ -43,6 +43,12 @@ internal interface IConversationStore
 
     /// <summary>Moves its conversations of <paramref name="from"/> and the folders inside it to <paramref name="to"/>.</summary>
     void MoveFolder(string from, string to) { }
+
+    /// <summary>
+    /// How full the session's own conversation is (for the context meter), or null when the agent doesn't say or
+    /// nothing has been said in it yet.
+    /// </summary>
+    ContextUsage? Context(TerminalSession session) => null;
 }
 
 /// <summary>How a running session's conversation is found: the part that differs between agents that otherwise store alike.</summary>
@@ -114,6 +120,7 @@ internal abstract class ConversationStore(ILiveConversation live) : IConversatio
     public virtual bool Shows => true;
     public virtual bool MovesWithFolder => false;
     public virtual void MoveFolder(string from, string to) { }
+    public virtual ContextUsage? Context(TerminalSession session) => null;
 
     public string? Live(TerminalSession session, int[] processIds, IReadOnlySet<string> others) => live.Find(session, processIds, others);
 

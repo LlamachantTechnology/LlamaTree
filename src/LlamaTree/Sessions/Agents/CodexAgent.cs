@@ -14,11 +14,11 @@ internal sealed class CodexAgent : AgentProfile
     public override string Follows => "through /new and /resume";
 
     /// <summary>
-    /// Codex reports when it's waiting on you (OSC 7501 state=blocked) for approvals and questions, but not for the folder
-    /// trust check it can show at start, before it reports anything: "› 1. Trust and continue". Its prompt box starts
-    /// with "› " too, so only that choice counts.
+    /// Codex reports when it's waiting on you (OSC 7501 state=blocked) for approvals and questions, but not for what it can
+    /// ask at start, before it reports anything: the folder trust check ("› 1. Trust and continue") and an update to
+    /// install ("› 1. Update now"), whose Enter runs the update. Its prompt box starts with "› " too, so only those count.
     /// </summary>
-    public override AskingScreen Asks { get; } = new(@"^\s*› ?1\. Trust and continue\b");
+    public override AskingScreen Asks { get; } = new(@"^\s*› ?1\. (?:Trust and continue|Update now)\b");
 
     /// <summary>
     /// codex exec reading the prompt from standard input ("-") and printing only its answer: not saved (--ephemeral), in a
@@ -52,6 +52,9 @@ internal sealed class CodexAgent : AgentProfile
     private const string Server = "mcp_servers." + LlamaTree.Panels.PanelMcp.ServerName;
 
     public override IConversationStore Conversations { get; } = new CodexConversationStore();
+
+    /// <summary>Codex's /compact summarises the conversation as it sees fit, and /new starts another.</summary>
+    public override ConversationCommands Commands { get; } = new("/compact", false, "/new");
 
     /// <summary>
     /// The command line for a start of a codex session (see <see cref="CommandBuilder.Build"/>), with Codex's saved

@@ -100,17 +100,27 @@ Both come from the agent's saved transcript (a Claude session's process names it
 
 ## Context meter
 
-A long conversation answers worse well before it is full: early detail gets crowded out, and each automatic compaction is a summary of a summary. The chip on a Claude session's tile shows how full its conversation is: a bar, a percentage, and ↻ with the number of times it has been compacted. It turns amber at 50% and red at 80%, and from amber on the percentage also shows beside the session in the list down the left. Hovering shows the tokens Claude holds and what they are measured against: where Claude last compacted on its own in this conversation, or the model's window (200k, or 1M once the conversation has held more) until it has.
+A long conversation answers worse well before it is full: early detail gets crowded out, and each automatic compaction is a summary of a summary. The chip on a session's tile shows how full its conversation is: a bar, a percentage, and ↻ with the number of times it has been compacted. It turns amber at 50% and red at 80%, and from amber on the percentage also shows beside the session in the list down the left. Hovering shows the tokens the agent holds and what they are measured against:
 
-Clicking the chip offers three ways to cut the conversation down, from light to thorough:
+| | Read from | Measured against |
+|---|---|---|
+| Claude Code | its saved transcript | where Claude last compacted on its own in this conversation, or until then the model's window (200k, or 1M once the conversation has held more) |
+| Codex | its rollout's token counts | the model's window, as Codex reports it |
+| Antigravity | its transcript's steps | the window of the model it names (Gemini's 1M, Claude's 200k, GPT-OSS's 128k), which agy doesn't report |
+| Grok | its `signals.json`, and its log for a compaction since | where Grok compacts on its own: 85% of the model's window, or `auto_compact_threshold_percent` in its `config.toml` |
 
-- **Tidy** sends `/compact`, telling Claude to keep decisions, changed files, unfinished work, your standing instructions and the last few exchanges.
-- **Trim** sends `/compact`, telling Claude to keep only what the current task needs.
-- **Fresh start** asks Claude for a hand-off note. When it has written one you're shown it and can edit it; only then is the conversation cleared (`/clear`) and the new one given the note. The old conversation stays saved, and *Resume a different conversation…* brings it back.
+Straight after a compaction, an agent that doesn't say what it left (Codex, Antigravity) shows 0% until its next reply.
 
-Each shows what it will send before it sends, and you can change the wording for that once. *What these send…* in the same menu changes it for good (kept on this machine). A clean-up is typed into the session as if you had typed it, so the session has to be idle: not working, and not asking you something.
+Clicking the chip offers ways to cut the conversation down, from light to thorough:
 
-The numbers come from Claude's saved transcript, as the conversation rail does. Codex sessions have no meter yet.
+- **Tidy** (Claude Code) sends `/compact`, telling Claude to keep decisions, changed files, unfinished work, your standing instructions and the last few exchanges.
+- **Trim** (Claude Code) sends `/compact`, telling Claude to keep only what the current task needs.
+- **Compact** (Codex, Antigravity, Grok) sends `/compact` on its own: their `/compact` doesn't take what to keep (Antigravity would answer the text as a new prompt), so they summarise as they see fit.
+- **Fresh start** asks the agent for a hand-off note. When it has written one you're shown it and can edit it; only then is the conversation cleared (`/clear` for Claude Code and Antigravity, `/new` for Codex and Grok) and the new one given the note. The note is a summary of the work, so take out anything you don't want the new conversation to carry on with. The old conversation stays saved, and *Resume a different conversation…* brings it back.
+
+Each shows what it will send before it sends, and you can change the wording for that once. *What these send…* in the same menu changes it for good (kept on this machine). A clean-up is typed into the session as if you had typed it, so the session has to be idle: not working, and not asking you something (a menu the agent shows at start, such as Codex offering an update, counts as asking).
+
+The numbers come from each agent's own files, as the conversation rail's do.
 
 ### Session notes
 
