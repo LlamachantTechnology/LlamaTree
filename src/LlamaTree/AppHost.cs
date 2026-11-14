@@ -579,6 +579,17 @@ internal sealed partial class AppHost
     };
 
     /// <summary>
+    /// For an agent whose panels are registered in its own settings: registers the bridge before its first session
+    /// starts (see <see cref="Panels.PanelRegistration"/>). False if the session was removed meanwhile.
+    /// </summary>
+    private async Task<bool> PanelsReady(TerminalSession s)
+    {
+        if (panelServer == null || s.Agent is not { Panels: Sessions.PanelConnection.Registered } agent) return true;
+        await Panels.PanelRegistration.EnsureAsync(agent, s.Info.Directory);
+        return sessions.TryGetValue(s.Id, out var now) && now == s;
+    }
+
+    /// <summary>
     /// How the session reaches the panel server (this run's port and the session's token), writing Claude's --mcp-config
     /// file; null if panels are unavailable.
     /// </summary>
@@ -781,8 +792,8 @@ internal sealed partial class AppHost
             // The conversations can take a moment (a long one is rewritten); the session's place is already saved.
             await Task.Run(() =>
             {
-                FolderMove.MoveClaudeConversations(from, to);
-                FolderMove.MoveCodexConversations(from, to);
+                foreach (var agent in Agents.All)
+                    if (agent.Conversations is { MovesWithFolder: true } store) store.MoveFolder(from, to);
             });
         }
         finally
@@ -951,6 +962,7 @@ internal sealed partial class AppHost
             case "start":
             {
                 var s = Get(msg);
+                if (!await PanelsReady(s)) return new { prompted = false };
                 tails[s.Id].Clear();
                 var prompted = s.FirstPromptOnce != null;   // starts on a prompt: its first output is work, not start-up
                 s.Start(Int(msg, "cols"), Int(msg, "rows"), OptStr(msg, "theme"), PanelLinkFor(s));
@@ -980,6 +992,7 @@ internal sealed partial class AppHost
             case "restart":
             {
                 var s = Get(msg);
+                if (!await PanelsReady(s)) return new { prompted = false };
                 CatchUpConversation(s);   // a session with its own conversation restarts in the one it's in now
                 // Restarting to pick up a new theme: carry on in the exact conversation the session is in.
                 if (Bool(msg, "resume") && s.IsRunning && LiveConversation(s) is { } live)

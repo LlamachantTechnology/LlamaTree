@@ -2071,11 +2071,17 @@ setInterval(() => {
       else renderTileState(s);
     }
     // Once the screen has settled after new output has been drawn (mid-redraw it can be half drawn), see whether the
-    // agent is asking. Only agents: a shell or a dev server can print text that looks like their menus.
-    const asks = s.running && !s.reportsState && a.drawnAt !== a.readAt && now - a.drawnAt > 250 && askingScreen(s.command);
+    // agent is asking. Only agents: a shell or a dev server can print text that looks like their menus. An agent that
+    // keeps redrawing while it asks (Grok ticks a timer) never settles, so its screen is read once a second anyway, and
+    // such a reading only counts once the next one agrees, so a half-drawn screen can't flip the dot.
+    const settled = now - a.drawnAt > 250;
+    const asks = s.running && !s.reportsState && a.drawnAt !== a.readAt && (settled || now - (a.readTime ?? 0) > 1000) && askingScreen(s.command);
     if (asks) {
       a.readAt = a.drawnAt;
-      setAsking(s, isAsking(s.term, asks));
+      a.readTime = now;
+      const on = isAsking(s.term, asks);
+      if (settled || a.lastReading === on) setAsking(s, on);
+      a.lastReading = on;
     }
   }
 }, 500);
@@ -2115,15 +2121,16 @@ function askingScreen(command) {
 }
 
 // An agent asks by putting a menu on screen, with a line its profile recognises (Claude's picked numbered choice, say).
-// While its prompt box (a rule with the prompt under it) is there, it wants a prompt instead, so text like that in the
-// conversation above doesn't count.
+// A menu above its prompt box (a rule with the prompt under it) has been answered, and the box wants a prompt, so text
+// like that in the conversation above doesn't count; a menu below the last prompt box does (agy keeps an answered
+// menu's lines in the conversation, and its prompts there sit under a rule like the box's).
 function isAsking(term, asks) {
   const b = term.buffer.active;
   let choice = false, prev = '';
   for (let y = b.baseY; y < b.baseY + term.rows; y++) {
     const line = b.getLine(y)?.translateToString(true) ?? '';
-    if (asks.promptRule?.test(prev) && asks.promptLine?.test(line)) return false;
-    if (asks.choice.test(line)) choice = true;
+    if (asks.promptRule?.test(prev) && asks.promptLine?.test(line)) choice = false;
+    else if (asks.choice.test(line)) choice = true;
     prev = line;
   }
   return choice;
