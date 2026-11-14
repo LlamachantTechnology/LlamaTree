@@ -213,6 +213,7 @@ plugins\
   In the project and session menus, plugins' items are under a **Plugins** heading at the end, each with its plugin's name beside it.
 - **`access`:** what it asks for beyond its own page, one or a list: `"sessions"` (see [Seeing your sessions](#seeing-your-sessions)), `"message"` (see [Messaging your sessions](#messaging-your-sessions)), and `"ask"` (see [Asking Claude about your sessions](#asking-claude-about-your-sessions)). Leave it out and it gets nothing. No access lets a plugin type into a session as you: what it has to say reaches an agent as a message from it.
 - **`inbox`:** `true` lets sessions message it first, not only answer what it sends them (it needs `"message"` access too).
+- **`background`:** `true` runs its page from when the app opens, out of sight, so it can answer messages sessions send it while its tab isn't open. Opening it moves the page into its tab, where it loads afresh, and closing the tab puts it back out of sight. It runs only while the window is open.
 - **`toolbar`:** a button in the title bar, after New Session and Git Changes, set apart from them.
   - **`icon`** is an image file in the plugin's folder (SVG, PNG, ICO, GIF, JPEG or WebP, up to 64 KB). The button shows only the icon, never text, so it can't pass for one of the app's own buttons.
   - Its tooltip is the plugin's name, then **`tooltip`** if given.
@@ -251,6 +252,15 @@ By the menu it came from:
 A plugin's items are only on the sessions and projects it may see: it needs `access` that you haven't refused, and a session in its projects that you haven't hidden from it. Until you've answered, its items are there, but say only `{ menu }`; choosing one is how it gets to ask. Its title bar button is always there, with the session fields only for a session it may see.
 
 Without `access`, that's all a plugin learns. The session id tells clicks on different sessions apart and stays the same while the session exists; it isn't a way into the session. The folder is the one the session runs in; the plugin still can't read it.
+
+### Keeping data
+
+A plugin's page has no storage of its own, so the app keeps data for it: one JSON value, up to 5 MB, saved in `plugin-data\<id>.json` in the app's data folder. Only that plugin can read or change it, so it needs no access. It's deleted when you remove the plugin with **Remove** in Get plugins.
+
+| Request | Answer |
+|---|---|
+| `getData` | What it last saved, or `null`. |
+| `setData` `{ data }` | Keeps `data` (any JSON) in place of what it kept; `null` deletes it. Answers `true`, or an error if it's more than 5 MB. |
 
 ### Seeing your sessions
 
@@ -317,7 +327,7 @@ A plugin is only a page. It's given no terminals, files or Git, no sessions unle
 
 - it runs in a sandboxed frame with an origin of its own, so it can't read or change the app's page, or another plugin's;
 - the app listens to it only for the messages above, never through the bridge the app's own page uses, and answers a request only with what that plugin was allowed to see;
-- it can't navigate the app, open windows, or use storage, the clipboard, the camera or notifications;
+- it can't navigate the app, open windows, or use the browser's storage, the clipboard, the camera or notifications (it keeps data through the app instead: see [Keeping data](#keeping-data));
 - other origins can't read a plugin's files, and its frame can't leave its own plugin's address.
 
 It can still run scripts, show forms and dialogs, load files from its own folder, and reach websites as any page can. Its page reloads when its tab is closed, or dragged to another group.

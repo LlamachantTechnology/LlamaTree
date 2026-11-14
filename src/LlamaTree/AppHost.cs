@@ -242,6 +242,7 @@ internal sealed partial class AppHost
 
     /// <summary>Your answers about plugins (see PluginGrants), kept in plugin-grants.json.</summary>
     private readonly PluginGrants grants = new(Path.Combine(SessionStore.AppDataFolder, "plugin-grants.json"));
+    private readonly PluginData pluginData = new(Path.Combine(SessionStore.AppDataFolder, "plugin-data"));
 
     /// <summary>Sessions starting and driving others (start_session and the rest); what each may do is kept in control.json.</summary>
     private SessionControl? control;
@@ -1300,6 +1301,16 @@ internal sealed partial class AppHost
             case "plugins.forget":
                 grants.Forget(Str(msg, "id"));
                 return null;
+            case "plugins.data.get":
+                // What a plugin saved for itself (PluginData): the page asks for the plugin whose request it's answering.
+                return new { data = await Task.Run(() => pluginData.Get(Str(msg, "id"))) };
+            case "plugins.data.set":
+            {
+                var id = Str(msg, "id");
+                var data = msg.TryGetProperty("data", out var d) ? d.Clone() : default;
+                await Task.Run(() => pluginData.Set(id, data));
+                return null;
+            }
             case "plugins.grants.import":
             {
                 // Answers the page kept itself before they were kept here; taken only into an empty store. Never from a
@@ -1482,7 +1493,7 @@ internal sealed partial class AppHost
                 relay.SetPeers(RelayPeers());
                 return new { folder = PluginFolder, plugins = found.Select(p => new { id = p.Id, title = p.Title, description = p.Description, url = window.PluginBase(p.Id) + p.Entry, placement = p.Placement,
                     menu = p.Menu.Select(i => new { label = i.Label, command = i.Command, where = i.Where }), access = p.Access, inbox = p.Inbox, icon = p.Icon,
-                    toolbar = p.Toolbar is { } t ? new { icon = t.Icon, tooltip = t.Tooltip, command = t.Command } : null }), problems };
+                    background = p.Background, toolbar = p.Toolbar is { } t ? new { icon = t.Icon, tooltip = t.Tooltip, command = t.Command } : null }), problems };
             }
             case "plugins.openFolder":
                 Directory.CreateDirectory(PluginFolder);
@@ -1594,6 +1605,7 @@ internal sealed partial class AppHost
                 var id = Str(msg, "id");
                 await Task.Run(() => GalleryService.RemovePlugin(PluginFolder, id));
                 grants.Forget(id);   // installed again, it asks again
+                pluginData.Forget(id);   // and starts with nothing kept
                 return null;
             }
             case "gallery.installTheme":

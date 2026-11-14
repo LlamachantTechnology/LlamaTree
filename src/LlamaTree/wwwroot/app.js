@@ -8397,8 +8397,34 @@ async function loadPlugins() {
     Object.assign(plugins, { list: r.plugins, problems: r.problems, folder: r.folder, loaded: true });
     renderPluginButtons();
     seatPanelPlugins();
+    pluginsReplacing.clear();
+    runBackgroundPlugins();
   }
   catch (e) { console.error('The plugins could not be read', e); }
+}
+
+/**
+ * A plugin whose plugin.json says "background": true runs from when the app has read the plugins, out of sight, so it
+ * can answer messages sessions send it while its tab isn't open. Opening it moves its page into its tab (where it loads
+ * afresh); closing the tab puts it back here.
+ */
+// Plugins being updated or removed (closePluginEverywhere): they don't start again here until the plugins are read again.
+const pluginsReplacing = new Set();
+
+function runBackgroundPlugins() {
+  let holder = $('#pluginBackground');
+  if (!holder) {
+    holder = h('div', { id: 'pluginBackground', hidden: true, 'aria-hidden': 'true' });
+    document.body.append(holder);
+  }
+  // One that's gone, or no longer asks to run in the background, stops.
+  for (const [id, f] of [...pluginFrames]) if (f.frame.parentNode === holder && !pluginById(id)?.background) closePluginFrame(id);
+  for (const p of plugins.list) {
+    if (!p.background || pluginFrames.has(p.id) || pluginsReplacing.has(p.id)) continue;
+    const f = pluginFrame(p);
+    f.ready = false;
+    holder.append(f.frame);
+  }
 }
 
 // A side panel plugin takes a tab in the side panel on its own, so it's there without being opened first; one you
@@ -8582,6 +8608,7 @@ function closePluginFrame(id) {
   pluginFrames.get(id)?.frame.remove();
   pluginFrames.delete(id);
   pluginPlaces.delete(id);
+  if (pluginById(id)?.background && !pluginsReplacing.has(id)) setTimeout(runBackgroundPlugins);   // a background plugin carries on out of sight
 }
 
 /**
@@ -9040,6 +9067,7 @@ async function galleryDo(by, id, work) {
 
 /** A plugin's page closes before its folder is replaced or removed (its files can't be swapped under it); says whether it had a tab open. */
 function closePluginEverywhere(id) {
+  pluginsReplacing.add(id);   // updated or removed: it starts again, if at all, once the plugins are read again
   const hadTab = docs.tabs.some((t) => t.key === pluginKey(id));
   if (hadTab) closeDoc(pluginKey(id));
   if (groupOfTab('plugin:' + id)) closeDockPlugin('plugin:' + id, false);
@@ -9962,9 +9990,15 @@ const pluginSessionInfo = (s) => ({
  *   ask { question, ids, history } → { answer, writer, sessions }: Claude run headless with no tools (or Codex read-only
  *                          when Claude isn't installed; writer names it) answers the question from the conversations of the sessions named; history is earlier
  *                          [{ question, answer }] of the same chat, so a follow-up makes sense
+ * Any plugin, with no access asked for:
+ *   getData → what it last saved with setData, or null
+ *   setData { data } → keeps data (any JSON, up to 5 MB) for it alone, in place of what it kept; null removes it
  * Nothing lets a plugin type into a session: what it has to say reaches an agent as a message from it ("message").
  */
 async function pluginRequest(p, m) {
+  // Its own data (PluginData.cs): kept for it alone, so asking for it needs no access you allow.
+  if (m.name === 'getData') return (await request('plugins.data.get', { id: p.id })).data ?? null;
+  if (m.name === 'setData') { await request('plugins.data.set', { id: p.id, data: m.data ?? null }); return true; }
   // A session hidden from the plugin is, to it, a session that doesn't exist.
   const sees = (id) => state.byId.has(id) && pluginSeesSession(p.id, id);
   const sessionArg = () => {
