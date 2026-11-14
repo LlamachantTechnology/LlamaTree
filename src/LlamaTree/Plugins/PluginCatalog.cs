@@ -18,9 +18,11 @@ namespace LlamaTree.Plugins;
 /// <param name="Icon">Its icon, shown beside its name in menus, its tab and Permissions: "icon" in its plugin.json, else its
 /// title bar button's, as a data: URL (see <see cref="PluginButton"/>); null for the app's plugin icon.</param>
 /// <param name="Version">"version" in its plugin.json (major.minor.patch), as plugins from Get plugins have; null if it has none.</param>
+/// <param name="Background">Whether its page runs from when the app opens, out of sight until you open it ("background":
+/// true), so it can answer messages sessions send it while its tab isn't open.</param>
 internal sealed record PluginInfo(string Id, string Title, string? Description, string Entry, string Folder, string Placement,
     IReadOnlyList<PluginMenuItem> Menu, IReadOnlyList<string> Access, PluginButton? Toolbar = null, bool Inbox = false, string ManifestHash = "",
-    string? Icon = null, string? Version = null)
+    string? Icon = null, string? Version = null, bool Background = false)
 {
     public string Host => PluginCatalog.HostFor(Id);
     public string Url => $"https://{Host}/{Entry}";
@@ -117,7 +119,8 @@ internal static partial class PluginCatalog
                     Inbox: root.TryGetProperty("inbox", out var inbox) && inbox.ValueKind == JsonValueKind.True,
                     ManifestHash: Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)),
                     Icon: icon ?? button?.Icon,
-                    Version: Str(root, "version") is { } v && VersionPattern().IsMatch(v) ? v : null));
+                    Version: Str(root, "version") is { } v && VersionPattern().IsMatch(v) ? v : null,
+                    Background: root.TryGetProperty("background", out var background) && background.ValueKind == JsonValueKind.True));
             }
             catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
             {
