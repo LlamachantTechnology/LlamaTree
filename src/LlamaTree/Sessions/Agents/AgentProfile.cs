@@ -21,14 +21,6 @@ internal sealed record Launch(
 /// <param name="PromptLine">The first line of its prompt box, under <paramref name="PromptRule"/>.</param>
 internal sealed record AskingScreen(string Choice, string? PromptRule = null, string? PromptLine = null);
 
-/// <summary>
-/// The commands an agent's conversation is cleaned up with, typed at its prompt (the context meter's clean-ups).
-/// </summary>
-/// <param name="Compact">Replaces the conversation with a summary: "/compact".</param>
-/// <param name="CompactTakesWhatToKeep">Whether text after it says what the summary keeps (Claude's does; agy answers it as a prompt).</param>
-/// <param name="Clear">Starts a new conversation: "/clear", "/new".</param>
-internal sealed record ConversationCommands(string Compact, bool CompactTakesWhatToKeep, string Clear);
-
 /// <summary>The colour the page marks an agent's things with (CSS colours), one for each theme so text stays readable.</summary>
 internal sealed record AgentColor(string Dark, string Light);
 
@@ -72,8 +64,11 @@ internal abstract class AgentProfile
     /// <summary>Its saved conversations, or null when the app doesn't follow them (its sessions just run as typed).</summary>
     public virtual IConversationStore? Conversations => null;
 
-    /// <summary>How its conversation is compacted or cleared, for the context meter; null when the app doesn't offer that.</summary>
-    public virtual ConversationCommands? Commands => null;
+    /// <summary>
+    /// The command typed at its prompt that replaces the conversation with a summary ("/compact"), which the context
+    /// meter offers; null for an agent with no meter.
+    /// </summary>
+    public virtual string? CompactCommand => null;
 
     /// <summary>Anything only this agent adds to an interactive start (Claude's theme --settings), after the first prompt.</summary>
     public virtual IEnumerable<string> ExtraArguments(Launch launch, ParsedCommand parsed) => [];
@@ -152,7 +147,7 @@ internal abstract class AgentProfile
     {
         id = Id, name = Name, programs = Programs, color = Color, choosesId = ChoosesConversationId, follows = Follows,
         ownConversation = Command.OwnConversationPattern, @continue = Command.ContinuePattern, showsConversation = ShowsConversation, asks = Asks,
-        suggests = HeadlessCommand != null, commands = Conversations != null ? Commands : null,
+        suggests = HeadlessCommand != null, compact = Conversations != null ? CompactCommand : null,
     };
 
     /// <summary>The start's questions answered from the agent's store (or, without one, as for a conversation never saved).</summary>

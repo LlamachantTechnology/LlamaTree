@@ -10,17 +10,11 @@ namespace LlamaTree.Tests;
 public class AgentContextCommandsTests
 {
     [Fact]
-    public void Every_agent_says_how_its_conversation_is_compacted_and_cleared()
+    public void Every_agent_tells_the_page_its_compact_command()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         foreach (var agent in Agents.All)
-        {
-            var commands = JsonSerializer.SerializeToElement(agent.Describe(), options).GetProperty("commands");
-            Assert.Equal("/compact", commands.GetProperty("compact").GetString());
-            Assert.StartsWith("/", commands.GetProperty("clear").GetString());
-        }
-        // Only Claude's /compact takes what to keep: agy answers the text as a prompt, Codex and Grok take none.
-        Assert.Equal(["claude"], Agents.All.Where(a => a.Commands!.CompactTakesWhatToKeep).Select(a => a.Id));
+            Assert.Equal("/compact", JsonSerializer.SerializeToElement(agent.Describe(), options).GetProperty("compact").GetString());
     }
 
     [Theory]

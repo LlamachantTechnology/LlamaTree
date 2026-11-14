@@ -111,24 +111,9 @@ A long conversation answers worse well before it is full: early detail gets crow
 
 Straight after a compaction, an agent that doesn't say what it left (Codex, Antigravity) shows 0% until its next reply.
 
-Clicking the chip offers ways to cut the conversation down, from light to thorough:
-
-- **Tidy** (Claude Code) sends `/compact`, telling Claude to keep decisions, changed files, unfinished work, your standing instructions and the last few exchanges.
-- **Trim** (Claude Code) sends `/compact`, telling Claude to keep only what the current task needs.
-- **Compact** (Codex, Antigravity, Grok) sends `/compact` on its own: their `/compact` doesn't take what to keep (Antigravity would answer the text as a new prompt), so they summarise as they see fit.
-- **Fresh start** asks the agent for a hand-off note. When it has written one you're shown it and can edit it; only then is the conversation cleared (`/clear` for Claude Code and Antigravity, `/new` for Codex and Grok) and the new one given the note. The note is a summary of the work, so take out anything you don't want the new conversation to carry on with. The old conversation stays saved, and *Resume a different conversation…* brings it back.
-
-Each shows what it will send before it sends, and you can change the wording for that once. *What these send…* in the same menu changes it for good (kept on this machine). A clean-up is typed into the session as if you had typed it, so the session has to be idle: not working, and not asking you something (a menu the agent shows at start, such as Codex offering an update, counts as asking).
+Clicking the chip offers **Compact**, which types the agent's own `/compact` into the session, as you could. The agent replaces the conversation with a summary of its own; the conversation's file keeps what was said. It is only typed while the session is idle: not working, and not asking you something (a menu the agent shows at start, such as Codex offering an update, counts as asking).
 
 The numbers come from each agent's own files, as the conversation rail's do.
-
-### Session notes
-
-A summary keeps the gist and loses the detail. **Session notes** are a record outside the conversation that a compaction or a fresh start can't touch: a Markdown file per session in LlamaTree's data folder (`notes`).
-
-*Session notes…* in a session's menu, or in the context meter's, shows the notes and lets you edit them. Tick **Have the agent keep notes** and the session's agent is given two tools from its next start (you're offered a restart, which carries on the conversation, and the agent is then told once in that conversation): `save_note`, which it is asked to call when a piece of work is finished, a decision is made or the task changes, and `read_notes`, which it is asked to call when its conversation starts from a summary or a hand-off note. It is off until you turn it on, since it has the agent do a little more on each task. Hand-off notes from *Fresh start* are kept there either way.
-
-The notes stay on your computer and go when you remove the session.
 
 ## Projects
 

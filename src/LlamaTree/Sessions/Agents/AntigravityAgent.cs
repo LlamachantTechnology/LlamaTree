@@ -45,8 +45,7 @@ internal sealed class AntigravityAgent : AgentProfile
 
     public override IConversationStore Conversations { get; } = new AntigravityConversationStore();
 
-    /// <summary>agy answers text after /compact as a prompt once it has summarised, so it's sent alone; /clear starts another conversation.</summary>
-    public override ConversationCommands Commands { get; } = new("/compact", false, "/clear");
+    public override string CompactCommand => "/compact";
 
     /// <summary>The permission rule that allows every tool of the panel server.</summary>
     internal const string PanelToolsRule = "mcp(" + LlamaTree.Panels.PanelMcp.ServerName + "/*)";

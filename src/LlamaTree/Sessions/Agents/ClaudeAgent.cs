@@ -33,8 +33,7 @@ internal sealed class ClaudeAgent(Func<string?, string?>? themeFile = null) : Ag
 
     public override IConversationStore Conversations { get; } = new ClaudeConversationStore();
 
-    /// <summary>/compact takes what the summary is to keep.</summary>
-    public override ConversationCommands Commands { get; } = new("/compact", true, "/clear");
+    public override string CompactCommand => "/compact";
 
     /// <summary>Haiku with no tools or MCP servers, not saved (so it doesn't appear among the conversations to resume).</summary>
     public override string HeadlessCommand => "claude -p --model haiku --tools \"\" --strict-mcp-config --no-session-persistence --output-format text";

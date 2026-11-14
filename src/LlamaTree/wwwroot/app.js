@@ -271,7 +271,6 @@ host.addEventListener('message', (e) => {
     case 'git.status': onGitStatus(m); break;
     case 'panels': onPanels(m); break;
     case 'typePrompt': typePrompt(m.id, m.text); break;
-    case 'notes.tell': notesTell(m.id); break;
     case 'newConversations': showNewConversations(m.ids); break;
     case 'relay': relayChanged(m.state); break;
     case 'relay.ask': askRelay(m.from, m.to); break;
@@ -2274,40 +2273,12 @@ function renderTileHeader(s) {
 //
 // How full a session's conversation is, on its tile: the tokens its agent holds against where it would compact on its
 // own, or the model's window (see ContextUsage in ActivityReader.cs, and each agent's conversation store). A
-// conversation answers worse long before it is full, so the meter turns amber, then red, well ahead of that, and a
-// click offers ways to cut it down. The app can't take things out of a conversation; it types what you could type (the
-// agent's /compact, with what to keep where it takes that, or a hand-off note and its /clear or /new), and shows you
-// what it will send first. Any agent whose profile names those commands (agent.commands) gets the meter.
+// conversation answers worse long before it is full, so the meter turns amber, then red, well ahead of that. A click
+// offers the agent's own compact command (agent.compact), typed as you could type it; any agent whose profile names one
+// has a meter.
 
 const CONTEXT_POLL_MS = 10_000;
 const CONTEXT_WARM = 50, CONTEXT_HOT = 80;   // percent of the limit
-/**
- * The clean-ups an agent offers: Tidy and Trim where its compact command takes what to keep (Claude's), a plain Compact
- * where it doesn't, and Fresh start for every one.
- */
-const contextKinds = (agent) => [
-  ...(agent.commands.compactTakesWhatToKeep ? [
-    { id: 'tidy', name: 'Tidy', label: 'Tidy: compact, keeping most of it', help: `${agent.name} replaces the conversation with a summary that keeps most of the working state.` },
-    { id: 'trim', name: 'Trim', label: 'Trim: compact down to the current task', help: `${agent.name} replaces the conversation with a summary of the current task only.` },
-  ] : [
-    { id: 'compact', name: 'Compact', label: 'Compact: summarise the conversation', help: `${agent.name} replaces the conversation with a summary of its own choosing. It doesn't take what to keep.` },
-  ]),
-  { id: 'fresh', name: 'Fresh start', label: 'Fresh start: a hand-off note, then a new conversation', help: `${agent.name} writes a hand-off note, which you see and can edit. Then the conversation is cleared and the new one is given the note.` },
-];
-/** What Tidy and Trim tell the compact command to keep (it goes after it), and what Fresh start asks for. */
-const CONTEXT_SENDS = {
-  tidy: 'Keep the decisions made and why, the files changed and their paths, what is unfinished, instructions I gave that still apply, and the detail of the last few exchanges. Drop tool output, file contents that can be read again and dead ends.',
-  trim: 'Keep only what the current task needs: its goal, the files involved, what is done, what is next, and instructions I gave that still apply. Drop everything about earlier, finished tasks.',
-  fresh: 'Write a hand-off note for a fresh conversation that will have none of this one. Say what we are working on and why, what is done, what is left, the files and commands that matter, the decisions made and the instructions I gave that still apply. Write only the note, as your whole reply, and use no tools.',
-};
-const CONTEXT_CARRY = 'Carry on from this hand-off note, written at the end of the previous conversation:\n\n';
-const contextSends = () => ({ ...CONTEXT_SENDS, ...store.get('context.sends', {}) });
-/** What a clean-up types into the session: the agent's compact command (with what to keep, for Tidy and Trim), or Fresh start's request. */
-function contextSend(agent, kind) {
-  const sends = contextSends();
-  if (kind === 'fresh') return sends.fresh;
-  return kind === 'compact' ? agent.commands.compact : `${agent.commands.compact} ${sends[kind]}`;
-}
 const contextPct = (c) => Math.min(100, Math.round(c.tokens / c.limit * 100));
 const contextLevel = (c) => { const p = contextPct(c); return p >= CONTEXT_HOT ? 'hot' : p >= CONTEXT_WARM ? 'warm' : ''; };
 const kTokens = (n) => (n >= 1_000_000 ? (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(n));
@@ -2325,18 +2296,17 @@ function contextLine(s) {
 function contextChip(s) {
   const c = s.ctx;
   if (!c) return null;
-  const waiting = !!s.ctxFresh;
   return h('button', {
-    class: 'chip ctx ' + contextLevel(c) + (waiting ? ' waiting' : ''),
-    title: `${contextLine(s)}${waiting ? '\nWaiting for the hand-off note' : ''}\nClick to clean it up`,
+    class: 'chip ctx ' + contextLevel(c),
+    title: `${contextLine(s)}\nClick to compact it`,
     onclick: (e) => { const r = e.currentTarget.getBoundingClientRect(); contextMenu(s, r.left, r.bottom + 2); },
-  }, h('span', { class: 'ctx-bar' }, h('span', { style: `width: ${Math.max(6, contextPct(c))}%` })), waiting ? 'note…' : contextPct(c) + '%',
+  }, h('span', { class: 'ctx-bar' }, h('span', { style: `width: ${Math.max(6, contextPct(c))}%` })), contextPct(c) + '%',
   c.compactions ? h('span', { class: 'ctx-n' }, '↻' + c.compactions) : null);
 }
 
 /** Asks the app how full the session's conversation is, and redraws its tile's header when the answer has changed. */
 async function loadContext(s) {
-  if (!agentOf(s.command)?.commands || s.ctxLoading) return;   // only an agent that can be cleaned up has a meter
+  if (!agentOf(s.command)?.compact || s.ctxLoading) return;   // only an agent that can be compacted has a meter
   s.ctxLoading = true;
   let c = null;
   try { const r = await request('context', { id: s.id }); c = r?.found ? r : null; } catch { /* the session went away, or its server can't say */ } finally { s.ctxLoading = false; }
@@ -2365,171 +2335,23 @@ setInterval(() => {
 setTimeout(() => { for (const s of state.sessions) loadContext(s); }, 1500);
 
 function contextMenu(s, x, y) {
+  const agent = agentOf(s.command);
   showMenu(x, y, [
     { header: s.ctx ? `Context ${contextPct(s.ctx)}% · ${kTokens(s.ctx.tokens)} of ${kTokens(s.ctx.limit)} tokens` : 'Context' },
-    ...(s.ctxFresh
-      ? [{ header: 'Waiting for the hand-off note…' }, { label: 'Cancel the fresh start', action: () => { s.ctxFresh = null; renderTileHeader(s); } }]
-      : contextKinds(agentOf(s.command)).map((k) => ({ label: k.label, action: () => contextCleanUp(s, k) }))),
-    '-',
-    { label: 'Session notes…', action: () => sessionNotes(s) },
-    { label: 'What these send…', action: contextSettings },
+    { label: `Compact (${agent.compact})`, action: () => compactNow(s) },
   ]);
 }
 
-/** Whether a clean-up can be typed into the session now: it has to be at its prompt, not working or asking you something. */
-function contextReady(s) {
+/**
+ * Types the agent's compact command into the session, as you could. Only at its prompt: not working, and not asking
+ * you something (a menu at its start counts, such as Codex offering an update, whose Enter would install it).
+ */
+function compactNow(s) {
   const why = !s.running ? 'isn’t running' : s.asking ? 'is asking you something' : s.act.state === 'working' ? 'is working' : null;
-  if (why) toast(`“${s.name}” ${why}. Clean up its context when it’s idle.`, true);
-  return !why;
-}
-
-const contextText = (value, rows) => { const t = h('textarea', { class: 'ctx-text', spellcheck: 'false', rows }); t.value = value; return t; };
-
-/** One of the clean-ups: shows what will be sent, which you can change for this once, and sends it on your say. */
-function contextCleanUp(s, kind) {
-  if (!contextReady(s)) return;
-  const box = contextText(contextSend(agentOf(s.command), kind.id), kind.id === 'fresh' ? 6 : kind.id === 'compact' ? 1 : 5);
-  const send = () => {
-    const fresh = kind.id === 'fresh';
-    const text = fresh ? typeable(box.value, '\n\t').trim() : typeable(box.value.replace(/\s+/g, ' ')).trim();   // a slash command is one line
-    if (!text) return;
-    closeModal();
-    if (!contextReady(s)) return;
-    s.term.paste(text);
-    enterAfterTyping(s);
-    if (fresh) awaitHandoff(s, text);
-    else toast(`Asked “${s.name}” to compact its conversation.`);
-  };
-  openModal(`${kind.name}: “${s.name}”`, [
-    h('div', {}, kind.help),
-    h('div', { class: 'field' }, h('label', {}, 'This is sent to the session'), box,
-      h('div', { class: 'help' }, kind.id === 'fresh' ? 'Nothing is cleared until you have seen the note.' : 'A summary can’t be undone, though the conversation’s file keeps what was said.')),
-  ], [
-    h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
-    h('button', { class: 'btn primary', onclick: send }, 'Send'),
-  ]);
-}
-
-/**
- * A fresh start's wait: once the agent has answered the request for a note and is idle again, the note is shown for you
- * to edit, and only then is the conversation cleared and the new one given it. The wait ends if you cancel it, the
- * session stops, or ten minutes pass.
- */
-async function awaitHandoff(s, asked) {
-  const mine = s.ctxFresh = { since: Date.now() };
-  renderTileHeader(s);
-  toast(`Asked “${s.name}” for a hand-off note. You’ll see it before anything is cleared.`);
-  const head = asked.replace(/\s+/g, ' ').slice(0, 60);
-  let last = null;
-  const done = (message) => { if (s.ctxFresh === mine) { s.ctxFresh = null; if (state.byId.get(s.id) === s) renderTileHeader(s); if (message) toast(message, true); } };
-  while (s.ctxFresh === mine) {
-    await new Promise((r) => setTimeout(r, 2000));
-    if (s.ctxFresh !== mine) return;
-    if (!s.running || state.byId.get(s.id) !== s) return done();
-    if (Date.now() - mine.since > 600_000) return done(`No hand-off note from “${s.name}” after ten minutes; nothing was cleared.`);
-    await loadConversation(s, true);
-    const turn = (s.convFull?.turns ?? []).findLast((t) => (t.prompt ?? '').replace(/\s+/g, ' ').startsWith(head));
-    const note = turn?.items.findLast((it) => it.kind !== 'tool' && it.text?.trim())?.text.trim();
-    const idle = !s.asking && s.act.state !== 'working';
-    // The same note twice running, with the agent idle: it has finished writing it. A dialog you have open is left alone.
-    if (note && idle && note === last && $('#modalHost').hidden) { done(); return showHandoff(s, note); }
-    last = note ?? null;
-  }
-}
-
-function showHandoff(s, note) {
-  const box = contextText(note, 16);
-  const go = () => {
-    const text = typeable(box.value, '\n\t').trim();
-    if (!text) return;
-    closeModal();
-    if (!contextReady(s)) return;
-    request('notes.add', { id: s.id, text, heading: 'Hand-off note' }).catch(() => {});   // kept with the session's notes, whatever becomes of the conversation
-    s.term.paste(agentOf(s.command)?.commands?.clear ?? '/clear');
-    enterAfterTyping(s);
-    // The agent clears at once; the note goes in when its empty prompt is up.
-    setTimeout(() => { if (!s.running) return; s.term.paste(CONTEXT_CARRY + text); enterAfterTyping(s); }, 2500);
-    toast(`“${s.name}” starts again from its hand-off note.`);
-  };
-  openModal(`Fresh start: “${s.name}”`, [
-    h('div', {}, 'This is the note the new conversation starts from. Add what it misses, then clear the conversation and carry on from it.'),
-    h('div', { class: 'field' }, h('label', {}, 'Hand-off note'), box,
-      h('div', { class: 'help' }, 'The note is kept in the session’s notes. The old conversation stays saved: Resume a different conversation… in the session’s menu brings it back.')),
-  ], [
-    h('button', { class: 'btn', onclick: closeModal }, 'Cancel, keep the conversation'),
-    h('button', { class: 'btn primary', onclick: go }, 'Clear and carry on'),
-  ]);
-}
-
-/**
- * A session's notes (SessionNotes.cs): a record outside its conversation, which a compaction or a fresh start can't
- * touch. Here you read and edit them, and say whether the session's agent is to keep them itself.
- */
-async function sessionNotes(s) {
-  let r;
-  try { r = await request('notes.get', { id: s.id }); } catch (e) { toast(e.message, true); return; }
-  const box = contextText(r.text, 14);
-  box.placeholder = 'No notes yet.';
-  const keep = h('input', { type: 'checkbox' });
-  keep.checked = r.enabled;
-  const save = async () => {
-    try { await request('notes.set', { id: s.id, enabled: keep.checked, text: box.value }); } catch (e) { toast(e.message, true); return; }
-    closeModal();
-    if (!keep.checked || r.enabled) return;
-    // Its agent gets the note tools when it starts, and is then told in its conversation (see notesTell).
-    if (!s.running) toast(`“${s.name}” keeps notes from its next start.`);
-    else confirmDialog('Start keeping notes now?', `“${s.name}” gets its note tools when it next starts. Restart it now? It carries on its conversation and is told to keep notes.`,
-      'Restart', false, () => restartSession(s));
-  };
-  openModal(`Session notes: “${s.name}”`, [
-    h('div', {}, 'Notes are kept outside the conversation, so they are still there after it is compacted or cleared.'),
-    h('label', { class: 'ctx-check' }, keep, 'Have the agent keep notes, and read them back after a compaction or a fresh start'),
-    h('div', { class: 'field' }, h('label', {}, 'Notes'), box,
-      h('div', { class: 'help' }, 'Kept on this computer, and removed with the session. Hand-off notes from a fresh start are added here too.')),
-  ], [
-    h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
-    h('button', { class: 'btn primary', onclick: save }, 'Save'),
-  ]);
-}
-
-const NOTES_TELL = 'From now on keep notes for this session with the llamatree tools: call save_note when a piece of work is finished, a decision is made or the task changes, and read_notes when this conversation starts from a summary or a hand-off note. Start by saving a note of where things stand now.';
-
-/**
- * Notes were turned on for the session and its agent has just started with the tools for them: tells it so in its
- * conversation, once it's at its prompt and you aren't typing in it. Given up after two minutes of it being busy.
- */
-function notesTell(id, tries = 0) {
-  const s = state.byId.get(id);
-  if (!s?.running) return;
-  const busy = s.asking || s.act.state === 'working' || performance.now() - s.act.lastIn < 5000 || tries < 6;   // six seconds for its screen to come up
-  if (busy) { if (tries < 120) setTimeout(() => notesTell(id, tries + 1), 1000); return; }
-  s.term.paste(NOTES_TELL);
+  if (why) { toast(`“${s.name}” ${why}. Compact it when it’s idle.`, true); return; }
+  s.term.paste(agentOf(s.command).compact);
   enterAfterTyping(s);
-}
-
-/** What the clean-ups send, for you to word your own way, for every agent. Kept on this machine. */
-const CONTEXT_WORDING = [
-  { id: 'tidy', name: 'Tidy: what to keep' },
-  { id: 'trim', name: 'Trim: what to keep' },
-  { id: 'fresh', name: 'Fresh start: the request for a hand-off note' },
-];
-function contextSettings() {
-  const sends = contextSends();
-  const boxes = Object.fromEntries(CONTEXT_WORDING.map((k) => [k.id, contextText(sends[k.id], 4)]));
-  const save = () => {
-    const own = {};
-    for (const k of CONTEXT_WORDING) { const v = boxes[k.id].value.trim(); if (v && v !== CONTEXT_SENDS[k.id]) own[k.id] = v; }
-    store.set('context.sends', own);
-    closeModal();
-  };
-  openModal('What the context clean-ups send', [
-    h('div', {}, 'Each is typed into the session as if you had typed it. Tidy and Trim follow the agent’s /compact, for an agent whose /compact takes what to keep (Claude Code); others get a plain Compact. Fresh start asks for a note first, then clears with the agent’s own command.'),
-    ...CONTEXT_WORDING.map((k) => h('div', { class: 'field' }, h('label', {}, k.name), boxes[k.id])),
-  ], [
-    h('button', { class: 'btn', onclick: () => { for (const k of CONTEXT_WORDING) boxes[k.id].value = CONTEXT_SENDS[k.id]; } }, 'Back to the app’s own'),
-    h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
-    h('button', { class: 'btn primary', onclick: save }, 'Save'),
-  ]);
+  toast(`Asked “${s.name}” to compact its conversation.`);
 }
 
 function sessionTabTitle(s) {
@@ -3037,7 +2859,6 @@ function sessionMenu(s, x, y, from = 'session') {
     state.expandedId === s.id ? { label: 'Back to all sessions', kbd: 'Shift+Esc', action: collapse } : { label: 'Expand', action: () => expand(s.id) },
     gitTabOn('changes') && { label: 'Show Git changes', action: () => showGit(s.id) },
     { label: 'Show conversation', action: () => openConversation(s) },
-    agentOf(s.command) && { label: 'Session notes…', action: () => sessionNotes(s) },
     { label: 'Permissions…', action: () => openPermissions('session', s.id) },
     { label: `Project view: ${projectName(groupOf(s))}${projectName(groupOf(s)).endsWith('s') ? '’' : '’s'} worktrees side by side`, action: () => openProjectView(groupOf(s)) },
     '-',

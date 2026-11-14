@@ -46,6 +46,5 @@ internal sealed class GrokAgent : AgentProfile
 
     public override IConversationStore Conversations { get; } = new GrokConversationStore();
 
-    /// <summary>Grok's /compact takes nothing after it, and /new starts another conversation.</summary>
-    public override ConversationCommands Commands { get; } = new("/compact", false, "/new");
+    public override string CompactCommand => "/compact";
 }

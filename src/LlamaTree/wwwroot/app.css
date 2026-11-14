@@ -589,13 +589,6 @@ button.chip:hover { border-color: var(--border); color: var(--text); }
 .ctx-bar { width: 26px; height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--ctx) 25%, transparent); overflow: hidden; }
 .ctx-bar span { display: block; height: 100%; border-radius: 3px; background: var(--ctx); }
 .ctx-n { opacity: .75; }
-.chip.ctx.waiting { font-style: italic; }
-textarea.ctx-text {
-  width: 100%; resize: vertical; background: var(--chrome-2); color: var(--text); border: 1px solid var(--border);
-  border-radius: 4px; font: inherit; line-height: 1.45; padding: 6px; outline: none; user-select: text;
-}
-textarea.ctx-text:focus { border-color: var(--focus); }
-label.ctx-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .chip .add { color: var(--st-a); }
 .chip .mod { color: var(--st-m); }
 .chip .del { color: var(--st-d); }

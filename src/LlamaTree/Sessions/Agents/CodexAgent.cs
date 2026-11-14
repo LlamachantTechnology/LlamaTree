@@ -53,8 +53,7 @@ internal sealed class CodexAgent : AgentProfile
 
     public override IConversationStore Conversations { get; } = new CodexConversationStore();
 
-    /// <summary>Codex's /compact summarises the conversation as it sees fit, and /new starts another.</summary>
-    public override ConversationCommands Commands { get; } = new("/compact", false, "/new");
+    public override string CompactCommand => "/compact";
 
     /// <summary>
     /// The command line for a start of a codex session (see <see cref="CommandBuilder.Build"/>), with Codex's saved
