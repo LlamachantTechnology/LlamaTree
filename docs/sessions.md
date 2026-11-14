@@ -107,7 +107,7 @@ Projects group sessions, for example one product across its worktrees. Tick proj
 - **Put a session in a project** when you add it, by dragging its tab into the project's group, or right-click its tab › *Move to project…*
 - **Rename, recolour, reorder or delete** a project by right-clicking it. *Edit project* sets its name and colour (a swatch, a custom colour or Automatic). Deleting a project keeps its sessions; they just have no project.
 - **Add a session to a project** with the **+** at the end of its tab group (at the end of the row when there are no projects). It works from that project's current session, or its first:
-  - *In the same folder* adds a session there in one click, with a conversation of its own.
+  - *In the same folder…* asks for the new session's name (the next free one is filled in, so Enter takes it) and adds it there, with a conversation of its own.
   - *In a new worktree…* (only in a Git repository) creates a worktree on a new branch, next to the repository by default, and opens a session there, unless you untick *Start a session in it*.
   - *A different folder…* opens New session with the project chosen.
 
