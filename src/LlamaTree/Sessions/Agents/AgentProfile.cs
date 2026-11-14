@@ -25,9 +25,10 @@ internal sealed record AskingScreen(string Choice, string? PromptRule = null, st
 internal sealed record AgentColor(string Dark, string Light);
 
 /// <summary>
-/// One coding agent's command-line interface: how the app starts it in a conversation, finds its saved conversations and
-/// learns which one it's in, and connects it to panels. Any other command (a shell, a dev server) has no profile and
-/// just runs. To support another agent, add a profile to <see cref="Agents.All"/>.
+/// One coding agent's command-line interface, in parts: how its command line reads (<see cref="Command"/>), how it
+/// reaches panels (<see cref="Panels"/>), and where its conversations are (<see cref="Conversations"/>). The rest of the
+/// app goes through the methods below, which are the same for every agent. Any other command (a shell, a dev server)
+/// has no profile and just runs. To support another agent, add a profile to <see cref="Agents.All"/>.
 /// </summary>
 internal abstract class AgentProfile
 {
@@ -43,73 +44,28 @@ internal abstract class AgentProfile
     /// <summary>Its colour, for its tag among the conversations to resume; null leaves the tag plain.</summary>
     public virtual AgentColor? Color => null;
 
-    // ---------------------------------------------------------------- its conversation
+    /// <summary>How the session follows it to another conversation, in words: "through /clear and /resume".</summary>
+    public abstract string Follows { get; }
 
     /// <summary>
-    /// Whether the app picks a new conversation's id and starts the agent in it (claude --session-id). Otherwise the
-    /// agent picks it, and the session learns it from <see cref="LiveConversation"/>.
+    /// How its screen shows it's asking you something, or null. An agent that reports its state itself (an OSC 7501
+    /// sequence with state=blocked, as Codex sends) is taken at its word instead, once it has.
     /// </summary>
-    public abstract bool ChoosesConversationId { get; }
+    public virtual AskingScreen? Asks => null;
 
-    /// <summary>
-    /// Whether the app can look after this command's conversation (the session's <see cref="SessionInfo.Conversation"/>):
-    /// the interactive interface, with no options that pick a conversation of their own.
-    /// </summary>
-    public abstract bool CanTrackConversation(string command);
+    // ---------------------------------------------------------------- its parts
 
-    /// <summary>Whether starting this command again carries on a conversation it picks itself, rather than starting a new one.</summary>
-    public abstract bool CarriesOnConversation(string command);
+    /// <summary>How its command line reads.</summary>
+    public abstract CommandShape Command { get; }
 
-    /// <summary>
-    /// The command without the option that resumes a particular conversation, and that conversation, so the session keeps
-    /// it itself: "claude --resume X --model opus" becomes ("claude --model opus", X). Anything else comes back unchanged, with no id.
-    /// </summary>
-    public abstract (string Command, string? Conversation) TakeConversation(string command);
+    /// <summary>How it reaches the panel server.</summary>
+    public virtual PanelConnection Panels => PanelConnection.None;
 
-    /// <summary>The command without an option that carries on the folder's latest conversation (the app picks it instead).</summary>
-    public virtual string StripContinue(string command) => command;
+    /// <summary>Its saved conversations, or null when the app doesn't follow them (its sessions just run as typed).</summary>
+    public virtual IConversationStore? Conversations => null;
 
-    /// <summary>The command line for this start of <paramref name="command"/>.</summary>
-    public abstract string CommandLine(string command, Launch launch);
-
-    /// <summary>Anything the agent needs in its environment for this start (e.g. a token it reads from there).</summary>
-    public virtual void AddEnvironment(IDictionary<string, string> env, Launch launch) { }
-
-    /// <summary>
-    /// The saved conversation the session's agent is in now, or null when that isn't known. <paramref name="others"/> are
-    /// the conversations other sessions are in, which this one can't be in.
-    /// </summary>
-    public abstract string? LiveConversation(TerminalSession session, int[] processIds, IReadOnlySet<string> others);
-
-    /// <summary>Its saved conversations, latest first; only those of <paramref name="directory"/> when one is given.</summary>
-    public abstract List<ConversationInfo> ListConversations(string? directory, int max);
-
-    /// <summary>The saved conversation <paramref name="id"/>, or null while the agent hasn't saved anything in it.</summary>
-    public abstract ConversationInfo? FindConversation(string id, string directory);
-
-    /// <summary>
-    /// Whether the app can read the running agent's conversation as prompts and answers (<see cref="ReadConversation"/>),
-    /// for the conversation rail and the Conversation tab.
-    /// </summary>
-    public virtual bool ShowsConversation => false;
-
-    /// <summary>
-    /// The conversation the running session's agent is in, as prompts and answers, or null while there's none to show.
-    /// An agent whose transcript is JSONL reads it with <see cref="ConversationReader.Read"/> and a <see cref="TranscriptParser"/>
-    /// of its own, which parses only what was added since the last read.
-    /// </summary>
-    public virtual Conversation? ReadConversation(TerminalSession session, int[] processIds) => null;
-
-    /// <summary>
-    /// The session's own conversation read from disk while it isn't running (the one it would resume), for the
-    /// assistant to answer about a stopped session; null when there is none or it can't be read.
-    /// </summary>
-    public virtual Conversation? ReadSavedConversation(TerminalSession session) => null;
-
-    // ---------------------------------------------------------------- panels
-
-    /// <summary>Whether it reads the panel server from a file written for the session (Claude's --mcp-config) rather than its command line.</summary>
-    public virtual bool PanelsFromFile => false;
+    /// <summary>Anything only this agent adds to an interactive start (Claude's theme --settings), after the first prompt.</summary>
+    public virtual IEnumerable<string> ExtraArguments(Launch launch, ParsedCommand parsed) => [];
 
     // ---------------------------------------------------------------- one-off prompts
 
@@ -125,41 +81,75 @@ internal abstract class AgentProfile
     /// </summary>
     public virtual bool HeadlessHasNoTools => false;
 
-    // ---------------------------------------------------------------- for the page
-
-    /// <summary>How the session follows it to another conversation, in words: "through /clear and /resume".</summary>
-    public abstract string Follows { get; }
-
-    /// <summary>A JavaScript regex source for the options with which a command picks its own conversation (the page notes and strips them).</summary>
-    public abstract string OwnConversationPattern { get; }
-
-    /// <summary>A JavaScript regex source for the option that carries on the folder's latest conversation, if it has one.</summary>
-    public virtual string? ContinuePattern => null;
+    // ---------------------------------------------------------------- the same for every agent
 
     /// <summary>
-    /// How its screen shows it's asking you something, or null. An agent that reports its state itself (an OSC 7501
-    /// sequence with state=blocked, as Codex sends) is taken at its word instead, once it has.
+    /// Whether the app picks a new conversation's id and starts the agent in it (claude --session-id). Otherwise the
+    /// agent picks it, and the session learns it from <see cref="LiveConversation"/>.
     /// </summary>
-    public virtual AskingScreen? Asks => null;
+    public bool ChoosesConversationId => Command.NewConversationWithId != null && Conversations != null;
+
+    /// <summary>
+    /// Whether the app can look after this command's conversation (the session's <see cref="SessionInfo.Conversation"/>):
+    /// the interactive interface, with no options that pick a conversation of their own.
+    /// </summary>
+    public bool CanTrackConversation(string command) => Conversations != null && ParsedCommand.Parse(Command, command).CanTrack;
+
+    /// <summary>Whether starting this command again carries on a conversation it picks itself, rather than starting a new one.</summary>
+    public bool CarriesOnConversation(string command) => ParsedCommand.Parse(Command, command).CarriesOn;
+
+    /// <summary>
+    /// The command without the option that resumes a particular conversation, and that conversation, so the session keeps
+    /// it itself: "claude --resume X --model opus" becomes ("claude --model opus", X). Anything else comes back unchanged, with no id.
+    /// </summary>
+    public (string Command, string? Conversation) TakeConversation(string command) =>
+        Conversations == null ? (command, null) : ParsedCommand.Parse(Command, command).TakeConversation();
+
+    /// <summary>The command without an option that carries on the folder's latest conversation (the app picks it instead).</summary>
+    public string StripContinue(string command) => ParsedCommand.StripContinue(Command, command);
+
+    /// <summary>The command line for this start of <paramref name="command"/> (see <see cref="CommandBuilder.Build"/>).</summary>
+    public string CommandLine(string command, Launch launch) => CommandBuilder.Build(this, command, launch, new StoreFacts(Conversations, launch.Directory));
+
+    /// <summary>Anything the agent needs in its environment for this start (e.g. the panel token).</summary>
+    public void AddEnvironment(IDictionary<string, string> env, Launch launch) => Panels.AddEnvironment(env, launch.Panels);
+
+    /// <summary>Whether it reads the panel server from a file written for the session (Claude's --mcp-config).</summary>
+    public bool PanelsFromFile => Panels.NeedsConfigFile;
+
+    /// <inheritdoc cref="IConversationStore.Live"/>
+    public string? LiveConversation(TerminalSession session, int[] processIds, IReadOnlySet<string> others) =>
+        Conversations?.Live(session, processIds, others);
+
+    /// <inheritdoc cref="IConversationStore.List"/>
+    public List<ConversationInfo> ListConversations(string? directory, int max) => Conversations?.List(directory, max) ?? [];
+
+    /// <inheritdoc cref="IConversationStore.Find"/>
+    public ConversationInfo? FindConversation(string id, string directory) => Conversations?.Find(id, directory);
+
+    /// <inheritdoc cref="IConversationStore.Shows"/>
+    public bool ShowsConversation => Conversations?.Shows == true;
+
+    /// <inheritdoc cref="IConversationStore.ReadLive"/>
+    public Conversation? ReadConversation(TerminalSession session, int[] processIds) => Conversations?.ReadLive(session, processIds);
+
+    /// <inheritdoc cref="IConversationStore.ReadSaved"/>
+    public Conversation? ReadSavedConversation(TerminalSession session) => Conversations?.ReadSaved(session);
 
     /// <summary>What the page needs to know about it.</summary>
     public object Describe() => new
     {
         id = Id, name = Name, programs = Programs, color = Color, choosesId = ChoosesConversationId, follows = Follows,
-        ownConversation = OwnConversationPattern, @continue = ContinuePattern, showsConversation = ShowsConversation, asks = Asks,
+        ownConversation = Command.OwnConversationPattern, @continue = Command.ContinuePattern, showsConversation = ShowsConversation, asks = Asks,
         suggests = HeadlessCommand != null,
     };
 
-    // ---------------------------------------------------------------- shared helpers
-
-    protected static string[] Tokens(string command) => command.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-    /// <summary>The command with <paramref name="argument"/> straight after the program.</summary>
-    protected static string AfterProgram(string command, string argument)
+    /// <summary>The start's questions answered from the agent's store (or, without one, as for a conversation never saved).</summary>
+    private sealed class StoreFacts(IConversationStore? store, string directory) : IConversationFacts
     {
-        var program = Tokens(command)[0];
-        var trimmed = command.Trim();
-        return program + " " + argument + trimmed[program.Length..];
+        public bool IsSaved(string id) => store?.IsSaved(id, directory) == true;
+        public string? ResumeTarget(string id) => store == null ? null : store.ResumeTarget(id);
+        public bool FolderHasConversation() => store?.FolderHasConversation(directory) != false;
     }
 }
 

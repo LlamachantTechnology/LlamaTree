@@ -781,8 +781,8 @@ internal sealed partial class AppHost
             // The conversations can take a moment (a long one is rewritten); the session's place is already saved.
             await Task.Run(() =>
             {
-                FolderMove.MoveClaudeConversations(from, to);
-                FolderMove.MoveCodexConversations(from, to);
+                foreach (var agent in Agents.All)
+                    if (agent.Conversations is { MovesWithFolder: true } store) store.MoveFolder(from, to);
             });
         }
         finally
