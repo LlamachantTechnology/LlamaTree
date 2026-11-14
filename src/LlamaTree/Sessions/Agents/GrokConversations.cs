@@ -185,9 +185,9 @@ internal static class GrokTranscript
             case "user_message_chunk" when text != null:
                 // A prompt's chunks follow each other; one after the answer has started is the next prompt.
                 if (turns.Count > 0 && turns[^1].Items.Count == 0)
-                    turns[^1] = new ConversationTurn { Index = turns[^1].Index, Prompt = ConversationReader.Clip(turns[^1].Prompt + text, ConversationReader.MaxTextChars) };
+                    turns[^1] = new ConversationTurn { Index = turns[^1].Index, Prompt = ConversationReader.Clip(turns[^1].Prompt + text, ConversationReader.MaxTextChars), Time = turns[^1].Time };
                 else if (text.Trim().Length > 0)
-                    turns.Add(new ConversationTurn { Index = turns.Count, Prompt = ConversationReader.Clip(text, ConversationReader.MaxTextChars) });
+                    turns.Add(new ConversationTurn { Index = turns.Count, Prompt = ConversationReader.Clip(text, ConversationReader.MaxTextChars), Time = Time(e) });
                 break;
             case "agent_message_chunk" when text != null && turns.Count > 0:
                 var items = turns[^1].Items;
@@ -197,11 +197,22 @@ internal static class GrokTranscript
                     items.Add(new ConversationItem("text", ConversationReader.Clip(text, ConversationReader.MaxTextChars)));
                 break;
             case "tool_call" when turns.Count > 0:
-                turns[^1].Items.Add(new ConversationItem("tool",
-                    ConversationReader.Clip((Str(update, "title") ?? "").ReplaceLineEndings(" ").Trim(), ConversationReader.MaxToolChars), Str(update, "kind") ?? "tool"));
+                turns[^1].Items.Add(new ConversationItem("tool", "", Str(update, "title") ?? "tool"));
+                break;
+            // The call's title says what it did ("llamatree__list_sessions", "Search tools: …"), where the call itself
+            // names only grok's own way in (use_tool, search_tool). Calls run one after another, so it's the latest one's.
+            case "tool_call_update" when turns.Count > 0 && Str(update, "title") is { Length: > 0 } title:
+                var tools = turns[^1].Items;
+                var last = tools.FindLastIndex(i => i.Kind == "tool");
+                if (last >= 0) tools[last] = tools[last] with { Text = ConversationReader.Clip(title.ReplaceLineEndings(" ").Trim(), ConversationReader.MaxToolChars) };
                 break;
         }
     }
+
+    /// <summary>The line's time: grok writes whole seconds since 1970.</summary>
+    private static DateTime? Time(JsonElement e) =>
+        e.TryGetProperty("timestamp", out var t) && t.TryGetInt64(out var seconds) && seconds is > 0 and < 253402300799
+            ? DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime : null;
 
     /// <summary>The update itself: the line, or what it wraps.</summary>
     private static JsonElement Update(JsonElement e)

@@ -150,7 +150,9 @@ public sealed class GrokConversationTests : IDisposable
         Session(A, work, "t", "2026-11-14T20:30:00Z", false,
             Chunk("user_message_chunk", "fix "), Chunk("user_message_chunk", "login"),
             Chunk("agent_thought_chunk", "hmm"),
-            JsonSerializer.Serialize(new { update = new { sessionUpdate = "tool_call", title = "Read src/login.ts", kind = "read" } }),
+            JsonSerializer.Serialize(new { update = new { sessionUpdate = "tool_call", title = "read", toolCallId = "c1" } }),
+            JsonSerializer.Serialize(new { timestamp = 1794690249, method = "session/update", @params = new { update = new { sessionUpdate = "tool_call_update", toolCallId = "c1", kind = "other", title = "Read src/login.ts" } } }),
+            JsonSerializer.Serialize(new { update = new { sessionUpdate = "tool_call_update", toolCallId = "c1", status = "completed" } }),
             Chunk("agent_message_chunk", "Fixed "), Chunk("agent_message_chunk", "it."),
             Chunk("user_message_chunk", "thanks"));
         var turns = GrokConversations.Read(A)!.Turns;

@@ -18,6 +18,9 @@ internal sealed class AntigravityAgent : AgentProfile
     public override AgentColor Color { get; } = new("#34a853", "#188038");
     public override string Follows => "to another conversation once you send a prompt in it";
 
+    /// <summary>agy asks with a menu whose last line is its key hint, as the folder trust check shows (agy 1.5.9).</summary>
+    public override AskingScreen Asks { get; } = new(@"↑/↓ Navigate · enter Confirm");
+
     public override CommandShape Command { get; } = new()
     {
         Subcommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
