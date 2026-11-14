@@ -50,4 +50,34 @@ internal abstract class PanelConnection
             if (link != null) env[TokenVariable] = link.Token;
         }
     }
+
+    /// <summary>
+    /// For an agent that can't be given an MCP server for one start (agy, Grok): the panel bridge
+    /// (<see cref="LlamaTree.Panels.PanelBridge"/>, this app run as "mcp-bridge") registered once in the agent's own
+    /// settings, with the session's environment naming this run's panel server and the session's token.
+    /// </summary>
+    /// <param name="listCommand">Lists the MCP servers registered with the agent ("agy mcp list").</param>
+    /// <param name="addCommand">Registers the bridge, given this app's program: "agy mcp add llamatree &lt;program&gt; mcp-bridge".</param>
+    /// <param name="allowTools">The arguments that let the panel tools run without asking, for this command; null for none.</param>
+    public sealed class Registered(string listCommand, Func<string, string> addCommand, Func<ParsedCommand, string?> allowTools) : PanelConnection
+    {
+        public string ListCommand => listCommand;
+        public string AddCommand(string program) => addCommand(program);
+
+        public override string AddTo(string commandLine, ParsedCommand parsed, PanelLink link) =>
+            allowTools(parsed) is { } arguments ? commandLine.TrimEnd() + " " + arguments : commandLine;
+
+        public override void AddEnvironment(IDictionary<string, string> env, PanelLink? link)
+        {
+            if (link == null)
+            {
+                // Not another LlamaTree's, inherited from the session this one was started in.
+                env.Remove(UrlVariable);
+                env.Remove(TokenVariable);
+                return;
+            }
+            env[UrlVariable] = link.Url;
+            env[TokenVariable] = link.Token;
+        }
+    }
 }

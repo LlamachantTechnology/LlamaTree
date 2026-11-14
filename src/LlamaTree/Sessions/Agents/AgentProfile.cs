@@ -158,8 +158,10 @@ internal static class Agents
 {
     public static readonly ClaudeAgent Claude = new();
     public static readonly CodexAgent Codex = new();
+    public static readonly AntigravityAgent Antigravity = new();
+    public static readonly GrokAgent Grok = new();
 
-    public static IReadOnlyList<AgentProfile> All { get; } = [Claude, Codex];
+    public static IReadOnlyList<AgentProfile> All { get; } = [Claude, Codex, Antigravity, Grok];
 
     /// <summary>The agent <paramref name="command"/> starts, from its first word, or null for any other command.</summary>
     public static AgentProfile? For(string? command)
