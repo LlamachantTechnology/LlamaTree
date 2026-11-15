@@ -2360,7 +2360,7 @@ const contextPct = (c) => Math.min(100, Math.round(c.tokens / c.limit * 100));
 const contextLevel = (c) => { const p = contextPct(c); return p >= CONTEXT_HOT ? 'hot' : p >= CONTEXT_WARM ? 'warm' : ''; };
 const kTokens = (n) => (n >= 1_000_000 ? (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(n));
 
-/** The meter's numbers in words: for its tooltip, its menu and the session's tab. */
+/** The meter's numbers in words: for its tooltip and the session's tab tooltip. */
 function contextLine(s) {
   const c = s.ctx;
   if (!c) return null;
@@ -2394,15 +2394,6 @@ async function loadContext(s) {
   renderTileHeader(s);
   const tab = $(`.session-tab[data-id="${s.id}"]`);
   if (tab) tab.title = sessionTabTitle(s);
-  tab?.querySelector('.tab-ctx')?.remove();
-  const mark = contextMark(s);
-  if (mark) tab?.querySelector('.tab-text')?.after(mark);
-}
-
-/** In the list down the left: the percentage once the conversation is filling up (amber, then red), nothing before. */
-function contextMark(s) {
-  const level = s.ctx && contextLevel(s.ctx);
-  return level ? h('span', { class: 'tab-ctx ' + level, title: contextLine(s) }, contextPct(s.ctx) + '%') : null;
 }
 
 setInterval(() => {
@@ -2491,7 +2482,6 @@ function sessionTab(s, i, marks = false) {
     statusDot(s),
     // Down the left, its branch beneath the name.
     marks ? h('span', { class: 'tab-text' }, h('span', { class: 'tab-name' }, s.name), tabBranch(s)) : h('span', { class: 'tab-name' }, s.name),
-    marks ? contextMark(s) : null,   // how full its conversation is, once it's filling up
     // Down the left, icons for its agent and where it runs; across the top, the server's name for a session on one.
     marks ? sessionMarks(s) : s.server &&h('span', { class: 'tab-server' + (serverDown(s) ? ' down' : ''), title: serverTitle(serverOf(s)) }, iconEl('server'), h('span', {}, serverName(serverOf(s)))),
     i < 9 ? h('span', { class: 'key' }, `Ctrl+${i + 1}`) : null),

@@ -1217,10 +1217,6 @@ body.no-nav-branches #navList .tab-branch { display: none; }   /* Layout ▸ Sho
 :root[data-theme="light"] .session-mark.agent.colored { --agent: var(--agent-light); }
 .session-mark.where.remote { color: var(--link); }   /* a session elsewhere stands out from the ones here, as its tab's server chip does */
 .session-mark.where.down { color: var(--danger); }
-/* How full a session's conversation is, from amber on (contextMark in app.js): it keeps its room, as the status dot does. */
-.tab-ctx { flex: none; margin-left: auto; font-size: 10px; font-variant-numeric: tabular-nums; color: var(--attention); }
-.tab-ctx.hot { color: var(--danger); font-weight: 600; }
-#navList .tab-ctx + .session-marks { margin-left: 4px; }
 #navList .session-add { align-self: flex-start; margin: 2px 0 2px 6px; }
 .nav-group .session-add { color: var(--proj); border-color: color-mix(in srgb, var(--proj) 45%, transparent); }
 .nav-group .session-add:hover { border-color: color-mix(in srgb, var(--proj) 75%, transparent); background: color-mix(in srgb, var(--proj) 16%, transparent); }
