@@ -255,7 +255,7 @@ host.addEventListener('message', (e) => {
       p.reject(Object.assign(new Error(m.error), { code: m.code }));
       break;
     }
-    case 'sessions': state.agents = m.agents || state.agents; setServers(m.servers); syncSessions(m.sessions, m.projects || []); break;
+    case 'sessions': state.agents = m.agents || state.agents; state.suggestFallback = m.suggestFallback || state.suggestFallback; setServers(m.servers); syncSessions(m.sessions, m.projects || []); break;
     case 'servers': setServers(m.servers); break;
     case 'output': onOutput(m.id, m.data); break;
     case 'replay': onReplay(m.id, m.data); break;
@@ -5077,10 +5077,10 @@ function suggestLevelMenu(s, x, y) {
   ]);
 }
 
-/** Who writes a session's suggested commit message: its agent, or Claude for a session whose agent can't. */
+/** Who writes a session's suggested commit message: its agent, or the first installed one that can (the host says which) for a session whose agent can't. */
 function suggestedBy(s) {
   const agent = agentOf(s.command);
-  return agent?.suggests ? agent.name : 'Claude';
+  return agent?.suggests ? agent.name : state.suggestFallback ?? 'Claude';
 }
 
 /**

@@ -76,10 +76,23 @@ internal abstract class AgentProfile
     // ---------------------------------------------------------------- one-off prompts
 
     /// <summary>
-    /// A command that answers one prompt read from standard input with plain text on standard output, changing nothing and
-    /// saving no conversation (Suggest writes commit messages with it), or null.
+    /// A command that answers one prompt read from standard input (as <see cref="HeadlessInput"/> writes it) on standard
+    /// output (read with <see cref="HeadlessAnswer"/>), changing nothing (Suggest writes commit messages with it), or null.
     /// </summary>
     public virtual string? HeadlessCommand => null;
+
+    /// <summary>
+    /// Whether <see cref="HeadlessCommand"/> keeps what it was asked as a conversation of the agent's own, there being no
+    /// switch to save nothing (agy, grok). Such a run goes in a folder of the app's own, so no session in the folder Suggest
+    /// works for takes it for its conversation, and Ask doesn't use it, which would keep the sessions' conversations.
+    /// </summary>
+    public virtual bool HeadlessSavesConversation => false;
+
+    /// <summary>The prompt as <see cref="HeadlessCommand"/> reads it on standard input: as it is, unless the agent wants it wrapped.</summary>
+    public virtual string HeadlessInput(string prompt) => prompt;
+
+    /// <summary>The answer in what <see cref="HeadlessCommand"/> printed: all of it, unless the agent wraps it.</summary>
+    public virtual string HeadlessAnswer(string output) => output;
 
     /// <summary>
     /// Whether <see cref="HeadlessCommand"/> runs with no tools at all, so it sees only the prompt it's given and can't read
