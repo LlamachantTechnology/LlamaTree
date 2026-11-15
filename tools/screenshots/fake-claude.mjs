@@ -179,6 +179,18 @@ const earlier = {
   ],
 };
 
+// The tool calls of the turn on screen, so the transcript has a reply to carry its token counts.
+const current = {
+  checkout: [['Read', 'src/routes/payments.ts'], ['Write', 'src/routes/webhooks.ts'], ['Update', 'src/server.ts']],
+  payments: [['Update', 'src/routes/payments.ts'], ['Bash', 'npm test -- payments']],
+  frontend: [['Read', 'web/components/CartSummary.tsx'], ['Write', 'web/components/PromoCodeInput.tsx']],
+  docs: [['Write', 'docs/deploy.md'], ['Update', 'README.md']],
+};
+
+// How full each conversation is by its last reply, for the context meter (of Claude's 200k window): checkout-api
+// is past half, so its meter shows amber.
+const contextTokens = { checkout: 128_400, payments: 61_800, frontend: 46_200, docs: 38_000 };
+
 function saveConversation(config) {
   const fs = process.getBuiltinModule('node:fs');
   const path = process.getBuiltinModule('node:path');
@@ -191,7 +203,7 @@ function saveConversation(config) {
   fs.mkdirSync(path.join(config, 'sessions'), { recursive: true });
 
   const prompt = s.lines.map(visible).find((l) => l.startsWith('> '))?.slice(2) ?? s.title;
-  const turns = [...(earlier[scenario] ?? []), [prompt, null, []]];
+  const turns = [...(earlier[scenario] ?? []), [prompt, null, current[scenario] ?? []]];
   const start = Date.now() - turns.length * 11 * 60_000;   // one prompt every eleven minutes or so
   const entries = [];
   turns.forEach(([text, reply, tools], i) => {
@@ -199,7 +211,11 @@ function saveConversation(config) {
     entries.push({ type: 'user', sessionId, cwd, timestamp, isSidechain: false, message: { role: 'user', content: text } });
     const content = tools.map(([name, arg]) => ({ type: 'tool_use', id: `t${i}${name}`, name, input: name === 'Bash' ? { command: arg } : { file_path: arg } }));
     if (reply) content.push({ type: 'text', text: reply });
-    if (content.length) entries.push({ type: 'assistant', sessionId, cwd, timestamp, isSidechain: false, message: { role: 'assistant', content } });
+    // The context grows with each reply, to contextTokens by the last: what it was sent plus what it wrote.
+    const tokens = Math.round((contextTokens[scenario] ?? 20_000) * (i + 1) / turns.length);
+    const usage = { input_tokens: 6, cache_read_input_tokens: tokens - 1_206, output_tokens: 1_200 };
+    if (content.length) entries.push({ type: 'assistant', sessionId, cwd, timestamp, isSidechain: false,
+      message: { id: `msg_${i}`, role: 'assistant', model: 'claude-sonnet-4-5', content, usage } });
   });
   fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
   fs.writeFileSync(path.join(config, 'sessions', `${process.pid}.json`),
@@ -209,7 +225,6 @@ function saveConversation(config) {
 // The demo's own config folder (run.ps1 sets it), never the real one.
 if (process.env.CLAUDE_CONFIG_DIR) saveConversation(process.env.CLAUDE_CONFIG_DIR);
 
-const tailRow = s.lines.length + 1;   // 1-based row where the spinner / prompt area starts
 const spinFrames = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'];
 const started = Date.now() - 37_000;  // look like it has been working for a while
 let frame = 0;
@@ -228,17 +243,23 @@ function tail() {
   return [spinnerLine(), '', ...promptBox()];
 }
 
-const drawTail = () => out(`${ESC}${tailRow};1H${ESC}J` + tail().join('\r\n'));
+// From where drawAll saved the cursor (ESC 7 / ESC 8), so it lands right below the lines even where a narrow terminal wraps them.
+const drawTail = () => out(`\x1b8${ESC}J` + tail().join('\r\n'));
 
 // Full redraw: on start and whenever the terminal is resized (widths depend on the column count).
 function drawAll() {
   out('\x1b[?25l' + `${ESC}2J${ESC}3J${ESC}H` + `\x1b]0;✳ ${s.title}\x07`);
-  out(s.lines.join('\r\n') + '\r\n');
+  out(s.lines.join('\r\n') + '\r\n\x1b7');
   drawTail();
 }
 
 drawAll();
-process.stdout.on('resize', drawAll);
+// Once the resizing stops: a redraw for each step of a resize would look like a burst of work to the app.
+let resized;
+process.stdout.on('resize', () => { clearTimeout(resized); resized = setTimeout(drawAll, 300); });
+// The resize event comes late, and a screen drawn at the old width leaves lines behind once the terminal reflows it:
+// draw it all again now and then while it works, so a tile never keeps them (and quiet stays quiet).
+setInterval(() => { if (phase === 'working') drawAll(); }, 1000);
 
 if (phase === 'working') {
   const timer = setInterval(drawTail, 120);

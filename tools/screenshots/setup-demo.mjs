@@ -630,15 +630,55 @@ for (const [cwd, gitBranch, title, prompt, daysAgo] of conversations) {
   fs.utimesSync(file, t, t);
 }
 
+// Saved Codex and Grok conversations too, in the demo's CODEX_HOME and GROK_HOME (run.ps1 points both there), so the
+// Resume list shows each agent's. All are a while old, so no running session takes one for its own.
+const codexHome = path.join(root, 'codex-home');
+const grokHome = path.join(root, 'grok-home');
+const touch = (file, daysAgo) => { const t = new Date(Date.now() - daysAgo * DAY); fs.utimesSync(file, t, t); };
+const codexConversations = [
+  [main, 'Rate-limit the checkout endpoints', 'Add rate limiting to the checkout and payment endpoints, 20 requests a minute per session', 0.014],
+  [path.join(root, 'inventory-service'), 'Reorder point per warehouse', 'Make the reorder point a per-warehouse setting instead of one global number', 3.2],
+];
+for (const [cwd, title, prompt, daysAgo] of codexConversations) {
+  const id = crypto.randomUUID();
+  const at = new Date(Date.now() - daysAgo * DAY);
+  const dir = path.join(codexHome, 'sessions', String(at.getFullYear()), String(at.getMonth() + 1).padStart(2, '0'), String(at.getDate()).padStart(2, '0'));
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `rollout-${at.toISOString().slice(0, 19).replace(/:/g, '-')}-${id}.jsonl`);
+  fs.writeFileSync(file, [
+    { timestamp: at.toISOString(), type: 'session_meta', payload: { id, timestamp: at.toISOString(), cwd, source: 'cli' } },
+    { timestamp: at.toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] } },
+  ].map((l) => JSON.stringify(l)).join('\n') + '\n');
+  touch(file, daysAgo);
+  fs.appendFileSync(path.join(codexHome, 'session_index.jsonl'), JSON.stringify({ id, thread_name: title }) + '\n');
+}
+const grokConversations = [
+  [main, 'Speed up the CI test job', 0.04],
+  [path.join(root, 'marketing-site'), 'Compress the hero images', 6],
+];
+for (const [cwd, title, daysAgo] of grokConversations) {
+  const id = crypto.randomUUID();
+  const at = new Date(Date.now() - daysAgo * DAY).toISOString();
+  const dir = path.join(grokHome, 'sessions', 'demo', id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'summary.json'), JSON.stringify({ info: { id, cwd }, generated_title: title, created_at: at, updated_at: at }));
+  fs.writeFileSync(path.join(dir, 'updates.jsonl'), JSON.stringify({ timestamp: Math.floor(Date.parse(at) / 1000),
+    params: { update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: title } } } }) + '\n');
+}
+
 // ------------------------------------------------------------------ LlamaTree profile
 
-// The sessions run `claude`, so the app treats them as Claude (the rail, asking, conversations): run.ps1 puts this folder
-// first on PATH, and its claude.cmd runs the fake. Each registers itself and saves its conversation in the demo's
-// CLAUDE_CONFIG_DIR, under the id the app gives it.
+// The sessions run `claude`, `codex`, `agy` and `grok`, so the app treats each as that agent (the rail, asking,
+// conversations): run.ps1 puts this folder first on PATH, and its .cmd files run the fakes. The Claude ones register
+// themselves and save their conversation in the demo's CLAUDE_CONFIG_DIR, under the id the app gives them. Codex and
+// Grok get homes of the demo's own (CODEX_HOME, GROK_HOME, above), so no real conversation of theirs is read.
 const bin = path.join(root, 'bin');
 fs.mkdirSync(bin, { recursive: true });
 fs.writeFileSync(path.join(bin, 'claude.cmd'), `@node "${path.join(here, 'fake-claude.mjs')}" %*\r\n`);
-const session = (Id, Name, Directory, scenario, Project = null) => ({ Id, Name, Directory, Command: `claude ${scenario}`, Project });
+for (const agent of ['codex', 'agy', 'grok'])
+  fs.writeFileSync(path.join(bin, `${agent}.cmd`), `@node "${path.join(here, 'fake-agents.mjs')}" ${agent} %*\r\n`);
+const session = (Id, Name, Directory, scenario, Project = null, agent = 'claude') =>
+  ({ Id, Name, Directory, Command: `${agent} ${scenario}`, Project });
 const profile = path.join(root, 'profile');
 fs.mkdirSync(profile, { recursive: true });
 // "May we count you?" already answered, so it isn't along the top of every screenshot (and the demo is never counted).
@@ -652,10 +692,10 @@ fs.writeFileSync(path.join(profile, 'projects.json'), JSON.stringify([
 fs.writeFileSync(path.join(profile, 'sessions.json'), JSON.stringify([
   session('checkout', 'checkout-api', main, 'checkout', 'acme'),
   session('frontend', 'web-frontend', cart, 'frontend', 'acme'),
-  session('payments', 'payments-refactor', payments, 'payments', 'acme'),
-  session('docs', 'docs', docs, 'docs', 'docs'),
+  session('payments', 'payments-refactor', payments, 'payments', 'acme', 'codex'),
+  session('docs', 'docs', docs, 'docs', 'docs', 'agy'),
   session('stock', 'stock-sync', payments, 'payments', 'inv'),
-  session('tooling', 'tooling', main, 'docs'),
+  session('tooling', 'tooling', main, 'tooling', null, 'grok'),
 ], null, 2));
 
 // Panels, as Claude would have shown them with show_panel (the fake sessions only look like Claude, so they're written here).
@@ -716,4 +756,4 @@ fs.writeFileSync(path.join(profile, 'panels.json'), JSON.stringify([
   },
 ], null, 2));
 
-console.log(JSON.stringify({ root, profile, claudeConfig, bin }));
+console.log(JSON.stringify({ root, profile, claudeConfig, codexHome, grokHome, bin }));
