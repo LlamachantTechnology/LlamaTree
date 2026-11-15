@@ -228,6 +228,79 @@ svg.ic { width: 16px; height: 16px; flex: none; display: block; }
 }
 .session-tab:hover { background: var(--hover); color: var(--text); }
 .session-tab.active { background: var(--panel-2); border-color: var(--border); color: var(--text); }
+/* The side-by-side view's tab, first among the session tabs (down the left, the top row of the list): its sessions'
+   dots and names; lit while it's showing, pink-edged while one of them needs your answer. */
+.view-tab {
+  display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px 0 10px; margin-right: 6px; flex: none;
+  border: 1px solid var(--border-strong); border-radius: 4px; cursor: pointer; white-space: nowrap; color: var(--text-dim); user-select: none;
+}
+.view-tabs { display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; flex: none; }
+/* Across the top the views stay put at the start of the row while the session tabs scroll, a divider after them. */
+.session-tabs > .view-tabs {
+  position: sticky; left: 0; z-index: 3; background: var(--chrome-2);
+  padding-right: 8px; margin-right: 6px; border-right: 1px solid var(--border);
+}
+.session-tabs > .view-tabs .view-title { max-width: 140px; }
+.view-more {
+  display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; flex: none; cursor: pointer;
+  border: 1px solid var(--border-strong); border-radius: 4px; background: none; color: var(--text-dim); font: inherit; white-space: nowrap;
+}
+.view-more:hover { background: var(--hover); color: var(--text); }
+.view-more.asking { border-color: var(--asking); }
+.view-more .ic:last-child { width: 12px; height: 12px; }
+.view-more-count { color: var(--text-faint); font-size: 11px; }
+/* Down the left with no views yet: how to make one. */
+.view-hint {
+  display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border: 1px dashed var(--border); border-radius: 4px;
+  color: var(--text-faint); font-size: 12px; cursor: pointer; user-select: none; min-width: 0;
+}
+.view-hint:hover { color: var(--text-dim); border-color: var(--border-strong); background: var(--hover); }
+.view-hint > .ic { flex: none; }
+.view-hint-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }   /* one line, … when narrow */
+.view-hint kbd { font: inherit; font-size: 11px; padding: 0 4px; border: 1px solid var(--border); border-radius: 3px; }
+/* A view's icon is its shape; the one showing has it filled in the accent colour, as Arrange marks the shape in use. */
+.view-tab .shape-ic { flex: none; }
+.view-tab.active .shape-ic { color: var(--accent-strong); }
+.view-tab.active .shape-ic rect { fill: color-mix(in srgb, var(--accent-strong) 35%, transparent); }
+.menu-view { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.menu-view-name { overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
+.menu-item .view-dots .dot { margin: 0 1px; }
+.view-tabs .view-tab { margin-right: 0; }
+.view-tabs.down { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin: 0 0 8px; }
+.view-tabs.down .view-tab { margin: 0; }
+.view-tab.dragging { opacity: .5; }
+.view-tab.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
+.view-tab.drop-after { box-shadow: inset -2px 0 0 var(--accent); }
+.view-tabs.down .view-tab.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.view-tabs.down .view-tab.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+.view-text { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+/* One line: the view's name and its sessions' dots; open (down the left), its sessions listed beneath. */
+.view-head { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.view-title { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.view-dots { display: inline-flex; align-items: center; gap: 6px; flex: none; }   /* apart enough that a working dot's three don't run into the next */
+.view-dots .view-member .dot { margin: 0 1px; }
+#navList .view-tab .nest-toggle { position: static; flex: none; width: 14px; height: 18px; margin-left: -8px; }
+.view-tab.down:not(.open) { align-items: center; }
+.view-tab.down .tab-label { min-width: 0; }
+.view-tab.down .view-text { min-width: 0; max-width: 100%; }
+.view-tab.down .view-text { flex-direction: column; align-items: flex-start; gap: 3px; }
+.view-tab:hover { background: var(--hover); color: var(--text); }
+.view-tab.active { background: var(--panel-2); border-style: solid; border-color: var(--accent-strong); color: var(--text); }
+.view-tab.asking { border-color: var(--asking); }
+.view-tab .tab-label { display: inline-flex; align-items: center; gap: 7px; height: 100%; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; min-width: 0; }
+.view-members { display: inline-flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden; }
+.view-member { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.view-member .dot { margin: 0 2px; }
+.view-tab .tab-close { visibility: hidden; }
+.view-tab:hover .tab-close, .view-tab.active .tab-close, .view-tab:focus-within .tab-close { visibility: visible; }
+/* Down the left: a row of its own above the projects, its sessions one under another. */
+.view-tab.down { display: flex; height: auto; margin: 0 0 8px; padding: 6px 4px 6px 10px; align-items: flex-start; }
+.view-tab.down .tab-label { align-items: flex-start; flex: 1; }
+.view-tab.down .tab-label > .ic { margin-top: 2px; }
+.view-tab.down .view-members { flex-direction: column; align-items: flex-start; gap: 3px; }
+.view-tab.down .view-name { overflow: hidden; text-overflow: ellipsis; }
+/* Side by side, the other open sessions: open, but without the keyboard. */
+.session-tab.in-pane { border-color: var(--border); border-style: dashed; color: var(--text); }
 .session-tab .key { color: var(--text-faint); font-size: 11px; }
 .session-tab .tab-label {
   display: inline-flex; align-items: center; gap: 7px; height: 100%; padding: 0; border: 0; background: none; cursor: pointer;
@@ -555,6 +628,30 @@ body.side-empty #splitter, body.side-empty #gitPanel { display: none; }   /* sid
 .tile.drop-over { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tile.expanded { z-index: 5; border-radius: 4px; }
 .tile.concealed { opacity: 0; pointer-events: none; }
+/* Side by side: each open session a working terminal in its pane, the one with the keyboard in the accent colour. */
+.tile.pane-focus { border-color: var(--accent-strong); box-shadow: 0 0 0 1px var(--accent-strong); }
+.tile.paired.asking:not(.pane-focus) { border-color: var(--asking); box-shadow: 0 0 0 1px var(--asking); }
+.tile.paired:not(.pane-focus) .tile-header { cursor: pointer; }
+.tile.paired .tile-header > .icon-btn { flex: none; }   /* a narrow pane's chips give way, never its buttons */
+.tile.paired .tile-header > .chip { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* Arrange's shapes: each a picture of its panes; the one in use filled in the accent colour. */
+.menu-item .shape-ic { color: var(--text-dim); }
+.menu-item.current { color: var(--text-strong); font-weight: 600; }
+.menu-item.current .shape-ic { color: var(--accent-strong); }
+.menu-item.current .shape-ic rect { fill: color-mix(in srgb, var(--accent-strong) 35%, transparent); }
+/* Dragging a pane's header onto another's: the two swap places. */
+.tile.pane-dragging { opacity: .6; }
+.tile.swap-target { outline: 2px dashed var(--accent); outline-offset: -3px; }
+body.pane-swapping, body.pane-swapping .tile-header { cursor: grabbing; }
+.pane-divider { position: absolute; z-index: 6; }
+.pane-divider.x { cursor: col-resize; }
+.pane-divider.y { cursor: row-resize; }
+.pane-divider:hover, .pane-divider.dragging { background: color-mix(in srgb, var(--accent-strong) 55%, transparent); border-radius: 3px; }
+/* …and a session's diff or Conversation over its own pane's terminal, beneath its header (see placePaneDoc). */
+#docArea.in-pane :is(#diffDoc, #convDoc) {
+  left: var(--pane-x); top: var(--pane-y); width: var(--pane-w); height: var(--pane-h); right: auto; bottom: auto;
+  border: 1px solid var(--accent-strong); border-top: none; border-radius: 0 0 4px 4px; overflow: hidden;
+}
 body.no-anim .tile, body.no-anim .surface { transition: none !important; }
 
 .tile-header {
@@ -876,6 +973,14 @@ span.combo-btn { pointer-events: none; }   /* a list's arrow only shows; the lis
 .menu-item.danger:hover, .menu-item.danger.active { background: var(--danger-fill); }
 .menu-item .kbd { margin-left: auto; padding-left: 24px; color: var(--text-faint); }
 .menu-item:hover .kbd, .menu-item.active .kbd { color: #ddd; }
+/* An item with a flyout: ▸ at its end, and lit while its flyout is open. */
+.menu-sub { margin-left: auto; padding-left: 16px; display: flex; align-items: center; color: var(--text-faint); }
+.menu-sub .ic { width: 12px; height: 12px; }
+.menu-item.open { background: var(--hover); }
+.menu-item:hover .menu-sub, .menu-item.active .menu-sub { color: #ddd; }
+.menu-item.disabled { color: var(--text-faint); cursor: default; }
+.menu-item.disabled:hover, .menu-item.disabled.active { background: none; color: var(--text-faint); }
+.menu.flyout { min-width: 180px; }
 .menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
 .menu-sep.subtle { background: var(--border-soft); margin: 3px 24px; }   /* within a section: indented like the labels */
 .menu-header { padding: 6px 10px 3px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--text-faint); cursor: default; }

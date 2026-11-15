@@ -11,6 +11,28 @@ Click a session's tile, or its tab (in the list down the left, or across the top
 - **Close a session** with the × on its tab, or middle-click the tab. After you confirm, the session is removed and its process stopped. The folder isn't touched.
 - **Reorder tabs** by dragging session, project or diff tabs, or right-click › *Move left/right*. Unknown stays last.
 
+## Side by side
+
+Work in up to four sessions at once, each a full working terminal rather than a scaled-down tile.
+
+![Two sessions side by side, one showing a diff in its pane](images/side-by-side.png)
+
+- **Add a session** by <kbd>Ctrl</kbd>+clicking its tab or tile. With a session open, it goes beside that one; on the tiles, beside the current one (the tile with the accent border). <kbd>Ctrl</kbd>+click again, or the × in its header, takes it out. It keeps running either way.
+- **Pick several at once** with right-click › *Side by side…*, and tick the ones you want.
+- **Views:** sessions side by side stay together as a view, with a tab at the head of the session tabs (the top of the list down the left, or the first tabs across the top). It shows the view's shape as its icon, its name and each of its sessions' status dots, and a pink edge when one of them needs your answer. Down the left, the ▾ beside a view lists its sessions beneath it; each view remembers whether it's open. Until you have a view, the top of the list says how to make one: <kbd>Ctrl</kbd>+click sessions, or click the hint to pick them (its × puts it away). Across the top, the views stay at the start of the row while the session tabs scroll, a view with no name of its own says how many sessions it has, and past three views the rest are in **Views ▾** (the one showing always keeps its tab). Click a session's tab to work in it on its own, then click the view's tab to come back to the view as you left it; click the view's tab again to go to all sessions. Views are kept when LlamaTree restarts. Hiding a project takes its sessions out of the view showing for the time being; showing it again brings them back, unless you've opened something else meanwhile.
+- **Several views:** with one session open on its own (or on the tiles), <kbd>Ctrl</kbd>+click another to start a new view; your other views stay as they are. While a view is showing, <kbd>Ctrl</kbd>+click adds sessions to that view or takes them out. Each view keeps its own sessions, shape, divider sizes and the session with the keyboard, so you can have two sessions in one and four in another. A session can be in more than one view; it works at the size of whichever is showing. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd>…<kbd>9</kbd> opens a view by its place in the list, and dragging the views' tabs reorders them.
+- **A view's right-click menu** has *Arrange*, *Change sessions…*, *Rename…* (a view is named after its sessions until you name it), *Save as a new view* (to change a copy and keep the original), *New view…* and *Close view*. A session's right-click menu has *Add to view ▸*, listing the views it isn't in (a full one greyed) and *New view with this session…*. The × on a view's tab closes the view; its sessions keep running. Taking out sessions until one is left closes it too.
+- **Arrangement:** right-click a session's header, or a view's tab (showing or not), › *Arrange ▸* to pick the shape: side by side or one above the other for two; in a row, in a column, two over one, one over two, one beside two or two beside one for three; two by two, in a row or in a column for four. Shapes too cramped for the window aren't offered, and when a view's shape doesn't fit the window any more it takes the next one that does. Each view remembers its own shape, and a new view starts with the one you last picked for that number of sessions. Until you pick one, three go in a row (two over one when that's too narrow) and four make a grid.
+- **Move a session to another place** by dragging its header onto another session: the two swap.
+- **Resize** by dragging the dividers between sessions; double-click one to even them up. Each view remembers its sizes for each shape.
+- **Each session works at its own pane's size.** Its agent is told the pane's width, so it lays out its output to fit. A pane is never narrower than about 40 columns; when another wouldn't fit, LlamaTree says so.
+- **The session with the keyboard** has the accent-coloured border. The Git panel, the tabs and the session picker follow it. Click into another terminal, click its header or tab, or press <kbd>Ctrl</kbd>+<kbd>Tab</kbd> or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+arrow keys to move between them.
+- **Diffs and the Conversation tab** open in their own session's pane, beneath its header, and the other sessions carry on beside them. A diff in a narrow pane is shown inline. <kbd>Shift</kbd>+<kbd>Esc</kbd> from the diff, or clicking the session's tab, brings its terminal back. While you're typing in another pane, <kbd>Ctrl</kbd>+<kbd>W</kbd> and <kbd>Shift</kbd>+<kbd>Esc</kbd> belong to that terminal.
+- **Fill the area with one** for a moment with the ⛶ button in its header, or a double-click on the header; do it again to go back.
+- A plain click on a session's tab, <kbd>Ctrl</kbd>+number or <kbd>Shift</kbd>+<kbd>Esc</kbd> works as usual: the first two open one session on its own, the last goes back to all sessions.
+
+Putting a tab beside the terminal is only offered while one session is open on its own.
+
 ## Status dots
 
 Every session's tab and tile carries a dot. Each state has its own colour, shape and motion, so you can tell them apart at a glance:

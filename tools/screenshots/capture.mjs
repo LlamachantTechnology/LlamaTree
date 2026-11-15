@@ -175,6 +175,14 @@ await js(`${reset} expand('checkout');
   await new Promise((r) => setTimeout(r, 2500));`);   // Monaco colours the code block meanwhile
 await shot('docking');
 
+// 10. Two sessions side by side, a diff in one's pane while the other asks for permission.
+await js(`${reset} openPanes(['checkout', 'frontend'], 'checkout');
+  await new Promise((r) => setTimeout(r, 1500));   // both redraw at their pane's width
+  openDiff(state.byId.get('checkout'), { mode: 'unstaged', path: 'src/server.ts', status: 'M' }, true);
+  await new Promise((r) => setTimeout(r, 2500));`);
+await shot('side-by-side');
+await js(`${reset} state.views = []; saveViews(); renderSessionTabs();`);   // the shots after it have no view
+
 // The website's home page: the same demo in its own framings.
 if (siteDir) {
   fs.mkdirSync(siteDir, { recursive: true });

@@ -8,7 +8,13 @@ The keys and clicks that get you around LlamaTree. On macOS, <kbd>⌘</kbd> does
 |---|---|
 | Open a session full size | <kbd>Ctrl</kbd>+<kbd>1</kbd> … <kbd>Ctrl</kbd>+<kbd>9</kbd>, or click its tile or tab |
 | Back to all sessions | <kbd>Shift</kbd>+<kbd>Esc</kbd>, click the open session's tab again, the collapse button in the tile header, or the mouse Back button |
-| Next / previous session | <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> |
+| Next / previous session | <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> (side by side: round the sessions shown) |
+| Open a session side by side, or take it out | <kbd>Ctrl</kbd>+click its tab or tile, or right-click › *Side by side…* |
+| Side by side: move to another session | Click into its terminal, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+arrow keys, or <kbd>Ctrl</kbd>+<kbd>Tab</kbd> |
+| Side by side: fill the area with one | Double-click its header (again to go back) |
+| Side by side: open a view | Click its tab, at the head of the session tabs (again for all sessions), or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd> … <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>9</kbd> |
+| Side by side: start another view | With one session open on its own, <kbd>Ctrl</kbd>+click another's tab or tile |
+| Side by side: swap two sessions / change the shape | Drag one's header onto the other / right-click a header › *Arrange* |
 | New session | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> |
 | Close a session | The × on its tab, or middle-click the tab |
 | Project view | Click the project's name at the start of its tab group (again to go back) |

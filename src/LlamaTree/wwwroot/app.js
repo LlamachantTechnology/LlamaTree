@@ -61,6 +61,7 @@ const PATHS = {
   down: 'M8 3v10M4 9l4 4 4-4',
   more: 'M3.5 8h.01M8 8h.01M12.5 8h.01',
   collapse: 'M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4',
+  expand: 'M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4',   // a session side by side filling the area
   sideBySide: 'M2 3h12v10H2zM8 3v10',
   panel: 'M2 3h12v10H2zM10 3v10M10 6.5h4',   // the side panel, a small panel over a big one: its title bar button and Show/Hide the side panel
   inline: 'M2 3h12v10H2zM2 8h12',
@@ -302,11 +303,28 @@ const relay = { paused: false, rules: [], waiting: [], unread: {}, logVersion: 0
  */
 const control = { rules: [], pending: [], logVersion: 0, asking: null, told: {} };
 
+/** The saved views; a single view kept before there could be several becomes the first. */
+function loadViews() {
+  const views = store.get('sideViews', null);
+  if (Array.isArray(views)) return views.filter((v) => v && Array.isArray(v.ids) && v.ids.length > 1);
+  const one = store.get('sideView', null);
+  return one?.ids?.length > 1 ? [{ id: newViewId(), name: null, ids: one.ids, focus: one.focus, shapes: {}, splits: {} }] : [];
+}
+function newViewId() { return 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
 const state = {
   sessions: [],              // ordered session objects
   agents: [],                // the coding agents the host knows (AgentProfile.Describe): id, name, programs, choosesId, follows, …
   byId: new Map(),
-  expandedId: null,
+  expandedId: null,          // the open session with the keyboard: one of paneIds, or null on the tiles
+  paneIds: [],               // the sessions open as terminals: one full-size, or up to MAX_PANES side by side
+  paneShapes: store.get('paneShapes', {}),   // the shape last picked for each number of sessions: a new view's to start with
+  // The side-by-side views, each kept behind its tab while you're elsewhere and across restarts (see viewTab):
+  // { id, name (null: named after its sessions), ids, focus, shapes: { n: shape id }, splits: { shape key: shares } }.
+  views: loadViews(),
+  viewId: null,              // the view showing, while sessions are side by side
+  paneZoom: null,            // side by side, the session filling the area for now (zoomPane), or null
+  paneRects: new Map(),      // where each open session's tile is in the terminal area (see layout)
   projectViewOf: null,       // the project whose Project view is showing: a place of its own, with no session open
   currentId: store.get('currentId', null),   // session shown in the Git panel
   gitVisible: store.get('gitVisible', true),
@@ -478,9 +496,15 @@ function saveHiddenProjects() {
 /** Applies a change in which sessions are visible: a hidden session can't stay open or be the Git panel's. */
 function applyProjectFilter(instant = false) {
   const shown = visibleSessions();
-  if (state.expandedId && !shown.some((s) => s.id === state.expandedId)) {
-    state.byId.get(state.expandedId)?.term.blur();
-    state.expandedId = null;
+  dropPanes((id) => shown.some((s) => s.id === id));
+  // The view showing keeps the sessions its hidden projects took off the screen (see saveView): while what's open is
+  // still all its own, a project shown again puts them back, so the view is whole again rather than one session on its
+  // own or a part of it, its tab and menu out of step with the screen.
+  // That includes all of its sessions having gone (nothing open since; going to the tiles or opening another forgets it).
+  const v = viewById(state.viewId);
+  if (v && state.paneIds.every((id) => v.ids.includes(id))) {
+    const want = viewMembers(v).filter(isVisible).map((x) => x.id);
+    if (want.length > 1 && want.length > state.paneIds.length) openPanes(want, state.expandedId, v.id);
   }
   if (shown.length && !shown.some((s) => s.id === state.currentId)) {
     state.currentId = shown[0].id;
@@ -776,6 +800,7 @@ function renderNav() {
   }
   // In Left there's no title bar (see applyNavLayout): All sessions heads the bar, and New Session joins + Project.
   fill($('#navHead'), tree && $('#btnGrid'), h('span', { class: 'project-bar-label' }, 'Projects'), h('span', { class: 'spacer' }), projectAllButtons(groups));
+  if (tree) rows.unshift(viewTabs(true));   // the side-by-side views' tabs head the list
   fill($('#navList'), rows);
   fill($('#navFoot'), tree && $('#btnAdd'), projectAddButton());
   syncStatus($('#navList'));
@@ -898,6 +923,13 @@ const PAD = 8, GAP = 8, HEADER_H = 30;
 const RAIL_W = 16;   // the conversation rail's gutter at the right of each terminal
 const DEFAULT_COMMAND = 'claude';   // each new session gets a conversation of its own (the host gives it one)
 const MAX_WEBGL = 12;
+const MAX_PANES = 4;          // sessions side by side
+const MIN_PANE_COLS = 40;     // narrower than this an agent's output wraps badly, so another pane isn't added
+const MIN_PANE_H = 180;       // px: a pane in a second row needs room for a few lines and the prompt
+
+/** Open as a working terminal: full-size, or one of the sessions side by side. */
+const isOpen = (s) => state.paneIds.includes(s.id);
+const sideBySide = () => state.paneIds.length > 1;
 
 // ------------------------------------------------------------------ theme
 // System (follows Windows' app mode), Light, Dark, or a theme: a JSON file of colours, shipped in wwwroot/themes
@@ -1776,7 +1808,7 @@ function syncSessions(list, projects) {
   if (focused && focused !== document.activeElement && focused.isConnected) focused.focus({ preventScroll: true });
 
   if (!state.byId.has(state.currentId)) state.currentId = state.sessions[0]?.id ?? null;
-  if (state.expandedId && !state.byId.has(state.expandedId)) state.expandedId = null;
+  dropPanes((id) => state.byId.has(id));
 
   layout(true);
   // Claude sessions brought back with the app start when they're first opened, not all at once: Claude's start-up
@@ -1807,13 +1839,38 @@ function createSession(info) {
 
   s.surface = h('div', { class: 'surface' });
   s.cover = h('div', { class: 'tile-cover', title: 'Click to expand' });
-  s.cover.addEventListener('click', () => expand(s.id));
+  s.cover.addEventListener('click', (e) => (mod(e) ? togglePane(s.id) : expand(s.id)));
   s.exitedBadge = h('div', { class: 'tile-exited', hidden: true });
   s.header = h('div', { class: 'tile-header' });
   s.header.addEventListener('click', (e) => {
-    if (e.target.closest('button')) return;
-    if (state.expandedId !== s.id) expand(s.id);
+    if (e.target.closest('button') || s.dragged) return;
+    if (mod(e)) togglePane(s.id);
+    else if (state.expandedId !== s.id) expand(s.id);
   });
+  // Side by side, dragging a session's header onto another session's pane swaps their places.
+  s.header.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('button') || !sideBySide() || !isOpen(s) || state.paneZoom) return;
+    const x0 = e.clientX, y0 = e.clientY;
+    let over = null, moved = false;
+    const move = (ev) => {
+      if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 8) return;   // a click that wobbles isn't a drag
+      if (!moved) { moved = true; s.tile.classList.add('pane-dragging'); document.body.classList.add('pane-swapping'); }
+      const t = document.elementsFromPoint(ev.clientX, ev.clientY).map((el) => el.closest('.tile.paired')).find((x) => x && x !== s.tile) ?? null;
+      if (t !== over) { over?.classList.remove('swap-target'); over = t; over?.classList.add('swap-target'); }
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      s.tile.classList.remove('pane-dragging');
+      document.body.classList.remove('pane-swapping');
+      over?.classList.remove('swap-target');
+      if (moved) { s.dragged = true; setTimeout(() => { s.dragged = false; }, 0); }   // the click that ends a drag isn't one
+      if (over) swapPanes(s.id, over.dataset.id);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  });
+  s.header.addEventListener('dblclick', (e) => { if (!e.target.closest('button') && sideBySide() && isOpen(s)) zoomPane(s.id); });
   s.header.addEventListener('contextmenu', (e) => { e.preventDefault(); sessionMenu(s, e.clientX, e.clientY); });
   s.header.addEventListener('mouseenter', () => loadConversationInfo(s));
   s.rail = h('div', { class: 'chat-rail' });
@@ -1871,7 +1928,11 @@ function createSession(info) {
     if (reported) reportState(s, reported);
     return true;
   });
-  term.onBell(() => { if (state.expandedId !== s.id) setAttention(s, true); });
+  term.onBell(() => { if (!isOpen(s)) setAttention(s, true); });
+  // Side by side, clicking or tabbing into another session's terminal gives it the keyboard, the Git panel and the tabs.
+  const takeKeys = () => { if (sideBySide() && isOpen(s) && state.expandedId !== s.id) focusPane(s.id); };
+  s.surface.addEventListener('focusin', takeKeys);
+  s.surface.addEventListener('pointerdown', takeKeys);   // a press too: focus events don't come while the window is in the background
   // The right button only opens the menu. Left to xterm, a right press is reported to Claude when it tracks the mouse,
   // and Claude pastes on right-click, so the clipboard was pasted as the menu opened.
   for (const type of ['mousedown', 'mouseup', 'mousemove']) {
@@ -1883,14 +1944,14 @@ function createSession(info) {
     e.preventDefault();
     const link = s.hoverPath;   // right-clicked on a path link: its own items first
     if (link) {
-      const shown = state.expandedId === s.id;
+      const shown = isOpen(s);
       showMenu(e.clientX, e.clientY, [
         { label: link.folder ? 'Open folder' : 'Open', action: () => openTermPath(s, link) },
         { label: 'Open containing folder', action: () => openTermPath(s, link, true) },
         { label: 'Copy path', action: () => navigator.clipboard.writeText(link.path) },
         ...(shown ? ['-', ...terminalMenuItems(s)] : []),
       ]);
-    } else if (state.expandedId === s.id) terminalMenu(s, e.clientX, e.clientY);
+    } else if (isOpen(s)) terminalMenu(s, e.clientX, e.clientY);
   });
   // Ctrl+V with an image or files on the clipboard and no text: xterm would paste nothing, so paste their paths instead.
   s.surface.addEventListener('paste', (e) => {
@@ -1915,7 +1976,7 @@ function createSession(info) {
     e.preventDefault();
     // The drag came from another app, which is still in front: the window comes forward so typing goes on here.
     post({ type: 'window.front' });
-    if (state.expandedId === s.id) s.term.focus();
+    if (isOpen(s)) s.term.focus();
     dropOnTerminal(s, e.dataTransfer);
   });
   return s;
@@ -1925,7 +1986,8 @@ function disposeSession(s) {
   s.term.dispose();
   s.tile.remove();
   state.byId.delete(s.id);
-  if (state.expandedId === s.id) state.expandedId = null;
+  dropPanes((id) => id !== s.id);
+  pruneView();
   for (const t of docs.tabs.filter((x) => x.sessionId === s.id)) closeDoc(t.key);
 }
 
@@ -2043,7 +2105,7 @@ function reportState(s, reported) {
   } else a.state = 'idle';
   setAsking(s, reported === 'blocked');
   if (reported === 'working' && s.attention) setAttention(s, false);
-  else if (reported === 'done' && was === 'working' && !s.replaying && state.expandedId !== s.id) setAttention(s, true);
+  else if (reported === 'done' && was === 'working' && !s.replaying && !isOpen(s)) setAttention(s, true);
   else if (a.state !== was) renderTileState(s);
 }
 
@@ -2081,7 +2143,7 @@ setInterval(() => {
       // ready, not waiting for you. Once it's been given something to do (see term.onData), quiet means your turn.
       const startUp = a.starting;
       a.starting = false;
-      if (!startUp && now - a.workingSince > 4000 && state.expandedId !== s.id) setAttention(s, true);
+      if (!startUp && now - a.workingSince > 4000 && !isOpen(s)) setAttention(s, true);
       else renderTileState(s);
     }
     // Once the screen has settled after new output has been drawn (mid-redraw it can be half drawn), see whether the
@@ -2211,6 +2273,7 @@ function renderTileState(s) {
   }
   syncStatus(s.header);
   if (tab) syncStatus(tab);
+  if (state.views.some((v) => v.ids.includes(s.id))) updateViewTab(s);
   updateProjectIndicators(groupOf(s));
   if (s.nestParent) updateNestFolds();
   projectViewChanged(s);
@@ -2248,7 +2311,8 @@ function gitSummary(s) {
 }
 
 function renderTileHeader(s) {
-  const expanded = state.expandedId === s.id;
+  const expanded = isOpen(s);
+  const paired = expanded && sideBySide();
   const gs = gitSummary(s);
   fill(s.header,
     h('span', { class: 'dot ' + statusClass(s), title: statusText(s) }),
@@ -2264,7 +2328,13 @@ function renderTileHeader(s) {
       onclick: gitTabOn('changes') && (() => showGit(s.id)),
     }, iconEl('branch'), gs.branch, gs.ahead ? ` ↑${gs.ahead}` : '', gs.count ? h('span', { class: 'mod' }, ` ●${gs.count}`) : ''),
     h('button', { class: 'icon-btn', title: 'Session options', onclick: (e) => { const r = e.currentTarget.getBoundingClientRect(); sessionMenu(s, r.left, r.bottom + 2); } }, iconEl('more')),
-    expanded && h('button', { class: 'icon-btn', title: 'Back to all sessions (Shift+Esc)', onclick: collapse }, iconEl('collapse')),
+    paired && h('button', {
+      class: 'icon-btn', title: state.paneZoom === s.id ? 'Back to the sessions side by side (double-click the header)' : 'Fill the area with this session (double-click the header)',
+      onclick: () => zoomPane(s.id),
+    }, iconEl(state.paneZoom === s.id ? 'sideBySide' : 'expand')),
+    paired && h('button', { class: 'icon-btn', title: 'Take out of side by side (Ctrl+click its tab); it keeps running', onclick: () => togglePane(s.id) }, iconEl('close')),
+    // Side by side, a narrow header has no room for it: Shift+Esc and the tiles button do the same.
+    expanded && !paired && h('button', { class: 'icon-btn', title: 'Back to all sessions (Shift+Esc)', onclick: collapse }, iconEl('collapse')),
   );
   s.tile.classList.toggle('on-server', !!s.server);   // its edge says it runs elsewhere
   s.tile.classList.toggle('server-down', serverDown(s));
@@ -2401,15 +2471,17 @@ async function loadConversationInfo(s) {
  */
 function sessionTab(s, i, marks = false) {
   return h('div', {
-    class: 'session-tab' + (state.expandedId === s.id ? ' active' : '') + (['working', 'asking'].includes(statusClass(s)) ? ' ' + statusClass(s) : ''),
+    class: 'session-tab' + (state.expandedId === s.id ? ' active' : isOpen(s) ? ' in-pane' : '') + (['working', 'asking'].includes(statusClass(s)) ? ' ' + statusClass(s) : ''),
     'data-id': s.id,
     title: sessionTabTitle(s),
     onmouseenter: () => loadConversationInfo(s),
     onclick: (e) => {
       if (e.target.closest('.tab-close')) return;
       // Clicking the session that's open (its terminal showing) goes back to the tiles; otherwise it opens the session,
-      // or brings its terminal back in front of a diff or Conversation tab.
-      if (state.expandedId === s.id && docs.active === 'terminal') collapse();
+      // or brings its terminal back in front of a diff or Conversation tab. Ctrl+click puts it beside the open session
+      // (or the current one, on the tiles), or takes it out again.
+      if (mod(e)) togglePane(s.id);
+      else if (state.expandedId === s.id && docs.active === 'terminal') collapse();
       else expand(s.id);
     },
     onmousedown: (e) => { if (e.button === 1) e.preventDefault(); },   // no autoscroll cursor
@@ -2507,6 +2579,7 @@ function renderSessionTabs() {
     g.tabs,
     sessionPlus(g.sessions, g.color ? `in ${g.name}` : 'with no project'))));
   }
+  if (state.navLayout !== 'left') { const v = viewTabs(); if (v) host.prepend(v); }   // the side-by-side views' tabs come first
   syncStatus(host);
   $('#btnGrid').classList.toggle('active', !state.expandedId);
   revealActive(host, '.session-tab.active');   // e.g. after Ctrl+N opens a tab scrolled out of view
@@ -2515,9 +2588,228 @@ function renderSessionTabs() {
 
 // ------------------------------------------------------------------ layout
 
+/** The terminal's size inside a tile placed at `r` (its border, padding, header and rail taken off). */
+const surfaceFor = (r) => ({ w: Math.max(200, Math.floor(r.w - 2 - 8 - RAIL_W)), h: Math.max(100, Math.floor(r.h - HEADER_H - 2 - 4)) });
+
+/** The size of a terminal open on its own; every session not side by side keeps it, so its tile is a true preview. */
 function surfaceSize() {
   const r = $('#termPane').getBoundingClientRect();
-  return { w: Math.max(200, Math.floor(r.width - 2 * PAD - 2 - 8 - RAIL_W)), h:Math.max(100, Math.floor(r.height - 2 * PAD - HEADER_H - 2 - 4)) };
+  return surfaceFor({ w: r.width - 2 * PAD, h: r.height - 2 * PAD });
+}
+
+// ---- side by side
+//
+// Up to MAX_PANES sessions open at once, each a working terminal at the size of its pane (its console is resized to
+// match, so the agent lays out for that width), not a scaled-down tile. state.paneIds holds them in order and
+// state.expandedId the one with the keyboard; the Git panel, the tabs and the rail follow it, as they follow a session
+// open on its own. One open session is simply the case with one pane.
+
+/** A pane's narrowest width: MIN_PANE_COLS of the terminal's text, plus its rail and border. */
+const paneMinWidth = () => Math.ceil(MIN_PANE_COLS * state.fontSize * 0.6) + RAIL_W + 12;
+
+/**
+ * The shapes n sessions can take side by side (Arrange): groups of indexes into paneIds, as rows of panes ('rows') or as
+ * columns of panes stacked one above another ('cols').
+ */
+const PANE_SHAPES = {
+  2: [
+    { id: 'row', label: 'Side by side', dir: 'rows', groups: [[0, 1]] },
+    { id: 'col', label: 'One above the other', dir: 'cols', groups: [[0, 1]] },
+  ],
+  3: [
+    { id: 'row', label: 'In a row', dir: 'rows', groups: [[0, 1, 2]] },
+    { id: '2+1', label: 'Two over one', dir: 'rows', groups: [[0, 1], [2]] },
+    { id: '1+2', label: 'One over two', dir: 'rows', groups: [[0], [1, 2]] },
+    { id: '1|2', label: 'One beside two', dir: 'cols', groups: [[0], [1, 2]] },
+    { id: '2|1', label: 'Two beside one', dir: 'cols', groups: [[0, 1], [2]] },
+    { id: 'col', label: 'In a column', dir: 'cols', groups: [[0, 1, 2]] },
+  ],
+  4: [
+    { id: 'grid', label: 'Two by two', dir: 'rows', groups: [[0, 1], [2, 3]] },
+    { id: 'row', label: 'In a row', dir: 'rows', groups: [[0, 1, 2, 3]] },
+    { id: 'col', label: 'In a column', dir: 'cols', groups: [[0, 1, 2, 3]] },
+  ],
+};
+
+/** The terminal area's size. */
+const stageSize = () => { const r = $('#termPane').getBoundingClientRect(); return { W: r.width, H: r.height }; };
+
+/** Whether a shape fits a W×H area without a pane going narrower or shorter than it's useful. */
+function shapeFits(shape, W, H) {
+  const [across, down] = shape.dir === 'rows'
+    ? [Math.max(...shape.groups.map((g) => g.length)), shape.groups.length]
+    : [shape.groups.length, Math.max(...shape.groups.map((g) => g.length))];
+  return (W - 2 * PAD - (across - 1) * GAP) / across >= paneMinWidth() && (H - 2 * PAD - (down - 1) * GAP) / down >= MIN_PANE_H;
+}
+
+/**
+ * The shape n sessions take: the one picked for n (Arrange) while it fits, else the first that fits (so three go two over
+ * one when a row of three would be too narrow), else the roomiest.
+ */
+function paneShape(n, W, H, v = activeView()) {
+  const shapes = PANE_SHAPES[n];
+  if (!shapes) return null;
+  const picked = shapes.find((x) => x.id === (v?.shapes?.[n] ?? state.paneShapes[n]));
+  if (picked && shapeFits(picked, W, H)) return picked;
+  return shapes.find((x) => shapeFits(x, W, H)) ?? (n === 4 ? shapes[0] : n === 3 ? shapes[1] : shapes[0]);
+}
+
+/** Whether n panes fit in the terminal area in any shape. */
+function paneRoom(n) {
+  const { W, H } = stageSize();
+  return (PANE_SHAPES[n] ?? []).some((x) => shapeFits(x, W, H));
+}
+
+/** The shares of a shape's groups, and of the panes in each group: as last dragged, else even. */
+function paneShares(shape) {
+  const key = `${shape.groups.flat().length}:${shape.id}`;
+  const saved = activeView()?.splits?.[key];   // each view keeps its own
+  const even = (k) => Array(k).fill(1 / k);
+  const fits = (a, k) => Array.isArray(a) && a.length === k && a.every((x) => x > 0) && Math.abs(a.reduce((p, x) => p + x, 0) - 1) < 0.01;
+  return {
+    key,
+    rows: fits(saved?.rows, shape.groups.length) ? [...saved.rows] : even(shape.groups.length),   // the groups'
+    cols: shape.groups.map((g, i) => (fits(saved?.cols?.[i], g.length) ? [...saved.cols[i]] : even(g.length))),   // within each
+  };
+}
+
+/**
+ * Each open session's rectangle in a W×H terminal area, and the dividers between them (side by side). A shape of
+ * columns is laid out as rows in the area turned on its side, then turned back.
+ */
+function paneLayout(W, H) {
+  const ids = state.paneIds, rects = new Map(), dividers = [];
+  if (ids.length === 1) rects.set(ids[0], { x: PAD, y: PAD, w: W - 2 * PAD, h: H - 2 * PAD });
+  if (ids.length <= 1) return { rects, dividers };
+  const shape = paneShape(ids.length, W, H), sh = paneShares(shape);
+  const turned = shape.dir === 'cols';
+  const [w0, h0] = turned ? [H, W] : [W, H];
+  const put = (r) => (turned ? { x: r.y, y: r.x, w: r.h, h: r.w } : r);
+  const divider = (d) => {
+    const r = put(d);
+    const across = turned ? (d.across === 'x' ? 'y' : 'x') : d.across;
+    return { ...d, ...r, across, min: across === 'x' ? paneMinWidth() : MIN_PANE_H };
+  };
+  const spanH = h0 - 2 * PAD - (shape.groups.length - 1) * GAP;
+  let y = PAD;
+  shape.groups.forEach((group, ri) => {
+    const rh = spanH * sh.rows[ri], spanW = w0 - 2 * PAD - (group.length - 1) * GAP;
+    let x = PAD;
+    group.forEach((idx, ci) => {
+      const w = spanW * sh.cols[ri][ci];
+      rects.set(ids[idx], put({ x, y, w, h: rh }));
+      x += w;
+      if (ci < group.length - 1) dividers.push(divider({ shares: sh, list: sh.cols[ri], at: ci, span: spanW, across: 'x', x, y, w: GAP, h: rh }));
+      x += GAP;
+    });
+    y += rh;
+    if (ri < shape.groups.length - 1) dividers.push(divider({ shares: sh, list: sh.rows, at: ri, span: spanH, across: 'y', x: PAD, y, w: w0 - 2 * PAD, h: GAP }));
+    y += GAP;
+  });
+  return { rects, dividers };
+}
+
+/** How many of a view's sessions it shows: those on screen if it's showing, else those in shown projects. */
+const viewCount = (v) => (v && sideBySide() && v.id === state.viewId ? state.paneIds.length : viewMembers(v).filter(isVisible).length);
+
+/**
+ * Picks the shape for view `v`'s number of sessions (by default the view showing), from now on; a view in its tab takes
+ * it the next time it's shown. It's also where a new view of that many starts.
+ */
+function arrangePanes(id, v = activeView()) {
+  const n = v ? viewCount(v) : state.paneIds.length;
+  if (v) { (v.shapes ??= {})[n] = id; saveViews(); }
+  state.paneShapes[n] = id;
+  store.set('paneShapes', state.paneShapes);
+  layout();
+  renderSessionTabs();   // the view's tab shows its shape
+}
+
+/** A shape's picture for its menu item: its panes as small boxes, placed as paneLayout places them. */
+function shapeIcon(shape) {
+  const X = 1.5, Y = 2.5, W = 13, H = 11, G = 1.4;   // a landscape frame, like the terminal area
+  const turned = shape.dir === 'cols';
+  const [w0, h0] = turned ? [H, W] : [W, H];
+  const boxes = [];
+  const gh = (h0 - (shape.groups.length - 1) * G) / shape.groups.length;
+  shape.groups.forEach((g, ri) => {
+    const gw = (w0 - (g.length - 1) * G) / g.length;
+    g.forEach((_, ci) => {
+      const r = { x: ci * (gw + G), y: ri * (gh + G), w: gw, h: gh };
+      boxes.push(turned ? { x: r.y, y: r.x, w: r.h, h: r.w } : r);
+    });
+  });
+  const t = document.createElement('template');
+  t.innerHTML = `<svg class="ic shape-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1">${boxes.map((b) =>
+    `<rect x="${(X + b.x).toFixed(2)}" y="${(Y + b.y).toFixed(2)}" width="${b.w.toFixed(2)}" height="${b.h.toFixed(2)}" rx=".7"/>`).join('')}</svg>`;
+  return t.content.firstChild;
+}
+
+/**
+ * Arrange's items for view `v` (by default the one showing), showing or not: the shapes for its number of sessions,
+ * those too cramped here left out.
+ */
+function arrangeItems(v = activeView()) {
+  const n = v ? viewCount(v) : state.paneIds.length;
+  if (n < 2 || !PANE_SHAPES[n]) return [];
+  const { W, H } = stageSize();
+  const now = paneShape(n, W, H, v);
+  // The one in use keeps its picture, lit, rather than a tick in its place.
+  return [{ header: 'Arrange' }, ...PANE_SHAPES[n].map((x) => shapeFits(x, W, H) && {
+    label: x.label, icon: shapeIcon(x), cls: x === now ? 'current' : '', action: () => arrangePanes(x.id, v),
+  })];
+}
+
+/** The dividers between panes: drag one to share the space differently (kept per arrangement); double-click evens up. */
+function renderPaneDividers(dividers) {
+  let holder = $('#paneDividers');
+  if (!holder) { holder = h('div', { id: 'paneDividers' }); $('#termPane').append(holder); }
+  if (holder.querySelector('.dragging')) return;   // the one being dragged stays under the pointer
+  holder.replaceChildren(...dividers.map((d) => {
+    const el = h('div', {
+      class: 'pane-divider ' + d.across, title: 'Drag to resize; double-click to even up',
+      style: `left:${d.x}px;top:${d.y}px;width:${d.w}px;height:${d.h}px`,
+    });
+    const save = (keep = false) => {
+      const v = activeView();
+      if (!v) return;
+      (v.splits ??= {})[d.shares.key] = { rows: d.shares.rows, cols: d.shares.cols };
+      if (keep) saveViews();
+    };
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      el.setPointerCapture(e.pointerId);
+      el.classList.add('dragging');
+      const start = d.across === 'x' ? e.clientX : e.clientY;
+      const pair = d.list[d.at] + d.list[d.at + 1], first = d.list[d.at];
+      const least = Math.min(pair / 2, d.min / d.span);   // neither side narrower than a pane can usefully be
+      const move = (ev) => {
+        const moved = ((d.across === 'x' ? ev.clientX : ev.clientY) - start) / d.span;
+        d.list[d.at] = Math.max(least, Math.min(pair - least, first + moved));
+        d.list[d.at + 1] = pair - d.list[d.at];
+        save();
+        const pos = (d.across === 'x' ? d.x : d.y) + (d.list[d.at] - first) * d.span;   // where the panes now meet
+        el.style[d.across === 'x' ? 'left' : 'top'] = pos + 'px';
+        layout(true);
+      };
+      const up = () => {
+        el.classList.remove('dragging');
+        el.removeEventListener('pointermove', move);
+        el.removeEventListener('lostpointercapture', up);
+        save(true);
+        layout(true);
+      };
+      el.addEventListener('pointermove', move);
+      el.addEventListener('lostpointercapture', up);
+    });
+    el.addEventListener('dblclick', () => {
+      d.list[d.at] = d.list[d.at + 1] = (d.list[d.at] + d.list[d.at + 1]) / 2;
+      save(true);
+      layout(true);
+    });
+    return el;
+  }));
 }
 
 const refit = debounce(() => {
@@ -2530,9 +2822,17 @@ function layout(instant = false) {
   const W = stage.width, H = stage.height;
   const sz = surfaceSize();
   state.surface = sz;
+  // The open sessions' places. Side by side, one filling the area (paneZoom) takes all of it; the others stay their
+  // pane's size behind it, so going back doesn't resize them twice.
+  const { rects, dividers } = paneLayout(W, H);
+  const zoom = sideBySide() && rects.has(state.paneZoom) ? state.paneZoom : null;
+  const whole = { x: PAD, y: PAD, w: W - 2 * PAD, h: H - 2 * PAD };
+  state.paneRects = new Map([...rects].map(([id, r]) => [id, id === zoom ? whole : r]));
+  renderPaneDividers(zoom ? [] : dividers);
   let resized = false;
   for (const s of state.sessions) {
-    const w = sz.w + 'px', hh = sz.h + 'px';
+    const r = state.paneRects.get(s.id), want = r ? surfaceFor(r) : sz;
+    const w = want.w + 'px', hh = want.h + 'px';
     if (s.surface.style.width !== w || s.surface.style.height !== hh) {
       s.surface.style.width = w;
       s.surface.style.height = hh;
@@ -2557,13 +2857,15 @@ function layout(instant = false) {
 
   shown.forEach((s, i) => {
     const t = s.tile;
-    const expanded = state.expandedId === s.id;
+    const expanded = isOpen(s);
     t.classList.toggle('expanded', expanded);
-    t.classList.toggle('concealed', !!state.expandedId && !expanded);
+    t.classList.toggle('concealed', !!state.expandedId && (!expanded || (!!zoom && zoom !== s.id)));
     t.classList.toggle('current', state.currentId === s.id);
+    t.classList.toggle('paired', expanded && sideBySide());                          // one of several side by side
+    t.classList.toggle('pane-focus', expanded && sideBySide() && state.expandedId === s.id);   // …the one with the keyboard
     let x, y, w, hh, scale;
     if (expanded) {
-      x = PAD; y = PAD; w = W - 2 * PAD; hh = H - 2 * PAD; scale = 1;
+      ({ x, y, w, h: hh } = state.paneRects.get(s.id) ?? whole); scale = 1;
     } else {
       const c = i % best.cols, r = Math.floor(i / best.cols);
       // Centre a partially filled last row.
@@ -2577,47 +2879,482 @@ function layout(instant = false) {
     const offX = expanded ? 0 : Math.max(0, (bodyW - sz.w * scale) / 2);
     s.surface.style.transform = `translate(${offX}px, 0) scale(${scale})`;
   });
+  placePaneDoc();
 
   if (instant) requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.remove('no-anim')));
 }
 
 new ResizeObserver(() => layout(true)).observe($('#termPane'));
 
+/** Opens a session full-size, or, when it's one of the sessions side by side, gives it the keyboard there. */
 function expand(id) {
-  const s = state.byId.get(id);
-  if (!s) return;
+  if (sideBySide() && state.paneIds.includes(id)) focusPane(id, true);
+  else openPanes([id]);
+}
+
+/**
+ * Opens these sessions as working terminals (side by side when more than one), `focusId` with the keyboard. Side by
+ * side, they're view `viewId`'s sessions; by default the view showing's (changing it), or with none showing, or null,
+ * a new view (or one that has just these sessions already).
+ */
+function openPanes(ids, focusId = ids[0], viewId = sideBySide() ? state.viewId : null) {
+  ids = [...new Set(ids)].filter((id) => { const x = state.byId.get(id); return x && isVisible(x); }).slice(0, MAX_PANES);
+  if (!ids.length) { collapse(); return; }
+  if (!ids.includes(focusId)) focusId = ids[0];
+  const s = state.byId.get(focusId);
   closeMenu();
   if (docs.active !== 'terminal') showTerminalDoc();
-  state.expandedId = id;
+  const was = state.byId.get(state.expandedId);
+  if (was && !ids.includes(was.id)) was.term.blur();
+  state.paneIds = ids;
+  state.paneZoom = null;
+  state.expandedId = focusId;
+  // One session on its own leaves the views in their tabs, to come back to.
+  state.viewId = ids.length > 1 ? bindView(ids, viewId) : null;
+  if (state.viewId) saveView();
   setAttention(s, false);
-  const switched = state.currentId !== id;
-  if (switched) { state.currentId = id; store.set('currentId', id); }
-  renderSessionPicker();   // locked to the open session
+  const switched = state.currentId !== focusId;
+  if (switched) { state.currentId = focusId; store.set('currentId', focusId); }
+  renderSessionPicker();   // the open sessions only
   layout();
-  if (s.startsOnOpen) startSession(s);   // after the layout, so Claude starts at the open terminal's size
+  const open = ids.map((id) => state.byId.get(id));
+  for (const x of open) {
+    if (!x.startsOnOpen) continue;
+    fitTerm(x);   // now, not after refit's pause, so Claude starts at its pane's size
+    startSession(x);
+  }
   for (const x of state.sessions) renderTileHeader(x);
   renderSessionTabs();
   setTimeout(() => s.term.focus(), 30);
-  renderTermRail(s);
-  refreshTermRail(s);
+  for (const x of open) { renderTermRail(x); refreshTermRail(x); }
   // Last, so a fault in the Git panel can never stop the terminal from opening.
   if (switched) {
     try { renderGit(); } catch (err) { console.error('Git panel render failed', err); }
   }
 }
 
+/**
+ * Side by side, gives the keyboard (and with it the Git panel and the tabs) to another of the open sessions. toTerminal:
+ * its terminal comes back in front of a diff or Conversation tab shown in its pane.
+ */
+function focusPane(id, toTerminal = false) {
+  const s = state.byId.get(id);
+  if (!s || !isOpen(s)) return;
+  if (state.paneZoom && state.paneZoom !== id) state.paneZoom = id;   // one filling the area: the one you went to does
+  const switched = state.expandedId !== id;
+  state.expandedId = id;
+  if (sideBySide()) saveView();
+  setAttention(s, false);
+  if (state.currentId !== id) { state.currentId = id; store.set('currentId', id); }
+  if (toTerminal && docs.paneOf === id && activeTab()) showTerminalDoc();
+  layout();
+  if (switched) {
+    renderSessionTabs();
+    renderSessionPicker();
+    syncDocTabs();
+    renderTermRail(s);
+  }
+  for (const x of state.paneIds) renderTileHeader(state.byId.get(x));
+  const covered = activeTab() && (!docs.paneOf || docs.paneOf === id);
+  if (!covered && !s.surface.contains(document.activeElement)) setTimeout(() => s.term.focus(), 0);
+  if (switched) {
+    try { renderGit(); } catch (err) { console.error('Git panel render failed', err); }
+  }
+}
+
+/**
+ * Ctrl+click: puts a session beside the open ones (on the tiles, beside the current one, the tile with the accent
+ * border), or takes it out of them; it keeps running either way.
+ */
+function togglePane(id) {
+  const s = state.byId.get(id);
+  if (!s || !isVisible(s)) return;
+  if (isOpen(s)) {
+    const at = state.paneIds.indexOf(id), rest = state.paneIds.filter((x) => x !== id);
+    if (!rest.length) { collapse(); return; }
+    if (rest.length === 1) deleteView(state.viewId);   // down to one: there's no view left to come back to
+    openPanes(rest, state.expandedId === id ? rest[Math.max(0, at - 1)] : state.expandedId);
+    return;
+  }
+  const cur = state.byId.get(state.currentId);
+  const base = state.paneIds.length ? state.paneIds : cur && cur !== s && isVisible(cur) ? [cur.id] : [];
+  if (base.length >= MAX_PANES) { toast(`Up to ${MAX_PANES} sessions fit side by side. Ctrl+click one's tab to take it out first.`, true); return; }
+  if (base.length && !paneRoom(base.length + 1)) { toast(`There isn't room for ${base.length + 1} sessions side by side. Make the window bigger, the font smaller (Ctrl+-) or hide the side panel.`, true); return; }
+  openPanes([...base, id], id);
+}
+
+/** Side by side, two sessions trade places (a header dragged onto another's pane). */
+function swapPanes(a, b) {
+  const ids = [...state.paneIds], i = ids.indexOf(a), j = ids.indexOf(b);
+  if (i < 0 || j < 0) return;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  state.paneIds = ids;
+  saveView();
+  layout();
+  renderSessionTabs();
+}
+
+// ---- views
+//
+// Sessions side by side are a view you can come back to, and there can be several: each keeps its sessions, the one
+// with the keyboard, its shape and its divider sizes, under a tab at the head of the session tabs (across the top, or
+// the list down the left), while you work in one session on its own or look at the tiles, and across restarts. A
+// session can be in more than one view; only one shows at a time.
+
+const viewById = (id) => state.views.find((v) => v.id === id) ?? null;
+/** The view showing, side by side. */
+const activeView = () => (sideBySide() ? viewById(state.viewId) : null);
+const saveViews = () => store.set('sideViews', state.views);
+
+/** A view's sessions that still exist, in its order. */
+const viewMembers = (v) => (v?.ids ?? []).map((id) => state.byId.get(id)).filter(Boolean);
+
+/** A view's picture: the shape its sessions (those shown) take in this window, as Arrange draws it. */
+function viewIcon(v) {
+  const n = viewMembers(v).filter(isVisible).length;
+  const { W, H } = stageSize();
+  const shape = paneShape(n, W, H, v);
+  return shape ? shapeIcon(shape) : iconEl('sideBySide');
+}
+
+/** Its name: yours, else its sessions'. */
+const viewName = (v) => v.name || viewMembers(v).map((x) => x.name).join(' + ');
+
+/**
+ * The view these sessions go side by side as: `viewId`'s, else one that has just these sessions already, else a new one
+ * (starting from the shape last picked for that many). Returns its id.
+ */
+function bindView(ids, viewId) {
+  if (viewById(viewId)) return viewId;
+  const same = state.views.find((v) => v.ids.length === ids.length && ids.every((id) => v.ids.includes(id)));
+  if (same) return same.id;
+  const v = { id: newViewId(), name: null, ids: [...ids], focus: ids[0], shapes: {}, splits: {} };
+  state.views.push(v);
+  saveViews();
+  return v.id;
+}
+
+/** Keeps the view showing as its sessions now are. Any of it in a hidden project stays in it, for when it's shown. */
+function saveView() {
+  const v = viewById(state.viewId);
+  if (!v) return;
+  const hidden = viewMembers(v).filter((x) => !isVisible(x) && !state.paneIds.includes(x.id)).map((x) => x.id);
+  v.ids = [...state.paneIds, ...hidden].slice(0, MAX_PANES);
+  v.focus = state.expandedId;
+  saveViews();
+}
+
+function deleteView(id) {
+  state.views = state.views.filter((v) => v.id !== id);
+  if (state.viewId === id) state.viewId = null;
+  saveViews();
+}
+
+/** After sessions are removed: each view keeps the rest, or goes once fewer than two are left. */
+function pruneView() {
+  let changed = false;
+  for (const v of [...state.views]) {
+    const ids = viewMembers(v).map((x) => x.id);
+    if (ids.length === v.ids.length) continue;
+    changed = true;
+    if (ids.length < 2) { deleteView(v.id); continue; }
+    v.ids = ids;
+    if (!ids.includes(v.focus)) v.focus = ids[0];
+  }
+  if (changed) saveViews();
+}
+
+/** Opens a view as it was left: its sessions (those in shown projects), shape, divider sizes and the one with the keyboard. */
+function showView(id) {
+  const v = viewById(id);
+  if (!v) return;
+  const ids = viewMembers(v).filter(isVisible).map((x) => x.id);
+  if (ids.length < 2) { toast('The sessions in this view are in hidden projects. Show their projects to open it.', true); return; }
+  openPanes(ids, v.focus, v.id);
+}
+
+/** Forgets a view (its sessions keep running); back to one session on its own if it was showing. */
+function closeView(id) {
+  const showing = sideBySide() && state.viewId === id;
+  deleteView(id);
+  if (showing) openPanes([state.expandedId]);
+  else renderSessionTabs();
+}
+
+/** The view showing, as a new view of its own (to change one way without losing the other). */
+function copyView() {
+  const v = activeView();
+  if (!v) return;
+  const copy = { ...structuredClone(v), id: newViewId(), name: v.name ? `${v.name} (copy)` : null };
+  state.views.splice(state.views.indexOf(v) + 1, 0, copy);
+  state.viewId = copy.id;
+  saveViews();
+  renderSessionTabs();
+  toast(`Saved as a new view. Changes from now on are to “${viewName(copy)}”.`);
+}
+
+/**
+ * A session menu's Add to view ▸: the views it isn't in, each with its shape and its sessions' dots (a full one greyed,
+ * saying why), and a new view with it. Left out with no view to add it to.
+ */
+function addToViewItem(s) {
+  const views = state.views.filter((v) => !v.ids.includes(s.id) && viewMembers(v).filter(isVisible).length > 1);
+  if (!views.length) return null;
+  return {
+    label: 'Add to view', icon: 'sideBySide',
+    submenu: [
+      ...views.map((v) => {
+        const full = v.ids.length >= MAX_PANES;
+        return {
+          label: h('span', { class: 'menu-view' }, h('span', { class: 'menu-view-name' }, viewName(v)),
+            h('span', { class: 'view-dots' }, viewMembers(v).filter(isVisible).map((x) => h('span', { class: 'dot ' + dotState(x).cls })))),
+          icon: viewIcon(v), disabled: full,
+          title: full ? `“${viewName(v)}” already has ${MAX_PANES} sessions, as many as fit side by side. Take one out first.` : null,
+          action: () => addToView(v.id, s.id),
+        };
+      }),
+      '-',
+      { label: 'New view with this session…', action: () => showSideBySideDialog(s, null) },
+    ],
+  };
+}
+
+/** Arrange ▸ for view `v` (by default the one showing): the shapes for its number (see arrangeItems), shown by the one in use. */
+function arrangeItem(v = activeView()) {
+  const shapes = arrangeItems(v).filter((x) => x && !x.header);
+  if (!shapes.length) return null;
+  return { label: 'Arrange', icon: shapes.find((x) => x.cls === 'current')?.icon.cloneNode(true) ?? 'sideBySide', submenu: shapes };
+}
+
+/** Puts a session into a view and shows the view, with it taking the keyboard. */
+function addToView(viewId, sessionId) {
+  const v = viewById(viewId);
+  if (!v || v.ids.includes(sessionId)) return;
+  const ids = [...viewMembers(v).filter(isVisible).map((x) => x.id), sessionId];
+  if (!paneRoom(ids.length)) { toast(`There isn't room for ${ids.length} sessions side by side. Make the window bigger, the font smaller (Ctrl+-) or hide the side panel.`, true); return; }
+  openPanes(ids, sessionId, v.id);
+}
+
+function renameView(id) {
+  const v = viewById(id);
+  if (!v) return;
+  const input = h('input', { type: 'text', value: v.name ?? '', placeholder: viewMembers(v).map((x) => x.name).join(' + '), maxlength: 60 });
+  const save = () => { v.name = input.value.trim() || null; saveViews(); closeModal(); renderSessionTabs(); };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
+  openModal('Rename view', h('div', {}, h('div', { class: 'field' }, input),
+    h('div', { class: 'help' }, 'Leave it empty to name it after its sessions.')),
+  [h('button', { class: 'btn', onclick: closeModal }, 'Cancel'), h('button', { class: 'btn primary', onclick: save }, 'Save')]);
+}
+
+/** Moves view `id` before or after view `targetId` (its tab dragged). */
+function moveView(id, targetId, before) {
+  const ids = moveId(state.views.map((v) => v.id), id, targetId, before);
+  state.views.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+  saveViews();
+  renderSessionTabs();
+}
+
+/** The views' tabs, first among the session tabs: each with two or more of its sessions shown. */
+const MAX_TOP_VIEWS = 3;   // across the top, views past these go in Views ▾, so the session tabs keep their room
+
+function viewTabs(down = false) {
+  // Numbered among those shown, as Ctrl+Shift+1…9 counts them.
+  const shown = state.views.filter((v) => viewMembers(v).filter(isVisible).length > 1);
+  if (!shown.length) return down ? viewHint() : null;
+  if (down || shown.length <= MAX_TOP_VIEWS) return h('div', { class: 'view-tabs' + (down ? ' down' : '') }, shown.map((v, i) => viewTab(v, i, down)));
+  // Across the top: the first few, the one showing always among them, and the rest in Views ▾.
+  const on = shown.find((v) => sideBySide() && v.id === state.viewId);
+  const first = shown.slice(0, MAX_TOP_VIEWS);
+  if (on && !first.includes(on)) first[MAX_TOP_VIEWS - 1] = on;
+  const rest = shown.filter((v) => !first.includes(v));
+  const asking = rest.some((v) => viewMembers(v).some((x) => isVisible(x) && dotState(x).cls === 'asking'));
+  return h('div', { class: 'view-tabs' },
+    first.map((v) => viewTab(v, shown.indexOf(v), false)),
+    h('button', {
+      class: 'view-more' + (asking ? ' asking' : ''), title: `${rest.length} more view${rest.length === 1 ? '' : 's'}`,
+      onclick: (e) => { const r = e.currentTarget.getBoundingClientRect(); viewsMenu(shown, r.left, r.bottom + 2); },
+    }, iconEl('sideBySide'), 'Views', h('span', { class: 'view-more-count' }, `+${rest.length}`), iconEl('chevD')));
+}
+
+/**
+ * Down the left with no views yet, where they'd be: one line on how to make one (Ctrl+click), cut short with … when the
+ * list is narrow and said in full in its tooltip; a click opens New view. It goes once there's a view, and isn't shown
+ * with fewer than two sessions, as there's nothing to put side by side.
+ */
+function viewHint() {
+  if (visibleSessions().length < 2) return null;
+  const cur = currentSession() ?? visibleSessions()[0];
+  const key = IS_MAC ? '⌘' : 'Ctrl';
+  return h('div', { class: 'view-tabs down' }, h('div', {
+    class: 'view-hint',
+    title: `Side-by-side views: work in up to ${MAX_PANES} sessions at once, each at full size.\n`
+      + `${key}+click a session's tab or tile to put it beside the one that's open (or the current one, on the tiles).\n`
+      + 'Click here to pick the sessions for a new view.',
+    onclick: () => showSideBySideDialog(cur, null),
+  },
+  iconEl('sideBySide'),
+  h('span', { class: 'view-hint-text' }, h('kbd', {}, key), '+click sessions to see them side by side')));
+}
+
+/** Views ▾: every view, each with its shape, name and sessions' dots, the one showing ticked. */
+function viewsMenu(views, x, y) {
+  showMenu(x, y, [
+    { header: 'Side-by-side views' },
+    ...views.map((v, i) => ({
+      label: h('span', { class: 'menu-view' }, h('span', { class: 'menu-view-name' }, viewName(v)),
+        h('span', { class: 'view-dots' }, viewMembers(v).filter(isVisible).map((x) => h('span', { class: 'dot ' + dotState(x).cls })))),
+      icon: viewIcon(v), cls: sideBySide() && v.id === state.viewId ? 'current' : '',
+      kbd: i < 9 ? `Ctrl+Shift+${i + 1}` : null,
+      action: () => showView(v.id),
+    })),
+  ]);
+  syncStatus(openMenuEl);
+}
+
+function viewTab(v, i, down) {
+  const members = viewMembers(v).filter(isVisible);
+  if (members.length < 2) return null;
+  const showing = sideBySide() && state.viewId === v.id;
+  const key = i < 9 ? `Ctrl+Shift+${i + 1}` : '';
+  // One line: its name and its sessions' dots. Down the left, ▾ lists the sessions beneath it (kept per view);
+  // across the top it's always one line, the names in its tooltip.
+  const open = down && !!v.expanded;
+  const dot = (x) => h('span', { class: 'dot ' + dotState(x).cls, title: `${x.name}: ${statusText(x)}` });
+  return h('div', {
+    class: 'view-tab' + (showing ? ' active' : '') + (down ? ' down' : '') + (open ? ' open' : '') + (members.some((x) => dotState(x).cls === 'asking') ? ' asking' : ''),
+    'data-id': v.id,
+    title: `${viewName(v)}${v.name ? `: ${members.map((x) => x.name).join(', ')}` : ''}\n`
+      + `${showing ? 'Click to go back to all sessions' : `Click to show them side by side${key ? ` (${key})` : ''}`}; right-click to arrange, rename or close it`,
+    onclick: (e) => {
+      if (e.target.closest('.tab-close, .nest-toggle')) return;
+      if (showing && docs.active === 'terminal') collapse();
+      else showView(v.id);
+    },
+    oncontextmenu: (e) => { e.preventDefault(); viewMenu(v, e.clientX, e.clientY); },
+  },
+  down && h('button', {
+    class: 'nest-toggle', 'aria-expanded': String(open), title: open ? 'Hide its sessions' : 'Show its sessions',
+    onclick: (e) => { e.stopPropagation(); v.expanded = !open; saveViews(); renderSessionTabs(); },
+  }, iconEl('chevD')),
+  h('button', { class: 'tab-label' }, viewIcon(v),   // its shape
+    h('span', { class: 'view-text' },
+      h('span', { class: 'view-head' },
+        // Across the top, one with no name of its own says how many sessions, its names in its tooltip.
+        h('span', { class: 'view-title' }, down || v.name ? viewName(v) : `${members.length} sessions`),
+        !open && h('span', { class: 'view-dots' }, members.map((x) => h('span', { class: 'view-member', 'data-sid': x.id }, dot(x))))),
+      open && h('span', { class: 'view-members' }, members.map((x) => h('span', { class: 'view-member', 'data-sid': x.id },
+        dot(x), h('span', { class: 'view-name' }, x.name)))))),
+  h('button', { class: 'icon-btn small tab-close', title: 'Close the view (its sessions keep running)', onclick: () => closeView(v.id) }, iconEl('close')));
+}
+
+function viewMenu(v, x, y) {
+  const showing = sideBySide() && state.viewId === v.id;
+  const anyone = state.byId.get(v.focus) ?? viewMembers(v)[0];
+  showMenu(x, y, [
+    showing ? { label: 'Back to all sessions', kbd: 'Shift+Esc', action: collapse } : { label: 'Show side by side', action: () => showView(v.id) },
+    arrangeItem(v),   // showing or not: one in its tab takes the shape next time it shows
+    '-',
+    { label: 'Change sessions…', action: () => showSideBySideDialog(anyone, v.id) },
+    { label: 'Rename…', action: () => renameView(v.id) },
+    showing && { label: 'Save as a new view', action: copyView },
+    { label: 'New view…', action: () => showSideBySideDialog(currentSession() ?? anyone, null) },
+    '-',
+    { label: 'Close view', action: () => closeView(v.id) },
+  ]);
+}
+
+/** Keeps the dots on the views' tabs in step with a session's (see renderTileState). */
+function updateViewTab(s) {
+  for (const el of document.querySelectorAll(`.view-tab .view-member[data-sid="${s.id}"] .dot`)) {
+    el.className = 'dot ' + dotState(s).cls;
+    el.title = statusText(s);
+  }
+  for (const tab of document.querySelectorAll('.view-tab')) {
+    tab.classList.toggle('asking', viewMembers(viewById(tab.dataset.id)).some((x) => isVisible(x) && dotState(x).cls === 'asking'));
+  }
+}
+
+/** Side by side, one session fills the area for a while (to read a wide diff, say), or goes back beside the others. */
+function zoomPane(id) {
+  if (!sideBySide() || !state.paneIds.includes(id)) return;
+  state.paneZoom = state.paneZoom === id ? null : id;
+  focusPane(id);
+}
+
+/**
+ * Picks the sessions to see side by side, `s` among them: for view `viewId` (its sessions to start with), a new view
+ * (null; the current session to start with), or by default the view showing (else a new one).
+ */
+function showSideBySideDialog(s, viewId = sideBySide() ? state.viewId : null) {
+  const shown = visibleSessions();
+  const v = viewById(viewId);
+  const picked = new Set(v ? v.ids : [state.currentId]);
+  picked.add(s.id);
+  for (const id of [...picked]) if (!shown.some((x) => x.id === id)) picked.delete(id);
+  while (picked.size > MAX_PANES) picked.delete([...picked][0]);
+  const ok = h('button', {
+    class: 'btn primary',
+    onclick: () => { closeModal(); openPanes(shown.filter((x) => picked.has(x.id)).map((x) => x.id), s.id, v ? v.id : null); },
+  }, v ? 'Show side by side' : 'Create view');
+  const note = h('div', { class: 'help' });
+  const boxes = shown.map((x) => h('input', {
+    type: 'checkbox', checked: picked.has(x.id),
+    onchange: (e) => { if (e.target.checked) picked.add(x.id); else picked.delete(x.id); sync(); },
+  }));
+  const sync = () => {
+    const full = picked.size >= MAX_PANES;
+    boxes.forEach((b) => { b.disabled = full && !b.checked; });
+    const room = picked.size < 2 || paneRoom(picked.size);
+    ok.disabled = picked.size < 2 || !room;
+    note.textContent = picked.size < 2 ? 'Tick two or more.'
+      : !room ? `${picked.size} don't fit beside each other at this window size; make the window bigger or the font smaller.`
+        : full ? `Up to ${MAX_PANES} sessions fit side by side.` : '';
+  };
+  sync();
+  openModal(v ? `Side by side: ${viewName(v)}` : 'New side-by-side view', h('div', { class: 'side-by-side-pick' },
+    h('div', {}, 'Each one works at its own pane’s size. Ctrl+click a tab or tile later to add or take out one.'),
+    h('div', { class: 'scope-boxes' }, shown.map((x, i) => h('label', { class: 'perms-radio' },
+      boxes[i], statusDot(x), x.name, projectOf(x) ? h('span', { class: 'proj-tag', style: `--proj:${projectColor(projectOf(x))}` }, projectOf(x).name) : null))),
+    note),
+  [h('button', { class: 'btn', onclick: closeModal }, 'Cancel'), ok]);
+}
+
+/** Takes out of the open sessions any that `keep` turns down (removed, or in a project being hidden). */
+function dropPanes(keep) {
+  const before = state.paneIds;
+  state.paneIds = before.filter(keep);
+  if (state.paneIds.length === before.length) return;
+  if (!state.paneIds.includes(state.paneZoom)) state.paneZoom = null;
+  if (state.expandedId && !state.paneIds.includes(state.expandedId)) {
+    state.byId.get(state.expandedId)?.term.blur();
+    state.expandedId = state.paneIds[0] ?? null;
+    if (state.expandedId) { state.currentId = state.expandedId; store.set('currentId', state.currentId); }
+  }
+  for (const id of state.paneIds) { const x = state.byId.get(id); if (x) renderTileHeader(x); }
+  if (docs.paneOf) showDocs();   // a tab in a pane that's gone: in another, or over the area once one session is left
+}
+
 function collapse() {
   if (!state.expandedId) return;
   const s = state.byId.get(state.expandedId);
   state.expandedId = null;
+  state.paneIds = [];
+  state.paneZoom = null;
+  state.viewId = null;
   s?.term.blur();
   layout();
+  if (docs.paneOf) showDocs();   // a tab that had a pane covers the area again
   for (const x of state.sessions) renderTileHeader(x);
   renderSessionTabs();
   renderSessionPicker();   // any visible session can be picked again
 }
 
 function cycle(delta) {
+  if (sideBySide()) {   // round the sessions side by side
+    const ids = state.paneIds, i = ids.indexOf(state.expandedId);
+    focusPane(ids[(i + delta + ids.length) % ids.length], true);
+    return;
+  }
   const shown = visibleSessions();
   if (!shown.length) return;
   const idx = shown.findIndex((s) => s.id === (state.expandedId ?? state.currentId));
@@ -2637,27 +3374,44 @@ function setFontSize(size) {
 /** The app's shortcut modifier: ⌘ on a Mac, Ctrl elsewhere. */
 const mod = (e) => (IS_MAC ? e.metaKey : e.ctrlKey);
 
+/**
+ * Whether the keys for tabs (Shift+Esc, Ctrl+W) go to the tab you're on. Side by side, its page takes one pane, and
+ * typing in another session's terminal beside it leaves those keys to that terminal.
+ */
+const docHasKeys = () => !!activeTab() && !(docs.paneOf && $('#termPane').contains(document.activeElement));
+
 /** Returns true for app-level shortcuts that should not reach the terminal. */
 function handleShortcut(e) {
   if (e.type !== 'keydown') return false;
   const k = e.key;
   if (k === 'Escape' && e.shiftKey && !mod(e) && !e.altKey) {
     if (!$('#modalHost').hidden) closeModal();
-    else if (activeTab()) showTerminalDoc();
+    else if (docHasKeys()) showTerminalDoc();
     else collapse();
+    return true;
+  }
+  // Side by side: the next or previous session's pane takes the keyboard.
+  if (mod(e) && e.altKey && !e.shiftKey && sideBySide() && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(k)) {
+    cycle(k === 'ArrowLeft' || k === 'ArrowUp' ? -1 : 1);
     return true;
   }
   // The physical key, not the character: with some keyboard layouts Ctrl plus a number key doesn't produce "1"…"9".
   const digit = /^(?:Digit|Numpad)([1-9])$/.exec(e.code)?.[1] ?? (/^[1-9]$/.test(k) ? k : null);
+  // Ctrl+Shift+1…9: a side-by-side view, by its place among the views' tabs. (Not Ctrl+Alt: that's AltGr, which types.)
+  if (mod(e) && e.shiftKey && !e.altKey && digit) {
+    const v = state.views.filter((x) => viewMembers(x).filter(isVisible).length > 1)[+digit - 1];
+    if (v) showView(v.id);
+    return true;
+  }
   if (mod(e) && !e.altKey && !e.shiftKey && digit) {
     const s = visibleSessions()[+digit - 1];   // matches the Ctrl+N hints on the visible tabs
     if (s) expand(s.id);
     return true;
   }
   if (mod(e) && !e.shiftKey && (k === 'PageUp' || k === 'PageDown')) { cycleDoc(k === 'PageUp' ? -1 : 1); return true; }
-  if (mod(e) && k === 'F4') { if (activeTab()) closeDoc(docs.active); return true; }
+  if (mod(e) && k === 'F4') { if (docHasKeys()) closeDoc(docs.active); return true; }
   // Ctrl+W closes a diff or Conversation tab. On the terminal it isn't taken: it deletes a word in Claude's prompt.
-  if (mod(e) && !e.shiftKey && !e.altKey && (k === 'w' || k === 'W') && activeTab()) { closeDoc(docs.active); return true; }
+  if (mod(e) && !e.shiftKey && !e.altKey && (k === 'w' || k === 'W') && docHasKeys()) { closeDoc(docs.active); return true; }
   if (e.ctrlKey && k === 'Tab') { cycle(e.shiftKey ? -1 : 1); return true; }
   if (mod(e) && e.shiftKey && (k === 'G' || k === 'g')) { toggleGit(); return true; }
   if (mod(e) && e.shiftKey && (k === 'N' || k === 'n')) { showAddDialog(); return true; }
@@ -2759,7 +3513,7 @@ async function dropOnTerminal(s, dt) {
       }
     }
     await pastePaths(s, paths);
-    if (state.expandedId === s.id) s.term.focus();
+    if (isOpen(s)) s.term.focus();
   } catch (err) {
     toast(err.message, true);
   }
@@ -2800,23 +3554,76 @@ function closeMenu() {
   return true;
 }
 
+/**
+ * A menu's items. Items: '-' for a separator ('~' for a lighter, shorter one within a section), { header } for a section
+ * title, or { label, action } with optional kbd, danger, cls (classes for the item), title (its tooltip), disabled,
+ * checked (ticked when true) and icon (a name from PATHS, or an element such as a plugin's image), which share a column
+ * at the start: a ticked item shows the tick in place of its icon. If any item has either, all get the column. An item
+ * with submenu (items) instead of action opens them in a flyout beside the menu (see openFlyout).
+ */
+function menuItems(items, root) {
+  const lead = items.some((it) => it && (it.checked !== undefined || it.icon));
+  return items.filter(Boolean).map((it) => {
+    if (it === '-' || it === '~') return h('div', { class: 'menu-sep' + (it === '~' ? ' subtle' : '') });
+    if (it.header) return h('div', { class: 'menu-header' }, it.header);
+    const el = h('div', {
+      class: 'menu-item' + (it.danger ? ' danger' : '') + (it.disabled ? ' disabled' : '') + (it.submenu ? ' has-sub' : '') + (it.cls ? ' ' + it.cls : ''),
+      title: it.title ?? null,
+      onclick: () => {
+        if (it.disabled) return;
+        if (it.submenu) { openFlyout(root, el, it.submenu, true); return; }
+        closeMenu();
+        it.action();
+      },
+    },
+    lead && h('span', { class: 'menu-icon' }, it.checked ? '✓' : typeof it.icon === 'string' ? iconEl(it.icon) : it.icon ?? ''),
+    it.label, it.kbd && h('span', { class: 'kbd' }, it.kbd), it.submenu && h('span', { class: 'menu-sub' }, iconEl('chevR')));
+    el.submenu = it.submenu;
+    return el;
+  });
+}
+
+/**
+ * Opens an item's flyout beside its menu (on the left when the right has no room), closing any other. Pointing at another
+ * item closes it after a moment, so moving the pointer across to the flyout on a slant doesn't. withKey: its first item
+ * starts highlighted, as the keyboard opens it.
+ */
+function openFlyout(root, item, items, withKey = false) {
+  closeFlyout(root);
+  const fly = h('div', { class: 'menu flyout', onmouseenter: () => clearTimeout(root.flyTimer) }, menuItems(items, root));
+  root.append(fly);   // inside the menu, so a press in it is a press in the menu; fixed, so the menu's scrolling doesn't clip it
+  root.flyout = fly;
+  item.classList.add('open');
+  fly.style.maxHeight = innerHeight - 8 + 'px';
+  const r = item.getBoundingClientRect(), m = root.getBoundingClientRect(), f = fly.getBoundingClientRect();
+  const right = m.right + 2, left = m.left - f.width - 2;
+  fly.style.left = (right + f.width <= innerWidth - 4 || left < 4 ? Math.min(right, innerWidth - f.width - 4) : left) + 'px';
+  fly.style.top = Math.max(4, Math.min(r.top - 5, innerHeight - f.height - 4)) + 'px';
+  if (withKey) fly.querySelector('.menu-item:not(.disabled)')?.classList.add('active');
+}
+
+function closeFlyout(root) {
+  root.flyout?.remove();
+  root.flyout = null;
+  root.querySelector(':scope > .menu-item.open')?.classList.remove('open');
+}
+
 function showMenu(x, y, items) {
   closeMenu();
   // Pressing on the menu mustn't take focus: after Paste in the terminal's menu, typing has to go on in the terminal.
-  // Items: '-' for a separator ('~' for a lighter, shorter one within a section), { header } for a section title, or { label, action } with optional kbd, danger,
-  // checked (ticked when true) and icon (a name from PATHS, or an element such as a plugin's image), which share a column
-  // at the start: a ticked item shows the tick in place of its icon. If any item has either, all get the column.
-  const lead = items.some((it) => it && (it.checked !== undefined || it.icon));
   const menu = h('div', {
     class: 'menu', onmousedown: (e) => e.preventDefault(),
-    onmousemove: (e) => e.currentTarget.querySelector('.menu-item.active')?.classList.remove('active'),   // the pointer takes over
-  }, items.filter(Boolean).map((it) => it === '-' || it === '~'
-    ? h('div', { class: 'menu-sep' + (it === '~' ? ' subtle' : '') })
-    : it.header
-      ? h('div', { class: 'menu-header' }, it.header)
-      : h('div', { class: 'menu-item' + (it.danger ? ' danger' : ''), onclick: () => { closeMenu(); it.action(); } },
-        lead && h('span', { class: 'menu-icon' }, it.checked ? '✓' : typeof it.icon === 'string' ? iconEl(it.icon) : it.icon ?? ''),
-        it.label, it.kbd && h('span', { class: 'kbd' }, it.kbd))));
+    onmousemove: (e) => e.currentTarget.querySelectorAll('.menu-item.active').forEach((i) => i.classList.remove('active')),   // the pointer takes over
+  });
+  menu.append(...menuItems(items, menu));
+  // Pointing at an item with a flyout opens it after a moment; pointing at another closes it after a moment.
+  for (const el of menu.querySelectorAll(':scope > .menu-item')) {
+    el.addEventListener('mouseenter', () => {
+      clearTimeout(menu.flyTimer);
+      if (menu.flyout && el.classList.contains('open')) return;
+      menu.flyTimer = setTimeout(() => (el.submenu && !el.classList.contains('disabled') ? openFlyout(menu, el, el.submenu) : closeFlyout(menu)), el.submenu ? 120 : 280);
+    });
+  }
   $('#menuHost').append(menu);
   // Kept inside the window: moved up or left when it would run off the bottom or right, and never above the top. A menu
   // taller than the window (the palette menu with many themes and plugins on a small screen) scrolls instead of being cut off.
@@ -2838,8 +3645,21 @@ document.addEventListener('mousedown', (e) => { if (openMenuEl && !openMenuEl.co
  */
 function menuKey(e) {
   if (!openMenuEl || e.ctrlKey || e.altKey || e.metaKey) return false;
-  const items = [...openMenuEl.querySelectorAll('.menu-item')];
+  // A flyout that's open has the keys; ← or Escape closes it, back to its item. → or Enter opens an item's flyout.
+  const fly = openMenuEl.flyout;
+  const level = fly ?? openMenuEl;
+  const items = [...level.querySelectorAll(':scope > .menu-item')];
   const at = items.findIndex((i) => i.classList.contains('active'));
+  if (fly && (e.key === 'ArrowLeft' || (e.key === 'Escape' && !e.shiftKey))) {
+    const owner = openMenuEl.querySelector(':scope > .menu-item.open');
+    closeFlyout(openMenuEl);
+    owner?.classList.add('active');
+    return true;
+  }
+  if (e.key === 'ArrowRight' && at >= 0 && items[at].submenu && !fly && !items[at].classList.contains('disabled')) {
+    openFlyout(openMenuEl, items[at], items[at].submenu, true);
+    return true;
+  }
   // A menu with a box to type in (the branch picker's filter) keeps Space, Home and End for the box.
   const typing = e.target instanceof HTMLInputElement && openMenuEl.contains(e.target);
   const move = { ArrowDown: at + 1, ArrowUp: (at < 0 ? items.length : at) - 1, ...(typing ? {} : { Home: 0, End: items.length - 1 }) }[e.key];
@@ -2866,7 +3686,13 @@ function sessionMenu(s, x, y, from = 'session') {
     c?.state === 'online' && c.outdated && { header: serverVersionText(c) },
     c?.state === 'online' && c.outdated && { label: `Update LlamaTree on ${serverName(c)}…`, action: () => updateServer(c) },
     c?.state === 'online' && c.outdated && '-',
-    state.expandedId === s.id ? { label: 'Back to all sessions', kbd: 'Shift+Esc', action: collapse } : { label: 'Expand', action: () => expand(s.id) },
+    isOpen(s) ? { label: 'Back to all sessions', kbd: 'Shift+Esc', action: collapse } : { label: 'Expand', action: () => expand(s.id) },
+    !isOpen(s) && state.expandedId && { label: 'Open beside the open session', kbd: 'Ctrl+click', action: () => togglePane(s.id) },
+    isOpen(s) && sideBySide() && { label: 'Take out of side by side', kbd: 'Ctrl+click', action: () => togglePane(s.id) },
+    visibleSessions().length > 1 && { label: 'Side by side…', action: () => showSideBySideDialog(s) },
+    addToViewItem(s),
+    isOpen(s) && sideBySide() && arrangeItem(),
+    '-',
     gitTabOn('changes') && { label: 'Show Git changes', action: () => showGit(s.id) },
     { label: 'Show conversation', action: () => openConversation(s) },
     { label: 'Permissions…', action: () => openPermissions('session', s.id) },
@@ -4106,11 +4932,12 @@ function showGit(id) {
 function renderSessionPicker() {
   const sel = $('#gitSession');
   const open = state.byId.get(state.expandedId);
-  const choices = open ? [open] : visibleSessions();
+  // Side by side, any of the open sessions (picking one gives it the keyboard too).
+  const choices = sideBySide() ? state.paneIds.map((id) => state.byId.get(id)).filter(Boolean) : open ? [open] : visibleSessions();
   sel.replaceChildren(...choices.map((s) => h('option', { value: s.id, selected: s.id === state.currentId },
     `${s.name}${projectOf(s) ? ` [${projectOf(s).name}]` : ''}  —  ${s.directory}`)));
-  sel.disabled = !!open;
-  sel.title = open ? `Showing the open session. Go back to all sessions (Shift+Esc) to pick another.` : '';
+  sel.disabled = !!open && !sideBySide();
+  sel.title = sel.disabled ? `Showing the open session. Go back to all sessions (Shift+Esc) to pick another.` : '';
 }
 
 $('#gitSession').addEventListener('change', (e) => showGit(e.target.value));
@@ -5985,7 +6812,7 @@ function loadMonaco() {
         renderIndicators: true,
         renderOverviewRuler: true,
         enableSplitViewResizing: true,
-        useInlineViewWhenSpaceIsLimited: false,
+        useInlineViewWhenSpaceIsLimited: $('#docArea').classList.contains('in-pane'),   // see placePaneDoc
         fontFamily: '"Cascadia Mono", Consolas, Menlo, "DejaVu Sans Mono", monospace',
         fontSize: 13,
         scrollBeyondLastLine: false,
@@ -6023,6 +6850,7 @@ function languageFor(path) {
 // dir and at: which side of the terminal the tab goes (a DOCK_SIDES key) and the terminal's share of the area.
 const docs = {
   tabs: [], active: 'terminal', side: null, shown: null,
+  paneOf: null,   // side by side, the session whose pane the shown tab takes (see showDocs)
   dir: store.get('docSplitDir', 'right'), at: store.get('docSplitAt', 0.5),
 };
 /** The sides of the terminal a tab can go, in words, with the side across from each. */
@@ -6034,7 +6862,11 @@ const DOCK_SIDES = {
 };
 const docKey = (sessionId, spec) => [sessionId, spec.mode, spec.commit || '', spec.path].join('|');
 const activeTab = () => docs.tabs.find((t) => t.key === docs.active) || null;
-const sideTab = () => (docs.side && docs.tabs.find((t) => t.key === docs.side && tabShown(t))) || null;
+// Side by side, a tab isn't put beside the terminal: a session's tab takes that session's pane instead (see showDocs).
+// docs.side is kept, so it's beside the terminal again once one session is open on its own.
+const sideTab = () => (docs.side && !sideBySide() && docs.tabs.find((t) => t.key === docs.side && tabShown(t))) || null;
+/** A tab whose page can take a session's pane side by side: a diff or a Conversation, which belong to a session. */
+const paneDocOk = (t) => !!t?.sessionId && !isProjectTab(t) && !isPluginTab(t) && !isPermsTab(t) && !isGalleryTab(t);
 /** The tab whose page is on screen: the one you're on, else the one beside the terminal. */
 const shownDoc = () => activeTab() || sideTab();
 const canSplit = (t) => !!t && !isProjectTab(t);   // a Project view stands alone
@@ -6048,6 +6880,7 @@ function tabShown(t) {
   if (isProjectTab(t)) return state.projectViewOf === t.projectId;
   if (state.projectViewOf != null) return false;
   if (isPluginTab(t) || isPermsTab(t) || isGalleryTab(t)) return true;   // a plugin, Permissions or Get plugins belongs to no project
+  if (sideBySide() && state.paneIds.includes(t.sessionId)) return true;   // each session side by side keeps its tabs, whatever its project
   const cur = currentSession();
   const s = state.byId.get(t.sessionId);
   return !cur || !s || groupOf(s) === groupOf(cur);
@@ -6082,8 +6915,10 @@ function activateDoc(key) {
   state.projectViewOf = isProjectTab(target) ? target.projectId : null;
   if (state.projectViewOf != null) collapse();
   docs.active = docs.tabs.some((t) => t.key === key && tabShown(t)) ? key : 'terminal';
-  if (docs.side && canSplit(activeTab())) {
-    docs.side = docs.active;   // split: the tab you pick goes beside the terminal, and takes the keyboard from it
+  if (sideBySide() ? paneDocOk(activeTab()) : docs.side && canSplit(activeTab())) {
+    // Split, the tab you pick goes beside the terminal; side by side, it takes its session's pane. Either way it takes
+    // the keyboard from the terminal.
+    if (!sideBySide()) docs.side = docs.active;
     if ($('#termPane').contains(document.activeElement)) document.activeElement.blur();
   }
   showDocs();
@@ -6106,16 +6941,22 @@ function showDocs() {
   }
   docs.shown = tab;
   const split = !!tab && tab === sideTab();
+  // Side by side, a session's diff or Conversation takes its session's pane (the open session's, for another session of
+  // its project), and the others carry on beside it. It stays in that pane while you work in another.
+  docs.paneOf = !sideBySide() || !paneDocOk(tab) ? null
+    : state.paneIds.includes(tab.sessionId) ? tab.sessionId
+      : prev === tab && state.paneIds.includes(docs.paneOf) ? docs.paneOf : state.expandedId;
   $('#diffDoc').hidden = !tab || isConvTab(tab) || isProjectTab(tab) || isPluginTab(tab) || isPermsTab(tab) || isGalleryTab(tab);
   $('#convDoc').hidden = !isConvTab(tab);
   $('#projectDoc').hidden = !isProjectTab(tab);
   $('#pluginDoc').hidden = !isPluginTab(tab);
   $('#permsDoc').hidden = !isPermsTab(tab);
   $('#galleryDoc').hidden = !isGalleryTab(tab);
-  $('#termPane').classList.toggle('behind', !!tab && !split);
+  $('#termPane').classList.toggle('behind', !!tab && !split && !docs.paneOf);
   const area = $('#docArea');
   for (const dir in DOCK_SIDES) area.classList.toggle('split-' + dir, split && docs.dir === dir);
   area.style.setProperty('--split', docs.at * 100 + '%');
+  placePaneDoc();
   hideRailCard();
   renderDocTabs();
   if (tab && prev !== tab) {
@@ -6128,6 +6969,25 @@ function showDocs() {
   } else if (!tab) {
     diffState.seq++;
   }
+}
+
+/**
+ * Side by side, puts the page of the tab that takes a pane (docs.paneOf) over that pane's terminal, below its header so
+ * it's clear whose it is; layout calls it too, as panes move. While one session fills the area, it goes over that one.
+ */
+function placePaneDoc() {
+  const area = $('#docArea');
+  const id = docs.paneOf && (state.paneZoom ?? docs.paneOf);
+  const r = id && docs.shown && state.paneRects.get(id);
+  area.classList.toggle('in-pane', !!r);
+  if (r) {
+    area.style.setProperty('--pane-x', r.x + 'px');
+    area.style.setProperty('--pane-y', r.y + HEADER_H + 1 + 'px');
+    area.style.setProperty('--pane-w', r.w + 'px');
+    area.style.setProperty('--pane-h', r.h - HEADER_H - 1 + 'px');
+  }
+  // Narrower than a side-by-side diff reads well, the diff goes inline (the toolbar's own setting holds elsewhere).
+  diffEditor?.updateOptions({ useInlineViewWhenSpaceIsLimited: !!r });
 }
 
 /** Shows tab `key` on a side of the terminal (a DOCK_SIDES key), or on its own again (dir null). */
@@ -6186,7 +7046,8 @@ function renderDocTabs() {
   const termTab = h('div', {
     class: 'doc-tab terminal' + (docs.active === 'terminal' ? ' active' : ''),
     'data-id': 'terminal',
-    title: 'Terminals (Shift+Esc from a diff, Ctrl+PgUp/PgDn to switch tabs)\nDrag to a side of the area to show a tab beside it',
+    title: 'Terminals (Shift+Esc from a diff, Ctrl+PgUp/PgDn to switch tabs)\n'
+      + (sideBySide() ? 'Side by side, a diff opens in its own session’s pane' : 'Drag to a side of the area to show a tab beside it'),
     onclick: showTerminalDoc,
   }, iconEl('terminal'), h('span', { class: 'doc-title' }, ex ? ex.name : 'All sessions'), ex ? projectTag(ex) : null,
   waiting ? h('span', { class: 'badge', title: `${waiting} session(s) waiting for you` }, String(waiting)) : null);
@@ -6433,9 +7294,11 @@ setInterval(async () => {
     const s = state.byId.get(tab.sessionId);
     if (s?.running && await loadConversation(s, true) && docs.shown === tab) renderConversation(s, tab);
   }
-  if (!tab || tab === sideTab()) {   // the terminal is on screen
-    const s = state.byId.get(state.expandedId);
-    if (s?.running) refreshTermRail(s);
+  if (!tab || tab === sideTab() || docs.paneOf) {   // terminals are on screen: each one's rail follows it
+    for (const id of state.paneIds) {
+      const s = state.byId.get(id);
+      if (s?.running && id !== docs.paneOf) refreshTermRail(s);
+    }
   }
 }, CONV_POLL_MS);
 
@@ -10078,7 +10941,7 @@ $('#permsPause')?.addEventListener('click', () => setRelayPaused(!relay.paused))
 /** A session as plugins allowed to see sessions are told it. status is statusClass's: exited, asking (needs your answer), attention (finished, waiting for you), working or running (idle). */
 const pluginSessionInfo = (s) => ({
   id: s.id, name: s.name, project: groupOf(s) === UNKNOWN ? null : projectName(groupOf(s)), directory: s.directory,
-  worktree: s.git?.isRepo ? s.git.root : null, status: statusClass(s), open: s.id === state.expandedId,
+  worktree: s.git?.isRepo ? s.git.root : null, status: statusClass(s), open: isOpen(s),
 });
 
 /**
@@ -10303,6 +11166,9 @@ enableTabDrag($('#projectTabs'), projectDrag);
 // The same down the left: each looks only for its own kind of row, so the two share the list.
 enableTabDrag($('#navList'), { ...sessionDrag, axis: 'y' });
 enableTabDrag($('#navList'), { ...projectDrag, axis: 'y' });
+// The side-by-side views' tabs reorder among themselves.
+enableTabDrag($('#sessionTabs'), { item: '.view-tab', onDrop: moveView });
+enableTabDrag($('#navList'), { item: '.view-tab', onDrop: moveView, axis: 'y' });
 
 // ------------------------------------------------------------------ where projects and sessions go
 
@@ -10403,7 +11269,12 @@ enableTabDrag($('#docTabs'), {
     renderDocTabs();
   },
   outside: {
-    over: (key, x, y) => { if (panelHint(key, x, y)) { dockHint(null); return 'panel'; } return dockHint(key, x, y); },
+    over: (key, x, y) => {
+      if (panelHint(key, x, y)) { dockHint(null); return 'panel'; }
+      // Side by side, a tab isn't put beside the terminals (a session's takes its own pane): nowhere to drop it but the row.
+      if (sideBySide()) { dockHint(null); return null; }
+      return dockHint(key, x, y);
+    },
     drop: (key, dir) => (dir === 'panel' ? movePlugin(docs.tabs.find((t) => t.key === key).pluginId, 'panel', null)
       : key === 'terminal' ? splitTerminal(dir) : splitDoc(key, dir || null)),
   },
@@ -10459,9 +11330,9 @@ function splitTerminal(dir) {
 
 $('#docTabs').addEventListener('contextmenu', (e) => {
   if (e.target.closest('.doc-tab.terminal')) {
-    const partner = terminalPartner();
-    if (!partner) return;
     e.preventDefault();
+    const partner = !sideBySide() && terminalPartner();   // side by side, nothing goes beside the terminals
+    if (!partner) return;
     const split = sideTab() && docs.side === partner.key;
     showMenu(e.clientX, e.clientY, [
       { header: 'Beside ' + (isConvTab(partner) ? 'the Conversation' : isPluginTab(partner) ? pluginCaption(partner.pluginId) : partner.spec.path.split('/').pop()) },
@@ -10477,10 +11348,11 @@ $('#docTabs').addEventListener('contextmenu', (e) => {
   if (!t) return;
   e.preventDefault();
   const beside = docs.side === t.key;
+  const dockable = canSplit(t) && !sideBySide();   // side by side, a tab takes its session's pane instead
   showMenu(e.clientX, e.clientY, [
-    ...Object.entries(DOCK_SIDES).map(([dir, side]) => canSplit(t) && { label: side.label, checked: beside && docs.dir === dir, action: () => splitDoc(t.key, dir) }),
-    canSplit(t) && { label: 'On its own', checked: !beside, action: () => splitDoc(t.key, null) },
-    canSplit(t) && '-',
+    ...Object.entries(DOCK_SIDES).map(([dir, side]) => dockable && { label: side.label, checked: beside && docs.dir === dir, action: () => splitDoc(t.key, dir) }),
+    dockable && { label: 'On its own', checked: !beside, action: () => splitDoc(t.key, null) },
+    dockable && '-',
     isPluginTab(t) && { label: 'Move to the side panel', action: () => movePlugin(t.pluginId, 'panel', null) },
     isPluginTab(t) && '-',
     { label: 'Close', kbd: 'Ctrl+W', action: () => closeDoc(t.key) },
