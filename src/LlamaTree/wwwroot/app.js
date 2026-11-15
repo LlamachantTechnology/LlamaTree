@@ -1526,11 +1526,13 @@ const TERM_THEME_LIGHT = {
 /** The terminals' colours: a theme's own over its base's. */
 const termTheme = (look = themeLook()) => ({ ...(isLight() ? TERM_THEME_LIGHT : TERM_THEME_DARK), ...look?.terminal });
 
-// The light cycle (a theme's "cursor": "light-cycle"): a light cycle drawn in the terminal's cursor colour, riding a little to
-// the right of the cursor (three cells wide, unless a theme's "cycle" says otherwise) and leaving a ribbon of light that fades behind it as it moves,
-// turning at right angles when it changes line. It's a layer over the terminal's screen. The cursor itself stays a
-// blinking bar in the cursor colour, so you can see where you're typing and whether the terminal has focus; the cycle
-// dims while it hasn't (see .cycle-head in app.css).
+// The light cycle (a theme's "cursor": "light-cycle"): a light cycle drawn in the terminal's cursor colour, leaving a ribbon
+// of light that fades behind it as it moves, turning at right angles when it changes line. It's a layer over the terminal's
+// screen. It rides a little to the right of the cursor (25 pixels, three cells wide, unless a theme's "cycle" says
+// otherwise), and the cursor stays a blinking bar in the cursor colour, so you can see where you're typing and whether the
+// terminal has focus; the cycle dims while it hasn't (see .cycle-head in app.css). A theme's "cycle" with an offset of 0
+// makes it the cursor instead: it sits on the cursor's cell, the terminal's own cursor is hidden and the cycle blinks in its
+// place. Over text it fades to a faint outline with a lit line under the cursor's cell, so what you're editing still reads.
 const TRAIL_MAX = 48;        // pieces of ribbon kept at once
 // The app's own cycle, written as a theme's "cycle" is (see ThemeCycle): side view, facing right, in a 24 by 16 box: two
 // tall wheels with hubs, the canopy sweeping over them, the rider's back, and the white light stripe along the canopy;
@@ -1556,6 +1558,8 @@ function cycleOptions(look = themeLook()) {
   if (!c) return CYCLE_DEFAULT;
   return { image: c.image ?? CYCLE_DEFAULT.image, size: c.size, offset: c.offset, glow: c.glow, trail: c.trail ?? null };
 }
+/** Whether the cycle is the cursor: a theme's offset of 0 puts it on the cursor's cell, where it blinks in place of the terminal's own. */
+const cycleIsCursor = (opts = cycleOptions()) => opts.offset === 0;
 const CYCLE_HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const CYCLE_PATH = /^\s*[Mm][MmLlHhVvCcSsQqTtAaZz0-9eE.,+\-\s]*$/;
 /** A cycle colour as CSS: the cursor's, the accent or a page colour by name (as variables), a hex, or none. */
@@ -1609,16 +1613,18 @@ const trailsAllowed = () => !matchMedia('(prefers-reduced-motion: reduce)').matc
 
 /**
  * The terminal's colours as the theme wants them on screen: see-through over the Grid floor or the rain (the tile under
- * it paints the floor's lines, see .tile in app.css) and under a veil of less than 100% (the slider in its corner), and the
- * cursor a bar, blinking as ever, while the light cycle rides beside it.
+ * it paints the floor's lines, see .tile in app.css) and under a veil of less than 100% (the slider in its corner). With
+ * the light cycle as the cursor, the terminal's own cursor is hidden (drawn in no colour) and the cycle blinks in its
+ * place; with the cycle riding beside the cursor, the cursor is a bar, blinking as ever.
  */
 function dressCursor(s) {
   const t = termTheme();
   const theme = { ...t };
   const look = themeLook();
   if (seeThrough(look)) theme.background = 'rgba(0, 0, 0, 0)';
+  if (s.cycle && cycleIsCursor()) theme.cursor = theme.cursorAccent = 'rgba(0, 0, 0, 0)';
   s.term.options.theme = theme;
-  s.term.options.cursorStyle = s.cycle ? 'bar' : 'block';   // a bar beside the cycle: the cell stays readable
+  s.term.options.cursorStyle = s.cycle ? 'bar' : 'block';   // a bar beside the cycle (or hidden under it): the cell stays readable
 }
 
 /** Puts the light cycle on a session's terminal, or takes it off, and sets the terminal's colours either way. */
@@ -1636,7 +1642,7 @@ function lightCycle(s, on) {
   if (s.cycle) { s.cycle.layer.style.setProperty('--cycle', termTheme().cursor); dressCursor(s); return; }
   const screen = s.surface.querySelector('.xterm-screen');
   if (!screen) return;
-  const head = h('div', { class: 'cycle-head', hidden: true }, cycleSvg(opts.image));
+  const head = h('div', { class: 'cycle-head' + (cycleIsCursor(opts) ? ' cursor' : ''), hidden: true }, cycleSvg(opts.image));
   head.style.filter = opts.glow > 0 ? `drop-shadow(0 0 ${opts.glow / 3}px var(--cycle)) drop-shadow(0 0 ${opts.glow}px var(--cycle))` : 'none';
   const layer = h('div', { class: 'cycle-layer' }, head);
   layer.style.setProperty('--cycle', termTheme().cursor);
@@ -1651,12 +1657,13 @@ function lightCycle(s, on) {
     const cw = screen.clientWidth / term.cols, ch = screen.clientHeight / term.rows;
     const x = b.cursorX, y = b.cursorY;
     head.hidden = false;
-    Object.assign(head.style, { left: `${x * cw + opts.offset}px`, top: `${y * ch}px`, width: `${cw * opts.size}px`, height: `${ch}px` });
-    // Text where it would ride (the cursor moved back into a line, or a hint after it, as Claude's prompt has): it steps
-    // back, faint and without its glow, so the text can be read, until it's over empty cells again.
-    const line = b.getLine(b.baseY + y), first = Math.floor(x + opts.offset / cw), last = Math.ceil(x + opts.offset / cw + opts.size);
+    Object.assign(head.style, { left: `${x * cw + opts.offset}px`, top: `${y * ch}px`, width: `${cw * opts.size}px`, height: `${ch}px`, '--cell': `${cw}px` });
+    // Text where it rides (the cursor moved back into a line, or a hint after it, as Claude's prompt has; as the cursor,
+    // the character under it): it steps back, faint and without its glow, so the text can be read, until it's over empty
+    // cells again.
+    const line = b.getLine(b.baseY + y), span = opts.offset / cw, first = Math.floor(x + span), last = Math.ceil(x + span + opts.size) - 1;
     let over = false;
-    for (let col = Math.max(first, x + 1); line && col <= last && col < term.cols && !over; col++) over = /\S/.test(line.getCell(col)?.getChars() ?? '');
+    for (let col = first; line && col <= last && col < term.cols && !over; col++) over = /\S/.test(line.getCell(col)?.getChars() ?? '');
     head.classList.toggle('over-text', over);
     const from = c.last;
     c.last = { x, y };
