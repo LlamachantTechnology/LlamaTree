@@ -28,7 +28,7 @@ Pasting images or copied files into a terminal uses `wl-paste` (Wayland) or `xcl
 
 ## The pink "needs your answer" dot doesn't show
 
-It shows for Claude Code and Codex. For other programs, they need to report it themselves with [OSC 7501](claude-and-codex.md#other-agents-the-needs-your-answer-dot). Check the palette button › **Status dots** to see each state in your chosen style.
+It shows for every [supported agent](agents.md). For other programs, they need to report it themselves with [OSC 7501](agents.md#other-agents-the-needs-your-answer-dot). Check the palette button › **Status dots** to see each state in your chosen style.
 
 ## Can't connect to a server
 
@@ -57,7 +57,7 @@ The chip needs a credential for the remote in Git Credential Manager. Looking up
 
 ## Moving or resetting your data
 
-Everything is in `%APPDATA%\LlamaTree` on Windows, `~/.config/LlamaTree` on Linux and `~/Library/Application Support/LlamaTree` on macOS. Set the `LLAMATREE_DATA` environment variable to use another folder, for example a separate profile for testing. Your agents' conversations are kept by Claude Code and Codex themselves, not by LlamaTree.
+Everything is in `%APPDATA%\LlamaTree` on Windows, `~/.config/LlamaTree` on Linux and `~/Library/Application Support/LlamaTree` on macOS. Set the `LLAMATREE_DATA` environment variable to use another folder, for example a separate profile for testing. Your agents' conversations are kept by the agents themselves, not by LlamaTree.
 
 ## Uninstalling
 

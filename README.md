@@ -7,7 +7,9 @@
 
 **[llamatree.dev](https://llamatree.dev)** · *Formerly Claude Terminals.*
 
-One window for many Claude Code and Codex sessions, on this computer and on your servers, with a Visual Studio–style Git Changes / Git Repository view and diff viewer for each session's worktree.
+One window for all your AI coding agents, on this computer and on your servers, with a Visual Studio–style Git Changes / Git Repository view and diff viewer for each session's worktree.
+
+Works with Claude Code, Codex, Antigravity and Grok: see [AI agents](docs/agents.md) for what each gets.
 
 **[Read the guide on llamatree.dev](https://llamatree.dev/docs/)** · [Install](#install) · [Guide in this repository](docs/README.md)
 
@@ -28,12 +30,12 @@ One window for many Claude Code and Codex sessions, on this computer and on your
 
 ## What it does
 
-- **All your sessions in one window.** Every Claude Code or Codex session runs in its own real terminal, shown side by side as live tiles. Status dots show which are working, which are waiting for you and which need an answer. Group them into [projects](docs/sessions.md), and keep them running when the window closes.
+- **All your sessions in one window.** Every agent session runs in its own real terminal, shown side by side as live tiles. Status dots show which are working, which are waiting for you and which need an answer. Group them into [projects](docs/sessions.md), and keep them running when the window closes.
 - **Sessions on your servers, among your own.** Run a session on a Linux server over SSH and work with it beside your local ones: typing, Git, files and panels all work as they do locally, and it keeps running there when the connection drops. [Sessions on a server](docs/servers.md)
 - **Git, Visual Studio style.** Each session's worktree gets Git Changes (stage, commit, Undo Changes, fetch, pull, push), Git Repository (history, outgoing commits), a branch picker and side-by-side diffs that update as the agent edits. **Suggest** writes the commit message. [Git](docs/git.md)
 - **Agents that work together.** Sessions can message each other, and an agent can start sessions of its own, drive them and close them, with you deciding what each may do. [Panels and messages](docs/panels.md) · [Helper sessions](docs/helpers.md)
-- **Panels from Claude.** Claude can show your task list, an error summary or notes as a tab beside the Git panel, through an MCP server built into the app. [Panels](docs/panels.md)
-- **Claude Code and Codex, side by side.** Each session keeps a conversation of its own and picks it up again when the app restarts. [Claude Code and Codex](docs/claude-and-codex.md)
+- **Panels from your agents.** An agent can show your task list, an error summary or notes as a tab beside the Git panel, through an MCP server built into the app. [Panels](docs/panels.md)
+- **Mix your AI agents.** Run different agents side by side, even in the same folder. Each session keeps a conversation of its own and picks it up again when the app restarts. [AI agents](docs/agents.md)
 - **Your colours, your plugins.** Light or dark in your accent colour, and plugins that add tabs of their own. [Customize](docs/customize.md)
 - **Keeps itself up to date.** Tells you when a new version is out and installs it in a click; your sessions carry on afterwards.
 

@@ -32,9 +32,9 @@ Directory.CreateDirectory(output);
 const string Name = "llamatree";
 const string Maintainer = "LLAMACHANT TECHNOLOGY LTD <support@llamachant.com>";
 const string Homepage = "https://llamatree.dev";
-const string Summary = "Many Claude Code and Codex sessions in one window, with Visual Studio-style Git views";
+const string Summary = "All your AI coding agents in one window, with Visual Studio-style Git views";
 const string Description = """
-    LlamaTree runs many local Claude Code and Codex sessions side by side, each in a real terminal,
+    LlamaTree runs many AI coding agent sessions (Claude Code, Codex, Antigravity, Grok) side by side, each in a real terminal,
     with a Visual Studio-style Git Changes and Git Repository view and diff viewer for each session's worktree.
     """;
 var mtime = DateTimeOffset.UtcNow;

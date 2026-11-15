@@ -1,6 +1,6 @@
 # Panels and messages
 
-LlamaTree starts each Claude and Codex session with a small MCP server built into the app. Through it, agents can show you panels beside the terminal and send messages to each other.
+LlamaTree starts each agent session with a small MCP server built into the app. Through it, agents can show you panels beside the terminal and send messages to each other.
 
 ## Panels
 
@@ -55,7 +55,7 @@ Right-click any side panel tab › *Example panel skill…* shows a ready-made `
 
 ## Messages between sessions
 
-Claude and Codex sessions can message each other, through the same `llamatree` MCP server that shows panels, so neither needs a connection of its own. Ask an agent to "ask the api session what it changed in the parser", and it sends the question to that session and waits for the answer.
+Agent sessions can message each other, through the same `llamatree` MCP server that shows panels, so neither needs a connection of its own. Ask an agent to "ask the api session what it changed in the parser", and it sends the question to that session and waits for the answer.
 
 The tools agents get are:
 

@@ -1,15 +1,15 @@
 # Getting started
 
-LlamaTree is a desktop app that runs your Claude Code and Codex sessions side by side, shows which one needs you, and gives each one a Git panel. This page gets you from nothing to three sessions in a few minutes.
+LlamaTree is a desktop app that runs your AI coding agents side by side, shows which one needs you, and gives each one a Git panel. This page gets you from nothing to three sessions in a few minutes.
 
 ## What you need
 
 - **Windows 10 (1809 or later) or Windows 11**, x64; or a **64-bit Linux desktop** (x86-64, Intel or AMD).
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and/or the [Codex CLI](https://github.com/openai/codex), installed and signed in, on your `PATH`. Check by running `claude` or `codex` in a terminal.
+- At least one [supported AI agent](agents.md) (Claude Code, Codex, Antigravity or Grok), installed and signed in, on your `PATH`. Check by running it in a terminal: `claude`, `codex`, `agy` or `grok`.
 - **Git.**
 - On Windows, the **WebView2 runtime**, which setup takes care of (see [Windows](#windows)).
 
-LlamaTree uses your own Claude Code and Codex, with your own plans. There's no LlamaTree account.
+LlamaTree uses your own agents, with your own plans. There's no LlamaTree account.
 
 To build LlamaTree yourself you also need the .NET 10 SDK and Node.js; see [Building](building.md).
 
