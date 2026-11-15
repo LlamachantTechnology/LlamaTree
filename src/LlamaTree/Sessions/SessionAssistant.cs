@@ -62,7 +62,7 @@ internal static class SessionAssistant
     internal static string BuildPrompt(string question, IReadOnlyList<AssistantExchange> history, IReadOnlyList<SessionBrief> sessions, DateTime now)
     {
         var p = new StringBuilder();
-        p.AppendLine("You are the assistant in LlamaTree, a desktop app in which each tab is a coding agent session (Claude Code or Codex) in a folder.");
+        p.AppendLine("You are the assistant in LlamaTree, a desktop app in which each tab is an AI agent session (Claude Code, Codex, Antigravity, Grok or another command-line agent) in a folder.");
         p.AppendLine("The person using it asks you about their sessions. Below are the sessions you may speak about, each with its conversation so far:");
         p.AppendLine("the prompts the person sent, what the agent answered and the tools it used. Answer from that and nothing else.");
         p.AppendLine();
