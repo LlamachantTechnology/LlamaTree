@@ -42,11 +42,12 @@ internal static class SessionAssistant
 
     /// <summary>
     /// The agents that may answer, best first: those whose headless command has no tools (<see cref="AgentProfile.HeadlessHasNoTools"/>:
-    /// Claude), then the rest (Codex), each group in <see cref="Agents.All"/> order. Not the sessions' own agent: a plugin
-    /// names the sessions, so it would be choosing the agent too.
+    /// Claude), then the rest (Codex), each group in <see cref="Agents.All"/> order. Not one that keeps what it's asked
+    /// (<see cref="AgentProfile.HeadlessSavesConversation"/>: Antigravity, Grok), which would keep the sessions' conversations
+    /// in its own history. Not the sessions' own agent: a plugin names the sessions, so it would be choosing the agent too.
     /// </summary>
     internal static IReadOnlyList<AgentProfile> Writers { get; } =
-        Agents.All.Where(a => a.HeadlessCommand != null).OrderByDescending(a => a.HeadlessHasNoTools).ToList();
+        HeadlessAgent.Writers.Where(a => !a.HeadlessSavesConversation).ToList();
 
     /// <summary>
     /// The first of <see cref="Writers"/> that's installed, whichever agent the sessions run. One with tools (Codex) answers

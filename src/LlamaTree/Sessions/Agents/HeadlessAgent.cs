@@ -6,16 +6,44 @@ namespace LlamaTree.Sessions;
 
 /// <summary>
 /// Runs an agent once, headless, with a prompt on its standard input and its answer on standard output
-/// (<see cref="AgentProfile.HeadlessCommand"/>: claude -p with no tools, or codex exec read-only). It runs with the
-/// user's own sign-in, in the same clean environment sessions get, and saves no conversation. The commit message
-/// suggester and the plugins' ask request use it (ask with a tool-less agent when one is installed, see <see cref="SessionAssistant.WriterFor"/>).
+/// (<see cref="AgentProfile.HeadlessCommand"/>: claude -p with no tools, codex exec read-only, agy -p or grok -p). It
+/// runs with the user's own sign-in, in the same clean environment sessions get. The commit message suggester and the
+/// plugins' ask request use it (ask with a tool-less agent when one is installed, see <see cref="SessionAssistant.WriterFor"/>).
 /// </summary>
 internal static class HeadlessAgent
 {
     public static readonly TimeSpan Timeout = TimeSpan.FromMinutes(2);
 
-    /// <summary>The agent that answers for a session: its own, or Claude for one with no headless command (or no agent).</summary>
-    public static AgentProfile Writer(AgentProfile? agent) => agent?.HeadlessCommand != null ? agent : Agents.Claude;
+    /// <summary>
+    /// The agents that can answer, best first: those with no tools (Claude), then those that save no conversation (Codex),
+    /// then the rest (Antigravity, Grok), each group in <see cref="Agents.All"/> order.
+    /// </summary>
+    internal static IReadOnlyList<AgentProfile> Writers { get; } = Agents.All.Where(a => a.HeadlessCommand != null)
+        .OrderByDescending(a => a.HeadlessHasNoTools).ThenBy(a => a.HeadlessSavesConversation).ToList();
+
+    /// <summary>
+    /// The agent that answers for a session: its own when it can and is installed, else the first of <see cref="Writers"/>
+    /// that's installed, so a session with no agent, or whose agent isn't installed here, still gets an answer.
+    /// </summary>
+    public static AgentProfile Writer(AgentProfile? agent) => Writer(agent, IsInstalled);
+
+    /// <param name="installed">Whether an agent's headless command can be run here.</param>
+    internal static AgentProfile Writer(AgentProfile? agent, Func<AgentProfile, bool> installed) =>
+        agent?.HeadlessCommand != null && installed(agent) ? agent
+        : Writers.FirstOrDefault(installed)
+          ?? (agent?.HeadlessCommand != null ? agent : Agents.Claude);   // none installed: running it says what wasn't found
+
+    /// <summary>Who writes for a session with no agent of its own that can: the first installed, checked once a run.</summary>
+    public static string FallbackName => fallback.Value.Name;
+    private static readonly Lazy<AgentProfile> fallback = new(() => Writer(null));
+
+    /// <summary>The folder a run that saves a conversation goes in (<see cref="AgentProfile.HeadlessSavesConversation"/>): the app's own, empty.</summary>
+    internal static string ScratchFolder()
+    {
+        var folder = Path.Combine(AppProfile.CustomFolder ?? AppProfile.LocalFolder, "headless");
+        Directory.CreateDirectory(folder);
+        return folder;
+    }
 
     /// <summary>Whether the agent's headless command can be run: its program is on the PATH sessions get.</summary>
     public static bool IsInstalled(AgentProfile agent) => agent.HeadlessCommand is { } command && CanRun(command);
@@ -36,10 +64,18 @@ internal static class HeadlessAgent
         catch (InvalidOperationException) { return true; }   // found, but can't be run safely: RunAsync says why
     }
 
-    /// <param name="dir">The folder to run in: one the user already trusts, such as a session's.</param>
+    /// <param name="dir">
+    /// The folder to run in: one the user already trusts, such as a session's. An agent that saves what it's asked runs in
+    /// <see cref="ScratchFolder"/> instead, so no session in <paramref name="dir"/> takes the run for its conversation.
+    /// </param>
     /// <param name="task">What the agent was asked to do, for the error when it can't: "suggest a message", "answer".</param>
-    public static Task<string> RunAsync(AgentProfile agent, string dir, string prompt, string task, CancellationToken ct) =>
-        RunCommandAsync(agent, agent.HeadlessCommand!, dir, prompt, task, ct);
+    public static async Task<string> RunAsync(AgentProfile agent, string dir, string prompt, string task, CancellationToken ct)
+    {
+        var where = agent.HeadlessSavesConversation ? ScratchFolder() : dir;
+        var output = await RunCommandAsync(agent, agent.HeadlessCommand!, where, agent.HeadlessInput(prompt), task, ct);
+        try { return agent.HeadlessAnswer(output); }
+        catch (InvalidOperationException ex) { throw new InvalidOperationException($"{agent.Name} couldn't {task}: {ex.Message}"); }
+    }
 
     /// <summary>Runs another of the agent's own commands (such as "agy mcp list") the same way, with <paramref name="input"/> on its standard input.</summary>
     public static async Task<string> RunCommandAsync(AgentProfile agent, string command, string dir, string input, string task, CancellationToken ct)

@@ -38,6 +38,33 @@ internal sealed class AntigravityAgent : AgentProfile
         OwnConversationPattern = @"\s+--conversation(?:=\S+|\s+[^-\s]\S*)?(?=\s|$)",
     };
 
+    /// <summary>
+    /// agy -p takes its prompt on the command line, too short for a diff, so the prompt comes on standard input as
+    /// stream-json (which needs -p given as empty, and stream-json out too); the answer is the "result" event's response.
+    /// Slash commands are off, so a "/" in a diff isn't taken for one. With no --dangerously-skip-permissions, a tool that
+    /// asks can't be approved. agy keeps the run as a conversation: there's no switch to save nothing.
+    /// </summary>
+    public override string HeadlessCommand => "agy --effort low --disable-slash-commands --input-format stream-json --output-format stream-json -p=";
+    public override bool HeadlessSavesConversation => true;
+
+    public override string HeadlessInput(string prompt) =>
+        JsonSerializer.Serialize(new { @event = "user", message = new { content = prompt } }) + "\n";
+
+    public override string HeadlessAnswer(string output)
+    {
+        foreach (var line in output.Split('\n').Reverse())
+        {
+            if (!line.TrimStart().StartsWith('{')) continue;
+            JsonNode? node;
+            try { node = JsonNode.Parse(line); }
+            catch (JsonException) { continue; }
+            if (node?["event"]?.GetValue<string>() != "result" || node["result"] is not JsonObject result) continue;
+            if (result["status"]?.GetValue<string>() == "SUCCESS") return result["response"]?.GetValue<string>() ?? "";
+            throw new InvalidOperationException(result["error"]?.GetValue<string>() is { Length: > 0 } error ? error : "it stopped without an answer.");
+        }
+        throw new InvalidOperationException("it gave no answer.");
+    }
+
     /// <summary>The bridge in agy's settings, and --settings allowing its tools for this session only (unless the command passes its own).</summary>
     public override PanelConnection Panels { get; } = new PanelConnection.Registered("agy mcp list",
         program => $"agy mcp add {LlamaTree.Panels.PanelMcp.ServerName} {CommandLineResolver.QuotePath(program)} {LlamaTree.Panels.PanelBridge.Argument}",

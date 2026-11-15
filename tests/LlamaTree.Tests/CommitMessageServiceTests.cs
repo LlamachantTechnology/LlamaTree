@@ -110,16 +110,77 @@ public sealed class CommitMessageServiceTests : IDisposable
     [Theory]
     [InlineData("codex", "codex")]
     [InlineData("claude --model opus", "claude")]
+    [InlineData("agy", "agy")]
+    [InlineData("grok", "grok")]
     [InlineData("pwsh", "claude")]   // a session with no agent
     public void The_sessions_own_agent_writes_the_message(string command, string writer) =>
-        Assert.Equal(writer, CommitMessageService.Writer(Sessions.Agents.For(command)).Id);
+        Assert.Equal(writer, Sessions.HeadlessAgent.Writer(Sessions.Agents.For(command), _ => true).Id);
+
+    [Theory]
+    [InlineData("pwsh", "agy", "agy")]               // no agent of its own: the one installed
+    [InlineData("pwsh", "agy grok", "agy")]          // Antigravity before Grok, as the agents are listed
+    [InlineData("pwsh", "codex agy", "codex")]       // one that saves no conversation first
+    [InlineData("grok", "claude", "claude")]         // its own agent isn't installed here
+    [InlineData("agy", "claude agy", "agy")]         // its own when it is
+    [InlineData("pwsh", "", "claude")]               // none installed: running it says Claude wasn't found
+    [InlineData("grok", "", "grok")]                 // ...or its own wasn't
+    public void Without_its_own_agent_the_first_installed_writes_it(string command, string installed, string writer)
+    {
+        var here = installed.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
+        Assert.Equal(writer, Sessions.HeadlessAgent.Writer(Sessions.Agents.For(command), a => here.Contains(a.Id)).Id);
+    }
 
     [Fact]
-    public void Each_agent_writes_it_without_saving_a_conversation_or_changing_files()
+    public void Writers_go_tool_less_first_then_those_that_save_nothing()
+    {
+        Assert.Equal([Sessions.Agents.Claude, Sessions.Agents.Codex, Sessions.Agents.Antigravity, Sessions.Agents.Grok], Sessions.HeadlessAgent.Writers);
+        Assert.False(Sessions.Agents.Claude.HeadlessSavesConversation);
+        Assert.False(Sessions.Agents.Codex.HeadlessSavesConversation);
+        Assert.True(Sessions.Agents.Antigravity.HeadlessSavesConversation);   // run in the app's own folder, so no session adopts it
+        Assert.True(Sessions.Agents.Grok.HeadlessSavesConversation);
+    }
+
+    [Fact]
+    public void Each_agent_writes_it_without_changing_files()
     {
         Assert.Contains("--no-session-persistence", Sessions.Agents.Claude.HeadlessCommand);
         Assert.Contains("--ephemeral", Sessions.Agents.Codex.HeadlessCommand);
         Assert.Contains("-s read-only", Sessions.Agents.Codex.HeadlessCommand);
         Assert.EndsWith(" -", Sessions.Agents.Codex.HeadlessCommand);   // the prompt comes on standard input
+        Assert.Contains("--input-format stream-json", Sessions.Agents.Antigravity.HeadlessCommand);   // ...as JSON for agy
+        Assert.Contains("--disable-slash-commands", Sessions.Agents.Antigravity.HeadlessCommand);   // a "/" in a diff isn't a command
+        Assert.DoesNotContain("--dangerously-skip-permissions", Sessions.Agents.Antigravity.HeadlessCommand);
+        Assert.StartsWith("grok -p - ", Sessions.Agents.Grok.HeadlessCommand);
+        Assert.Contains("--deny \"*\"", Sessions.Agents.Grok.HeadlessCommand);   // every tool refused
+    }
+
+    [Fact]
+    public void Agy_gets_the_prompt_as_a_stream_json_user_message()
+    {
+        var line = Sessions.Agents.Antigravity.HeadlessInput("Describe this:\n+ \"quoted\" /compact");
+        Assert.EndsWith("\n", line);
+        Assert.DoesNotContain('\n', line.TrimEnd('\n'));   // one message, one line
+        var json = System.Text.Json.Nodes.JsonNode.Parse(line)!;
+        Assert.Equal("user", json["event"]!.GetValue<string>());
+        Assert.Equal("Describe this:\n+ \"quoted\" /compact", json["message"]!["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Agys_answer_is_the_result_events_response()
+    {
+        var output = """
+            {"event":"init","conversation_id":"c1","init":{"cwd":"x"}}
+            {"event":"step_update","step_update":{"conversation_id":"c1","step_index":1,"text_delta":"Fix"}}
+            {"event":"result","result":{"conversation_id":"c1","status":"SUCCESS","response":"Fix the menu\n","num_turns":1}}
+            """;
+        Assert.Equal("Fix the menu\n", Sessions.Agents.Antigravity.HeadlessAnswer(output));
+    }
+
+    [Fact]
+    public void Agys_error_is_said_when_it_has_no_answer()
+    {
+        var failed = """{"event":"result","result":{"status":"ERROR","response":"","error":"quota exceeded"}}""";
+        Assert.Equal("quota exceeded", Assert.Throws<InvalidOperationException>(() => Sessions.Agents.Antigravity.HeadlessAnswer(failed)).Message);
+        Assert.Throws<InvalidOperationException>(() => Sessions.Agents.Antigravity.HeadlessAnswer("error: something went wrong\n"));
     }
 }

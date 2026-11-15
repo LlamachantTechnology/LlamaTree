@@ -29,7 +29,7 @@ Drag a diff tab towards an edge of the terminal area to show it beside the termi
 - *Standard*: a line, plus a few brief points when a change covers several things;
 - *Detailed*: a line and a paragraph on what changed and why.
 
-It runs the session's own agent headless with your own sign-in, sending it the diff, so it uses a little of that agent's plan: Claude Code as `claude -p` (Haiku, no tools, not saved as a conversation), Codex as `codex exec` (read-only, low reasoning, not saved). A session running anything else uses Claude Code.
+It runs the session's own agent headless with your own sign-in, sending it the diff, so it uses a little of that agent's plan: Claude Code as `claude -p` (Haiku, no tools, not saved as a conversation), Codex as `codex exec` (read-only, low reasoning, not saved), Antigravity as `agy -p` and Grok as `grok -p` (with no tools; both keep each run as a conversation of their own, run in a folder of LlamaTree's own so no session takes it up). A session running anything else, or whose agent isn't installed, uses the first of these that is: Claude Code, then Codex, then Antigravity, then Grok. The button's tooltip names who will write it.
 
 ## Fetch, pull and push
 

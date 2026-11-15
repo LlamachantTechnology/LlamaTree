@@ -30,7 +30,7 @@ A session's command decides what it runs: `claude` for [Claude Code](https://doc
 | The agent itself started in matching light or dark colours | ✓ | not yet | not yet | not yet | No |
 | **Git** | | | | | |
 | Git Changes, Git Repository, diffs, fetch/pull/push, pull requests, Project view | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Suggest** writes the commit message | ✓ Claude Code | ✓ Codex | ✓ Claude Code, if installed | ✓ Claude Code, if installed | ✓ Claude Code, if installed |
+| **Suggest** writes the commit message | ✓ Claude Code | ✓ Codex | ✓ Antigravity | ✓ Grok | ✓ the first installed of Claude Code, Codex, Antigravity and Grok |
 | **App** | | | | | |
 | Plugins | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Updates: sessions carry on in their conversations | ✓ | ✓ | ✓ | ✓ | restarted |
@@ -62,6 +62,7 @@ The conversation rail and tab read Claude's saved transcript, so they work in Cl
 - **Saved conversations** are read from `~/.gemini/antigravity-cli`: each conversation's transcript, the title agy gave it, and the folder of the prompt it started with (from agy's prompt history). Moving a session's folder doesn't move its agy conversations, since agy also keeps their folder in databases of its own.
 - **Panels and messages:** agy can't be given an MCP server for one session, so before its first session LlamaTree adds itself to agy's MCP servers (`agy mcp add llamatree <LlamaTree> mcp-bridge`) unless it's there already. That server finds the session from the session's environment, and offers nothing to an agy started outside LlamaTree. Each session also starts with `--settings` allowing LlamaTree's tools without asking, keeping your own permissions from agy's `settings.json` (which is only read). A command that passes its own `--settings` is left alone.
 - **Commands that choose for themselves:** `agy --conversation <id>` keeps its choice, and `agy -p` and agy's subcommands run as they are.
+- **Suggest** runs `agy -p` with low effort and slash commands off, the diff sent as stream-json on its standard input. agy has no way to save nothing, so each run is kept as an agy conversation; it runs in a folder of LlamaTree's own (`headless` in its local data folder), so no session takes it for its conversation.
 
 ## Grok
 
@@ -70,6 +71,7 @@ The conversation rail and tab read Claude's saved transcript, so they work in Cl
 - **Saved conversations** are read from `~/.grok/sessions`, or `GROK_HOME` when it's set. `grok -p` runs aren't listed. Moving a session's folder doesn't move its Grok conversations yet.
 - **Panels and messages:** as for agy, LlamaTree adds itself to grok's MCP servers once (`grok mcp add llamatree -- <LlamaTree> mcp-bridge`), and each session starts with `--allow mcp__llamatree` so LlamaTree's tools don't ask each time.
 - **Commands that choose for themselves:** `grok --resume …`, `--session-id` and `--fork-session` keep their own choice, and `grok -p` and grok's subcommands run as they are.
+- **Suggest** runs `grok -p` with every tool denied (`--deny "*"`), no web search and no subagents, the diff on its standard input. As for agy, it runs in LlamaTree's own folder, since grok keeps each run.
 
 LlamaTree only adds its MCP server to agy or grok when it's missing, or when the LlamaTree it names has been moved or deleted, so two copies of LlamaTree don't keep changing it. To take it out, run `agy mcp remove llamatree` or `grok mcp remove llamatree`; LlamaTree adds it again the next time it starts a session of that agent.
 

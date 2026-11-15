@@ -831,6 +831,7 @@ internal sealed partial class AppHost
     {
         type = "sessions",
         agents = Agents.All.Select(a => a.Describe()),
+        suggestFallback = HeadlessAgent.FallbackName,
         projects = projects.Select(p => new { id = p.Id, name = p.Name, color = p.Color, startWithApp = p.StartWithApp }),
         sessions = order.Select(id => sessions.TryGetValue(id, out var s) ? (s.Info, s.IsRunning) : (serverSessions[id].Info, serverSessions[id].Running)).Select(x => new
         {

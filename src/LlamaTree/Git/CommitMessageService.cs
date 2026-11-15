@@ -6,7 +6,8 @@ namespace LlamaTree.Git;
 /// <summary>
 /// Suggests a commit message for a repository's changes, like Visual Studio's "Generate commit message": the session's
 /// agent runs headless (<see cref="AgentProfile.HeadlessCommand"/>, such as claude -p) with the user's own sign-in, or
-/// Claude Code for a session that runs something else. It describes what Commit would take: the staged changes, or
+/// the first agent installed that can (<see cref="HeadlessAgent.Writer(AgentProfile?)"/>) for a session that runs
+/// something else, or whose agent isn't installed. It describes what Commit would take: the staged changes, or
 /// everything when nothing is staged.
 /// </summary>
 internal static partial class CommitMessageService
@@ -25,7 +26,7 @@ internal static partial class CommitMessageService
         return message.Length > 0 ? message : throw new InvalidOperationException($"{writer.Name} didn't suggest a message. Try again.");
     }
 
-    /// <summary>Who writes the message for a session: its agent, or Claude for one with no headless command (or no agent).</summary>
+    /// <summary>Who writes the message for a session: its agent, or the first installed that can (see <see cref="HeadlessAgent.Writer(AgentProfile?)"/>).</summary>
     internal static AgentProfile Writer(AgentProfile? agent) => HeadlessAgent.Writer(agent);
 
     internal static string NormalizeDetail(string? detail) => detail is "short" or "detailed" ? detail : "standard";

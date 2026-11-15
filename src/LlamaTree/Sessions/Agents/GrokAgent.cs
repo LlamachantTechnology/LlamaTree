@@ -39,6 +39,14 @@ internal sealed class GrokAgent : AgentProfile
         OwnConversationPattern = @"\s+(?:-r|--resume|-s|--session-id|--fork-session)(?:=\S+|\s+[^-\s]\S*)?(?=\s|$)",
     };
 
+    /// <summary>
+    /// grok -p with "-" reads the prompt on standard input and prints the answer. --deny "*" refuses every tool (--tools ""
+    /// leaves them all), with no web search or subagents and a few turns at most. grok keeps the run as a conversation:
+    /// there's no switch to save nothing.
+    /// </summary>
+    public override string HeadlessCommand => "grok -p - --deny \"*\" --disable-web-search --no-subagents --max-turns 3";
+    public override bool HeadlessSavesConversation => true;
+
     /// <summary>The bridge in grok's settings; its tools allowed for this session with --allow (repeatable, so the command's own rules stay).</summary>
     public override PanelConnection Panels { get; } = new PanelConnection.Registered("grok mcp list --json",
         program => $"grok mcp add {LlamaTree.Panels.PanelMcp.ServerName} -- {CommandLineResolver.QuotePath(program)} {LlamaTree.Panels.PanelBridge.Argument}",
