@@ -1528,25 +1528,17 @@ const termTheme = (look = themeLook()) => ({ ...(isLight() ? TERM_THEME_LIGHT : 
 
 // The light cycle (a theme's "cursor": "light-cycle"): a light cycle drawn in the terminal's cursor colour, leaving a ribbon
 // of light that fades behind it as it moves, turning at right angles when it changes line. It's a layer over the terminal's
-// screen. Unless a theme's "cycle" gives it an offset, it IS the cursor: it sits on the cursor's cell, one cell wide, the
-// terminal's own cursor is hidden and the cycle blinks in its place, so you can see where you're typing and whether the
-// terminal has focus; it dims while the terminal hasn't (see .cycle-head in app.css). Over text it fades to a faint outline,
-// so what you're editing still reads. With an offset it rides that far to the right instead, and the cursor stays a blinking bar.
+// screen. It rides a little to the right of the cursor (25 pixels, three cells wide, unless a theme's "cycle" says
+// otherwise), and the cursor stays a blinking bar in the cursor colour, so you can see where you're typing and whether the
+// terminal has focus; the cycle dims while it hasn't (see .cycle-head in app.css). A theme's "cycle" with an offset of 0
+// makes it the cursor instead: it sits on the cursor's cell, the terminal's own cursor is hidden and the cycle blinks in its
+// place. Over text it fades to a faint outline with a lit line under the cursor's cell, so what you're editing still reads.
 const TRAIL_MAX = 48;        // pieces of ribbon kept at once
-// The app's own cycles, written as a theme's "cycle" is (see ThemeCycle). Seen from behind, for one cell (the cursor's):
-// in a 9 by 16 box, the canopy's dome with the white light stripe down it, the rear wheel below, tall and narrow, with its
-// hub; the ribbon leaves the wheel's height (11 of 16). Seen from the side, facing right, for two cells or more: in a 24 by
-// 16 box, two tall wheels with hubs, the canopy sweeping over them, the rider's back, and the white light stripe along the
-// canopy; the ribbon at the wheels' height (11 of 16).
+// The app's own cycle, written as a theme's "cycle" is (see ThemeCycle): side view, facing right, in a 24 by 16 box: two
+// tall wheels with hubs, the canopy sweeping over them, the rider's back, and the white light stripe along the canopy;
+// three cells wide, riding 25 pixels right of the cursor (so it never covers what you're typing), the ribbon at the
+// wheels' height (11 of 16).
 const cycleShape = (kind, numbers, more = {}) => ({ kind, numbers: kind === 'path' ? null : numbers, path: kind === 'path' ? numbers : null, fill: 'none', stroke: 'cursor', width: 1.6, opacity: 1, ...more });
-const CYCLE_BEHIND = {
-  viewBox: [0, 0, 9, 16],
-  shapes: [
-    cycleShape('path', 'M1.3 9.5 C1.3 3 7.7 3 7.7 9.5 Z'),
-    cycleShape('ellipse', [4.5, 11.2, 1.7, 2.6]), cycleShape('circle', [4.5, 11.2, 0.6], { fill: 'cursor' }),
-    cycleShape('path', 'M4.5 3.6 V8.8', { stroke: '#ffffff', width: 1, opacity: 0.9 }),
-  ],
-};
 const CYCLE_DEFAULT = {
   image: {
     viewBox: [0, 0, 24, 16],
@@ -1557,17 +1549,16 @@ const CYCLE_DEFAULT = {
       cycleShape('path', 'M4 6.4 C8 3.2 15 3 20 5.8', { stroke: '#ffffff', width: 1, opacity: 0.9 }),
     ],
   },
-  size: 1, offset: 0, glow: 6,
+  size: 3, offset: 25, glow: 6,
   trail: { width: 2, glow: 10, fade: 800, at: 0.69, colour: 'cursor' },
 };
-/** The cycle the theme on screen rides: its own picture and options (checked by ThemeCatalog), or the app's own: the view from behind for one cell, the side view for more. */
+/** The cycle the theme on screen rides: its own picture and options (checked by ThemeCatalog), or the app's own. */
 function cycleOptions(look = themeLook()) {
   const c = look?.cycle;
-  const own = (size) => (size === 1 ? CYCLE_BEHIND : CYCLE_DEFAULT.image);
-  if (!c) return { ...CYCLE_DEFAULT, image: own(CYCLE_DEFAULT.size) };
-  return { image: c.image ?? own(c.size), size: c.size, offset: c.offset, glow: c.glow, trail: c.trail ?? null };
+  if (!c) return CYCLE_DEFAULT;
+  return { image: c.image ?? CYCLE_DEFAULT.image, size: c.size, offset: c.offset, glow: c.glow, trail: c.trail ?? null };
 }
-/** Whether the cycle is the cursor: on the cursor's cell (no offset), where it blinks in place of the terminal's own. */
+/** Whether the cycle is the cursor: a theme's offset of 0 puts it on the cursor's cell, where it blinks in place of the terminal's own. */
 const cycleIsCursor = (opts = cycleOptions()) => opts.offset === 0;
 const CYCLE_HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const CYCLE_PATH = /^\s*[Mm][MmLlHhVvCcSsQqTtAaZz0-9eE.,+\-\s]*$/;
@@ -1633,7 +1624,7 @@ function dressCursor(s) {
   if (seeThrough(look)) theme.background = 'rgba(0, 0, 0, 0)';
   if (s.cycle && cycleIsCursor()) theme.cursor = theme.cursorAccent = 'rgba(0, 0, 0, 0)';
   s.term.options.theme = theme;
-  s.term.options.cursorStyle = s.cycle ? 'bar' : 'block';   // a bar beside the cycle: the cell stays readable
+  s.term.options.cursorStyle = s.cycle ? 'bar' : 'block';   // a bar beside the cycle (or hidden under it): the cell stays readable
 }
 
 /** Puts the light cycle on a session's terminal, or takes it off, and sets the terminal's colours either way. */
