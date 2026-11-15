@@ -102,6 +102,8 @@ Both come from the agent's saved transcript (a Claude session's process names it
 
 A long conversation answers worse well before it is full: early detail gets crowded out, and each automatic compaction is a summary of a summary. The chip on a session's tile shows how full its conversation is: a bar, a percentage, and ↻ with the number of times it has been compacted. It turns amber at 50% and red at 80%, and from amber on the percentage also shows beside the session in the list down the left. Hovering shows the tokens the agent holds and what they are measured against:
 
+![A session's context meter at 64%, amber, with its menu open: 128k of 200k tokens, and Compact](images/context-meter.png)
+
 | | Read from | Measured against |
 |---|---|---|
 | Claude Code | its saved transcript | where Claude last compacted on its own in this conversation, or until then the model's window (200k, or 1M once the conversation has held more) |

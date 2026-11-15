@@ -1,10 +1,14 @@
 // Drives a running LlamaTree instance (started with --remote-debugging-port) through each README
-// scene and saves PNGs. Usage: node capture.mjs <port> <outDir>
+// scene and saves PNGs. Usage: node capture.mjs <port> <outDir> <demoRoot> [siteDir]
+// With siteDir, it also saves the website's home-page shots there (PNGs, for converting to its WebP files).
 import fs from 'node:fs';
 import path from 'node:path';
 
 const port = Number(process.argv[2] ?? 9333);
 const outDir = path.resolve(process.argv[3] ?? 'docs/images');
+const demoRoot = process.argv[4];
+const siteDir = process.argv[5] && path.resolve(process.argv[5]);
+if (!demoRoot) throw new Error('Usage: node capture.mjs <port> <outDir> <demoRoot> [siteDir]');
 const WIDTH = 1600, HEIGHT = 900, SCALE = 1.5;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -42,10 +46,11 @@ async function js(expression) {
   return r.result.value;
 }
 
-async function shot(name) {
-  await sleep(400);
-  const { data } = await send('Page.captureScreenshot', { format: 'png' });
-  const file = path.join(outDir, `${name}.png`);
+// clip: a part of the page (CSS pixels) and how much to enlarge it, rather than the whole window.
+async function shot(name, { dir = outDir, clip } = {}) {
+  await sleep(1300);   // over a second: a working fake redraws in full each second, after a resize has reflowed it
+  const { data } = await send('Page.captureScreenshot', { format: 'png', ...(clip && { clip }) });
+  const file = path.join(dir, `${name}.png`);
   fs.writeFileSync(file, Buffer.from(data, 'base64'));
   console.log(`saved ${path.relative(process.cwd(), file)}`);
 }
@@ -63,6 +68,13 @@ await send('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: HEIGHT,
 await js('setFontSize(17);');
 // The same look whatever the PC: dark, with the app's own purple rather than this Windows' accent colour.
 await js(`setThemePref('dark'); accent.choice = 'purple'; store.set('accentColour', 'purple'); applyAccent();`);
+// Only the demo's conversations: agy's are always read from this PC's own ~/.gemini (Claude's, Codex's and Grok's come
+// from the demo's folders), so any conversation outside the demo is left out of every list.
+await js(`
+  const root = ${JSON.stringify(demoRoot.toLowerCase().replace(/\\/g, '/').replace(/\/?$/, '/'))};
+  const own = request;
+  request = (type, payload) => own(type, payload).then((r) => type === 'conversations' && Array.isArray(r)
+    ? r.filter((c) => (c.cwd || '').toLowerCase().replace(/\\\\/g, '/').startsWith(root)) : r);`);
 
 // Let every session start, the "working" ones spin, and web-frontend reach its permission prompt.
 // Saved Claude sessions start when they're first opened; here they all start at once.
@@ -89,6 +101,15 @@ const reset = `
 console.log('states:', await js(`${reset} toggleProject('inv'); showGit('checkout');
   return state.sessions.map((s) => s.name + '=' + statusClass(s)).join(', ');`));
 await shot('overview');
+
+// 1b. The context meter, close up: checkout-api's conversation is past half (amber), with the meter's menu open.
+await js(`${reset} showGit('checkout');
+  const s = state.byId.get('checkout');
+  for (let i = 0; i < 40 && !s.ctx; i++) await new Promise((r) => setTimeout(r, 250));
+  const r = s.header.querySelector('.chip.ctx').getBoundingClientRect();
+  contextMenu(s, r.left, r.bottom + 2);`);
+await shot('context-meter', { clip: { x: 0, y: 0, width: 800, height: 450, scale: 1.2 } });
+await js('closeMenu();');
 
 // 2. One session expanded with its Git Changes.
 await js(`${reset} expand('checkout');
@@ -153,6 +174,57 @@ await js(`${reset} expand('checkout');
   panelSeen.set('panel:checkout/my-tasks', 'earlier'); renderGit();
   await new Promise((r) => setTimeout(r, 2500));`);   // Monaco colours the code block meanwhile
 await shot('docking');
+
+// The website's home page: the same demo in its own framings.
+if (siteDir) {
+  fs.mkdirSync(siteDir, { recursive: true });
+  // Every session as a tile, with the projects and their sessions down the left.
+  await js(`${reset} showGit('checkout');`);
+  await sleep(3000);   // the tiles have been resized: let their screens settle
+  await shot('layout-left-tiles', { dir: siteDir });
+  // Projects as tabs across the top, and no side panel.
+  await js(`${reset} setNavLayout('top'); setProjectTabs(true); if (state.gitVisible) toggleGit();`);
+  await sleep(3000);
+  await shot('layout-project-tabs', { dir: siteDir });
+  await js(`if (!state.gitVisible) toggleGit(); setProjectTabs(false);`);
+  // Still across the top, with projects to tick: a side-by-side diff of payments-refactor in a tab of its own.
+  await js(`${reset}
+    const s = state.byId.get('payments');
+    expand('payments');
+    openDiff(s, { mode: 'unstaged', path: 'tests/payments.test.ts', status: 'M' }, true);
+    await new Promise((r) => setTimeout(r, 1500));
+    openDiff(s, { mode: 'unstaged', path: 'src/routes/payments.ts', status: 'M' }, true);
+    await new Promise((r) => setTimeout(r, 2500));`);
+  await shot('diff', { dir: siteDir });
+  // Only Acme Shop ticked: checkout-api's server.ts diff docked left of its terminal, and Git Changes stacked over
+  // the errors panel.
+  await js(`${reset} for (const g of ['docs', 'inv', UNKNOWN]) toggleProject(g);
+    expand('checkout');
+    state.gitWidth = 470; applyGitVisibility(); layout(true);
+    openDiff(state.byId.get('checkout'), { mode: 'unstaged', path: 'src/server.ts', status: 'M' }, true);
+    await new Promise((r) => setTimeout(r, 1500));
+    splitDoc(docs.active, 'left');
+    setFolded(panelByTab('panel:checkout/errors'), 'd:ERR-1042', true);   // before the move, which draws it
+    moveTab('panel:checkout/errors', { kind: 'below', group: dock.groups[0] });
+    dock.groups[0].size = 0.48; dock.groups[1].size = 0.52;
+    activateTab(dock.groups[0], 'changes'); activateTab(dock.groups[1], 'panel:checkout/errors');
+    await new Promise((r) => setTimeout(r, 2500));`);
+  await shot('small-docking', { dir: siteDir });
+  await js(`splitDoc(docs.active, null); showAllProjects(); setNavLayout('left');`);
+  // New session's list of saved conversations, each agent's, around the one picked.
+  const box = await js(`${reset} showGit('checkout');
+    showAddDialog('resume');
+    for (let i = 0; i < 20 && !document.querySelector('.conv-item'); i++) await new Promise((r) => setTimeout(r, 200));
+    // Codex's, so the ones around it are of other agents.
+    const items = [...document.querySelectorAll('.conv-item:not(.open)')];
+    (items.find((e) => e.textContent.includes('Codex')) ?? items[0])?.click();
+    document.querySelector('.conv-item.selected')?.scrollIntoView({ block: 'center' });
+    const m = document.querySelector('#modalHost .modal').getBoundingClientRect();
+    const list = document.querySelector('#modalHost .conv-picker').getBoundingClientRect();
+    return { x: m.left - 24, y: list.top - 40 };`);
+  await shot('small-resume', { dir: siteDir, clip: { x: box.x, y: box.y, width: 808, height: 455, scale: 1 } });
+  fs.copyFileSync(path.join(outDir, 'context-meter.png'), path.join(siteDir, 'context-meter.png'));
+}
 
 // 7. The light theme, on the Conversation tab: the whole conversation as text, opened at an earlier prompt.
 await js(`${reset} setThemePref('light'); if (!$('#modalHost').hidden) closeModal();   // not "Update Claude's colours?"
