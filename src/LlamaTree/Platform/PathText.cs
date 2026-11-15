@@ -14,6 +14,18 @@ internal static class PathText
         return trimmed.Length == 0 && path.Length > 0 ? "/" : trimmed;
     }
 
+    /// <summary>The folder as a full path without a trailing separator, for comparing with <see cref="SameFolder"/>; null if it isn't a path.</summary>
+    public static string? NormalizeFolder(string? folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder)) return null;
+        try { return TrimEnd(Path.GetFullPath(folder)); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return null; }
+    }
+
+    /// <summary>Whether a folder an agent recorded is <paramref name="normalized"/> (from <see cref="NormalizeFolder"/>), ignoring case and a trailing separator.</summary>
+    public static bool SameFolder(string? recorded, string normalized) =>
+        recorded != null && string.Equals(TrimEnd(recorded), normalized, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>The folder's path ending in one separator, for testing whether another path is inside it.</summary>
     public static string WithSeparator(string folder)
     {

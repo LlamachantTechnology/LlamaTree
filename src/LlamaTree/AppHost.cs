@@ -131,7 +131,7 @@ internal sealed partial class AppHost
             }
             tidied |= TidyConversation(info);
             AddSessionRuntime(info);
-            if (info.StartsWithApp) startWithApp.Add(info.Id);
+            if (info.StartsWithApp(projects.FirstOrDefault(p => p.Id == info.Project)?.StartWithApp)) startWithApp.Add(info.Id);
             // Any other isn't running until it's opened, and isn't in use if the app closes before then.
             else if (info.WasRunning) (info.WasRunning, tidied) = (false, true);
         }
@@ -242,6 +242,7 @@ internal sealed partial class AppHost
 
     /// <summary>Your answers about plugins (see PluginGrants), kept in plugin-grants.json.</summary>
     private readonly PluginGrants grants = new(Path.Combine(SessionStore.AppDataFolder, "plugin-grants.json"));
+    private readonly PluginData pluginData = new(Path.Combine(SessionStore.AppDataFolder, "plugin-data"));
 
     /// <summary>Sessions starting and driving others (start_session and the rest); what each may do is kept in control.json.</summary>
     private SessionControl? control;
@@ -579,6 +580,17 @@ internal sealed partial class AppHost
     };
 
     /// <summary>
+    /// For an agent whose panels are registered in its own settings: registers the bridge before its first session
+    /// starts (see <see cref="Panels.PanelRegistration"/>). False if the session was removed meanwhile.
+    /// </summary>
+    private async Task<bool> PanelsReady(TerminalSession s)
+    {
+        if (panelServer == null || s.Agent is not { Panels: Sessions.PanelConnection.Registered } agent) return true;
+        await Panels.PanelRegistration.EnsureAsync(agent, s.Info.Directory);
+        return sessions.TryGetValue(s.Id, out var now) && now == s;
+    }
+
+    /// <summary>
     /// How the session reaches the panel server (this run's port and the session's token), writing Claude's --mcp-config
     /// file; null if panels are unavailable.
     /// </summary>
@@ -734,6 +746,63 @@ internal sealed partial class AppHost
         return s;
     }
 
+    /// <summary>
+    /// Moves the session's folder on disk to <paramref name="to"/> (see <see cref="FolderMove"/>), and every session here
+    /// in that folder or inside it with it, their agents' saved conversations included. Their programs hold the folder, so
+    /// running ones are stopped first, and only when <paramref name="stop"/> says the person agreed; otherwise nothing
+    /// happens and the page is told which are running.
+    /// </summary>
+    private async Task MoveSessionFolderAsync(TerminalSession s, string to, bool stop)
+    {
+        var from = PathText.TrimEnd(Path.GetFullPath(s.Info.Directory));
+        if (FolderMove.Problem(from, to) is { } problem) throw new InvalidOperationException(problem);
+        to = PathText.TrimEnd(Path.GetFullPath(to));
+        var moving = sessions.Values.Where(x => FolderMove.Inside(x.Info.Directory, from)).ToList();
+        // A session another session's agent started is held to the folder it was allowed (see SessionInfo.Within).
+        string Moved(string path) => FolderMove.Inside(path, from) ? FolderMove.Rebase(path, from, to) : path;
+        if (moving.FirstOrDefault(x => x.Info.Within is { } within && !FolderMove.Inside(Moved(x.Info.Directory), Moved(within))) is { } held)
+            throw new InvalidOperationException($"“{held.Info.Name}” was started by another session and has to stay inside {held.Info.Within}, so the folder can't move there.");
+        var running = moving.Where(x => x.IsRunning).ToList();
+        if (running.Count > 0 && !stop)
+            throw new InvalidOperationException($"Stop {string.Join(", ", running.Select(x => $"“{x.Info.Name}”"))} first: {(running.Count == 1 ? "its program has" : "their programs have")} the folder open.");
+        foreach (var x in running)
+        {
+            CatchUpConversation(x);
+            NoteRunning(x, false);
+            if (x.Stop()) Post(new { type = "exited", id = x.Id, code = (int?)null });
+        }
+        if (running.Count > 0)
+        {
+            FlushOutput();
+            RunningChanged?.Invoke();
+        }
+        // Every session's Git watch lets go: one in another worktree of a repository being moved watches inside it too.
+        foreach (var x in sessions.Values) x.StopGitWatch();
+        try
+        {
+            await FolderMove.MoveAsync(from, to);
+            foreach (var x in moving)
+            {
+                x.Info.Directory = Moved(x.Info.Directory);
+                if (x.Info.Within is { } within) x.Info.Within = Moved(within);
+            }
+            // A session a folder above may show a repository in it (see SessionInfo.GitRepo).
+            foreach (var x in sessions.Values) if (x.Info.GitRepo is { } repo) x.Info.GitRepo = Moved(repo);
+            SaveSessions();
+            Post(SessionList());
+            // The conversations can take a moment (a long one is rewritten); the session's place is already saved.
+            await Task.Run(() =>
+            {
+                foreach (var agent in Agents.All)
+                    if (agent.Conversations is { MovesWithFolder: true } store) store.MoveFolder(from, to);
+            });
+        }
+        finally
+        {
+            foreach (var x in sessions.Values.ToList()) _ = x.InitGitAsync();
+        }
+    }
+
     /// <summary>Removes a session here: its process ends, its panels go with it (its conversation stays, to resume).</summary>
     private void RemoveSession(TerminalSession s)
     {
@@ -762,7 +831,7 @@ internal sealed partial class AppHost
     {
         type = "sessions",
         agents = Agents.All.Select(a => a.Describe()),
-        projects = projects.Select(p => new { id = p.Id, name = p.Name, color = p.Color }),
+        projects = projects.Select(p => new { id = p.Id, name = p.Name, color = p.Color, startWithApp = p.StartWithApp }),
         sessions = order.Select(id => sessions.TryGetValue(id, out var s) ? (s.Info, s.IsRunning) : (serverSessions[id].Info, serverSessions[id].Running)).Select(x => new
         {
             id = x.Info.Id,
@@ -894,6 +963,7 @@ internal sealed partial class AppHost
             case "start":
             {
                 var s = Get(msg);
+                if (!await PanelsReady(s)) return new { prompted = false };
                 tails[s.Id].Clear();
                 var prompted = s.FirstPromptOnce != null;   // starts on a prompt: its first output is work, not start-up
                 s.Start(Int(msg, "cols"), Int(msg, "rows"), OptStr(msg, "theme"), PanelLinkFor(s));
@@ -923,6 +993,7 @@ internal sealed partial class AppHost
             case "restart":
             {
                 var s = Get(msg);
+                if (!await PanelsReady(s)) return new { prompted = false };
                 CatchUpConversation(s);   // a session with its own conversation restarts in the one it's in now
                 // Restarting to pick up a new theme: carry on in the exact conversation the session is in.
                 if (Bool(msg, "resume") && s.IsRunning && LiveConversation(s) is { } live)
@@ -1052,11 +1123,18 @@ internal sealed partial class AppHost
                 Post(SessionList());
                 return null;
             }
+            case "moveSession":
+                await MoveSessionFolderAsync(Get(msg), Str(msg, "directory").Trim(), Bool(msg, "stop"));
+                return null;
 
             // ---- projects (a grouping of sessions; deleting one never removes sessions)
             case "projects.add":
             {
-                var project = new ProjectInfo { Name = ProjectName(msg), Color = ProjectInfo.NormalizeColor(OptStr(msg, "color")) };
+                var project = new ProjectInfo
+                {
+                    Name = ProjectName(msg), Color = ProjectInfo.NormalizeColor(OptStr(msg, "color")),
+                    StartWithApp = ProjectInfo.StartWithAppValue(OptStr(msg, "startWithApp")),
+                };
                 projects.Add(project);
                 ProjectStore.Save(projects);
                 Post(SessionList());
@@ -1068,6 +1146,8 @@ internal sealed partial class AppHost
                 project.Name = ProjectName(msg);
                 // Sent only by the edit dialog: a missing "color" leaves it alone, null or "" means automatic.
                 if (msg.TryGetProperty("color", out _)) project.Color = ProjectInfo.NormalizeColor(OptStr(msg, "color"));
+                // Likewise: when its sessions without a setting of their own start, from the next time LlamaTree opens.
+                if (msg.TryGetProperty("startWithApp", out _)) project.StartWithApp = ProjectInfo.StartWithAppValue(OptStr(msg, "startWithApp"));
                 ProjectStore.Save(projects);
                 Post(SessionList());
                 return null;
@@ -1221,6 +1301,16 @@ internal sealed partial class AppHost
             case "plugins.forget":
                 grants.Forget(Str(msg, "id"));
                 return null;
+            case "plugins.data.get":
+                // What a plugin saved for itself (PluginData): the page asks for the plugin whose request it's answering.
+                return new { data = await Task.Run(() => pluginData.Get(Str(msg, "id"))) };
+            case "plugins.data.set":
+            {
+                var id = Str(msg, "id");
+                var data = msg.TryGetProperty("data", out var d) ? d.Clone() : default;
+                await Task.Run(() => pluginData.Set(id, data));
+                return null;
+            }
             case "plugins.grants.import":
             {
                 // Answers the page kept itself before they were kept here; taken only into an empty store. Never from a
@@ -1351,6 +1441,16 @@ internal sealed partial class AppHost
                 var c = await Task.Run(() => s.Agent?.FindConversation(id, s.Info.Directory));
                 return new { id, saved = c != null, title = c?.Title, started = c?.Started, modified = c?.Modified };
             }
+            case "context":
+            {
+                // How full the session's conversation is, for the meter on its tile: read from its agent's own files, so
+                // only a session whose agent says, with a conversation of its own, has one.
+                var s = Get(msg);
+                if (s.Agent is not { CompactCommand: not null, Conversations: { } store } || s.Info.Conversation is not { } id) return new { found = false };
+                var usage = await Task.Run(() => store.Context(s));
+                if (usage == null || usage.Limit <= 0) return new { found = false };
+                return new { found = true, conversation = id, tokens = usage.Tokens, limit = usage.Limit, learned = usage.Learned, limitIs = usage.LimitIs, compactions = usage.Compactions, compactedAt = usage.CompactedAt, model = usage.Model };
+            }
             case "openFolder":
                 OpenFolder(Get(msg).Info.Directory);
                 return null;
@@ -1403,7 +1503,7 @@ internal sealed partial class AppHost
                 relay.SetPeers(RelayPeers());
                 return new { folder = PluginFolder, plugins = found.Select(p => new { id = p.Id, title = p.Title, description = p.Description, url = window.PluginBase(p.Id) + p.Entry, placement = p.Placement,
                     menu = p.Menu.Select(i => new { label = i.Label, command = i.Command, where = i.Where }), access = p.Access, inbox = p.Inbox, icon = p.Icon,
-                    toolbar = p.Toolbar is { } t ? new { icon = t.Icon, tooltip = t.Tooltip, command = t.Command } : null }), problems };
+                    background = p.Background, toolbar = p.Toolbar is { } t ? new { icon = t.Icon, tooltip = t.Tooltip, command = t.Command } : null }), problems };
             }
             case "plugins.openFolder":
                 Directory.CreateDirectory(PluginFolder);
@@ -1515,6 +1615,7 @@ internal sealed partial class AppHost
                 var id = Str(msg, "id");
                 await Task.Run(() => GalleryService.RemovePlugin(PluginFolder, id));
                 grants.Forget(id);   // installed again, it asks again
+                pluginData.Forget(id);   // and starts with nothing kept
                 return null;
             }
             case "gallery.installTheme":

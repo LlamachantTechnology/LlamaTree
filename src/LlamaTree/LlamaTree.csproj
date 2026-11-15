@@ -15,10 +15,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- The clipboard calls that read untyped data are obsolete (#87); keep them out. -->
+    <WarningsAsErrors>$(WarningsAsErrors);WFDEV005</WarningsAsErrors>
     <ApplicationIcon>app.ico</ApplicationIcon>
 
     <!-- Version shown in Explorer, Apps & Features and the installer. Bump for each release. -->
-    <Version>1.3.3</Version>
+    <Version>1.3.4</Version>
     <Product>LlamaTree</Product>
     <AssemblyTitle>LlamaTree</AssemblyTitle>
     <Company>LLAMACHANT TECHNOLOGY LTD</Company>

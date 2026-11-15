@@ -4,7 +4,7 @@ A session is one agent (or any command) running in its own real terminal, in a f
 
 ## Working with sessions
 
-Click a session's tile, or its tab in the title bar, to work in it full-size; click its tab again, or press <kbd>Shift</kbd>+<kbd>Esc</kbd>, to go back to all sessions. **New session** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd>) starts a new conversation, optionally one session per worktree, or resumes an existing one. [Keyboard shortcuts](shortcuts.md) lists the rest.
+Click a session's tile, or its tab (in the list down the left, or across the top in that layout), to work in it full-size; click its tab again, or press <kbd>Shift</kbd>+<kbd>Esc</kbd>, to go back to all sessions. **New session** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd>) starts a new conversation, optionally one session per worktree, or resumes an existing one. [Keyboard shortcuts](shortcuts.md) lists the rest.
 
 ![An expanded session with its Git Changes](images/session.png)
 
@@ -45,13 +45,25 @@ A new Claude session's command is just `claude` (plus any options you add). Llam
 - Commands with their own `--resume`, `--session-id` or `--fork-session` are left alone.
 - **Older sessions:** a session made with `claude --continue` (the previous default) starts on the folder's latest conversation once, then keeps that one. A plain `claude` session saved before 1.1.0 never told the app which conversation it was in, so it gets a new one of its own, and the app says once which sessions those are; *Resume a different conversation…* takes one back to an earlier conversation.
 
-Codex sessions work the same way, with a few differences: see [Claude Code and Codex](claude-and-codex.md#codex).
+Codex, Antigravity and Grok sessions work the same way, with a few differences: see [Codex](claude-and-codex.md#codex), [Antigravity](claude-and-codex.md#antigravity) and [Grok](claude-and-codex.md#grok).
 
 ### Resuming a conversation
 
 In **New session**, or a session's ⋯ menu › *Resume a different conversation…*, pick any saved conversation from the list. That makes it the session's conversation; *New conversation* gives the session a fresh one instead. The list reads Claude Code's saved conversations from `~/.claude/projects`, and Codex conversations, tagged *Codex*. Conversations used in the last few minutes are tagged *active now*: close them in any other terminal first.
 
 ![Resuming a saved Claude Code conversation](images/resume.png)
+
+### Moving a session's folder
+
+Change the **Folder** in *Edit session* (or *Browse…* to the folder to move it into) to move the folder itself on disk, and the session with it. A worktree is moved with `git worktree move`, so its repository keeps track of it; a repository's main folder is moved and its other worktrees repaired (`git worktree repair`). Any other session in the folder or inside it moves too. Running ones are stopped first, after you confirm, since their programs hold the folder.
+
+The Claude and Codex conversations had in the folder go with it, so each session reopens its conversation in the new place. The new folder must not exist yet, and has to be on the same drive. Claude may ask once whether you trust the new folder.
+
+### Sessions started by another session
+
+A session another session's agent started (`start_session`) is listed beneath the one that started it, indented a step, in the list down the left. Its tooltip says which session started it.
+
+Click the arrow beside a session that started others to fold them away beneath it, and again to show them. While they're folded, the session's row shows how many there are, with a dot when one is working or asking you something and a count of those waiting for you. Folded sessions keep running, and still have their tiles and <kbd>Ctrl</kbd>+number keys.
 
 ### Closing the window
 
@@ -66,11 +78,13 @@ Tick *Don't ask again* to always do one or the other; the version menu (top righ
 
 After a restart, the sessions come back, each in its own conversation. A Claude or Codex session brought back after a restart waits until you first click on its terminal (its tile says *Starts when you click it*; pressing Enter in it works too). Its start-up context, such as hooks, the date and Git status, is then fresh when you use the session, and a session you don't click on costs nothing. A message from another session starts it too, so the sender isn't left waiting. New sessions, and sessions running other commands (a dev server, say), start straight away.
 
-To have a Claude or Codex session start as soon as LlamaTree opens instead, set **Starts** when you add it in *New session*, or later in its ⋯ menu › *Rename / edit command…*:
+To have Claude or Codex sessions start as soon as LlamaTree opens instead, choose when they start:
 
 - **When you first click on its terminal**: the default, as above.
 - **When LlamaTree opens, if its terminal was running when LlamaTree last closed**: brings back the sessions you were using, whether you stopped them by closing LlamaTree, signing out or restarting the computer. A session you stopped yourself, or whose Claude you quit (`/exit`), waits to be clicked on as usual.
 - **When LlamaTree opens, always**.
+
+Set it for a whole project in **New project** or the project's *Edit project…* (**Its sessions start**), and every session in the project follows it. A session can have its own instead: set **Starts** when you add it in *New session*, or later in its ⋯ menu › *Rename / edit command…*. There, **Same as *project*** (the default) follows the project, and says what that is. A session with no project starts when you first click on it, unless it has its own setting. Changes take effect the next time LlamaTree opens. Sessions on a server start as that server's LlamaTree decides.
 
 ## Conversation rail and tab
 
@@ -84,6 +98,23 @@ Clicking a tick (or right-click › *Show conversation*) opens the session's **C
 
 Both come from the agent's saved transcript (a Claude session's process names it in `~/.claude/sessions`), so they work in Claude's full-screen mode, which keeps no terminal scrollback. Nothing is sent anywhere.
 
+## Context meter
+
+A long conversation answers worse well before it is full: early detail gets crowded out, and each automatic compaction is a summary of a summary. The chip on a session's tile shows how full its conversation is: a bar, a percentage, and ↻ with the number of times it has been compacted. It turns amber at 50% and red at 80%, and from amber on the percentage also shows beside the session in the list down the left. Hovering shows the tokens the agent holds and what they are measured against:
+
+| | Read from | Measured against |
+|---|---|---|
+| Claude Code | its saved transcript | where Claude last compacted on its own in this conversation, or until then the model's window (200k, or 1M once the conversation has held more) |
+| Codex | its rollout's token counts | the model's window, as Codex reports it |
+| Antigravity | its transcript's steps | the window of the model it names (Gemini's 1M, Claude's 200k, GPT-OSS's 128k), which agy doesn't report |
+| Grok | its `signals.json`, and its log for a compaction since | where Grok compacts on its own: 85% of the model's window, or `auto_compact_threshold_percent` in its `config.toml` |
+
+Straight after a compaction, an agent that doesn't say what it left (Codex, Antigravity) shows 0% until its next reply.
+
+Clicking the chip offers **Compact**, which types the agent's own `/compact` into the session, as you could. The agent replaces the conversation with a summary of its own; the conversation's file keeps what was said. It is only typed while the session is idle: not working, and not asking you something (a menu the agent shows at start, such as Codex offering an update, counts as asking).
+
+The numbers come from each agent's own files, as the conversation rail's do.
+
 ## Projects
 
 Projects group sessions, for example one product across its worktrees. Tick projects on and off in the Projects row; **All** and **None** do what they say, and <kbd>Ctrl</kbd>+click (or right-click › *Show only this project*) shows only one. Sessions with no project are grouped under **Unknown**, which you tick and untick like a project. Each session's tab and tile carry a tag in its project's colour, so two sessions with the same name in different projects can be told apart. Hidden sessions keep running, and each project's tab counts its sessions waiting for you, so a hidden project still gets noticed.
@@ -95,7 +126,7 @@ Projects group sessions, for example one product across its worktrees. Tick proj
 - **Put a session in a project** when you add it, by dragging its tab into the project's group, or right-click its tab › *Move to project…*
 - **Rename, recolour, reorder or delete** a project by right-clicking it. *Edit project* sets its name and colour (a swatch, a custom colour or Automatic). Deleting a project keeps its sessions; they just have no project.
 - **Add a session to a project** with the **+** at the end of its tab group (at the end of the row when there are no projects). It works from that project's current session, or its first:
-  - *In the same folder* adds a session there in one click, with a conversation of its own.
+  - *In the same folder…* asks for the new session's name (the next free one is filled in, so Enter takes it) and adds it there, with a conversation of its own.
   - *In a new worktree…* (only in a Git repository) creates a worktree on a new branch, next to the repository by default, and opens a session there, unless you untick *Start a session in it*.
   - *A different folder…* opens New session with the project chosen.
 

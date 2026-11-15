@@ -72,7 +72,7 @@ internal sealed class MainForm : Form, HostLink.IWindow
         if (Clipboard.ContainsFileDropList()) return Clipboard.GetFileDropList().Cast<string>().ToArray();
         if (!Clipboard.ContainsImage()) return [];
         // The PNG as the app that copied it wrote it (keeping transparency), else the bitmap.
-        using var png = Clipboard.GetData("PNG") as MemoryStream;
+        using var png = Clipboard.TryGetData("PNG", out MemoryStream? stream) ? stream : null;
         using var image = png == null ? Clipboard.GetImage() : null;
         if (png == null && image == null) return [];
         var path = Desktop.NewPastedImagePath();

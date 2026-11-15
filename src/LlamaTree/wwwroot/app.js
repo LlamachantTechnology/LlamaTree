@@ -105,6 +105,21 @@ const store = {
   set(key, v) { localStorage.setItem('ct.' + key, JSON.stringify(v)); },
 };
 
+/**
+ * The layout picked under Layout, else the default: Left (projects and sessions down the left) for a new install. A
+ * copy of LlamaTree that has run before without one picked had Top, its default then, and keeps it. Saved either way,
+ * so it doesn't change later.
+ */
+function initialNavLayout() {
+  const picked = store.get('navLayout');
+  if (['top', 'hybrid', 'left'].includes(picked)) return picked;
+  let ranBefore = false;
+  try { ranBefore = Object.keys(localStorage).some((k) => k.startsWith('ct.')); } catch { }
+  const layout = ranBefore ? 'top' : 'left';
+  try { store.set('navLayout', layout); } catch { }
+  return layout;
+}
+
 function debounce(fn, ms) {
   let t;
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
@@ -304,13 +319,15 @@ const state = {
   projects: [],                                        // [{ id, name }] in display order
   hiddenProjects: new Set(store.get('hiddenProjects', [])),   // hidden rather than shown, so new projects start visible
   // Where projects and sessions go (see NAV_LAYOUTS): 'top', 'hybrid' (projects on the left) or 'left' (both, as a tree).
-  navLayout: ['hybrid', 'left'].includes(store.get('navLayout')) ? store.get('navLayout') : 'top',
+  navLayout: initialNavLayout(),
   navWidth: store.get('navWidth', 230),
   navBranches: store.get('navBranches', true),   // each session's branch beneath its name, down the left
   // In the Top layout, projects as tabs (a click shows only that project) rather than as filters to tick.
   projectTabs: store.get('projectTabs', false),
   // Projects (and Unknown) taken off the tab row into its ▾ list. Unpinned rather than pinned, so new projects start pinned.
   unpinnedProjects: new Set(store.get('unpinnedProjects', [])),
+  // Sessions whose started sessions are folded away beneath them in the list down the left (see renderNav).
+  collapsedStarters: new Set(store.get('collapsedStarters', [])),
 };
 
 // ------------------------------------------------------------------ projects: which sessions are visible
@@ -366,13 +383,92 @@ function projectTag(s) {
   return h('span', { class: 'proj-tag', style: `--proj:${projectColor(p)}`, title: `Project: ${p.name}` }, p.name);
 }
 
-/** Visible sessions, grouped by project in project order (no project last), keeping their own order within a group. */
+/**
+ * Visible sessions, grouped by project in project order (no project last), keeping their own order within a group,
+ * except that a session another started (start_session) comes straight after the one that started it, and its siblings.
+ */
 function visibleSessions() {
-  return state.sessions
+  return nestStarted(state.sessions
     .map((s, i) => ({ s, i }))
     .filter(({ s }) => isVisible(s))
     .sort((a, b) => projectIndex(a.s) - projectIndex(b.s) || a.i - b.i)
-    .map(({ s }) => s);
+    .map(({ s }) => s));
+}
+
+/**
+ * The sessions with each one another started moved beneath the one that started it, and its `nestDepth` set: how many
+ * levels down it is (0 for one you made). Only beneath a starter that's in the list and in the same project, so a
+ * session never leaves its project's group; one whose starter is hidden or gone stays where it was. Also sets
+ * `nestParent`, the id of the one it's beneath (null at the top), and `nestKids`, how many sit directly beneath it.
+ */
+function nestStarted(list) {
+  const shown = new Map(list.map((s) => [s.id, s]));
+  const starterOf = (s) => {
+    const by = s.startedBy && shown.get(s.startedBy);
+    return by && by !== s && groupOf(by) === groupOf(s) ? by : null;
+  };
+  const children = new Map();
+  for (const s of list) { const by = starterOf(s); if (by) children.set(by.id, [...(children.get(by.id) ?? []), s]); }
+  const out = [], placed = new Set();
+  const place = (s, depth, parent) => {
+    if (placed.has(s.id)) return;
+    placed.add(s.id);
+    s.nestDepth = depth;
+    s.nestParent = parent;
+    s.nestKids = 0;
+    out.push(s);
+    for (const c of children.get(s.id) ?? []) { if (!placed.has(c.id)) s.nestKids++; place(c, depth + 1, s.id); }
+  };
+  for (const s of list) if (!starterOf(s)) place(s, 0, null);
+  for (const s of list) place(s, 0, null);   // only ever a loop of starters (each started by another of them): left as they were
+  return out;
+}
+
+/** Whether a session is folded away beneath a collapsed starter (one above it in nestStarted's tree). */
+function foldedAway(s) {
+  for (let up = s.nestParent, seen = 0; up && seen < 64; up = state.byId.get(up)?.nestParent, seen++)
+    if (state.collapsedStarters.has(up)) return true;
+  return false;
+}
+
+/** The sessions beneath a starter in nestStarted's tree, however far down. */
+function nestedUnder(s) {
+  return state.sessions.filter((x) => {
+    for (let up = x.nestParent, seen = 0; up && seen < 64; up = state.byId.get(up)?.nestParent, seen++) if (up === s.id) return true;
+    return false;
+  });
+}
+
+/** Folds a starter's sessions away beneath it in the list down the left, or shows them again. */
+function toggleStarter(id) {
+  const set = state.collapsedStarters;
+  if (!set.delete(id)) set.add(id);
+  for (const x of [...set]) if (!state.byId.has(x)) set.delete(x);   // sessions since closed
+  store.set('collapsedStarters', [...set]);
+  renderNav();
+}
+
+/**
+ * On a collapsed starter's row: how many sessions are folded beneath it, with the dot of one that asks or works and a
+ * count of those waiting for you, so a folded session still gets noticed.
+ */
+function nestFold(s) {
+  const under = nestedUnder(s).filter(isVisible);
+  const waiting = under.filter(waitingForYou).length;
+  return h('span', { class: 'nest-fold', 'data-id': s.id, title: `${under.length} session${under.length === 1 ? '' : 's'} started from here, folded away` },
+    `+${under.length}`, projectDot(under),
+    waiting ? h('span', { class: 'badge', title: `${waiting} waiting for you` }, String(waiting)) : null);
+}
+
+/** Refreshes the folded counts on collapsed starters after a session's status changes. */
+function updateNestFolds() {
+  for (const el of document.querySelectorAll('#navList .nest-fold')) {
+    const s = state.byId.get(el.dataset.id);
+    if (!s) continue;
+    const next = nestFold(s);
+    // The same dot and count stay, so the dot's animation isn't restarted on every update.
+    if (next.outerHTML !== el.outerHTML) { el.replaceWith(next); syncStatus(next); }
+  }
 }
 
 function saveHiddenProjects() {
@@ -638,8 +734,30 @@ function renderNav() {
   if (state.navLayout === 'top') return;
   const tree = state.navLayout === 'left';
   const groups = projectGroups();
-  const shown = tree ? visibleSessions() : [];
-  const tabOf = (s) => sessionTab(s, shown.indexOf(s), true);   // the index gives its Ctrl+1…9, as in the tab row
+  const all = tree ? visibleSessions() : [];
+  // Sessions folded away beneath a collapsed starter aren't listed; they still have their tiles and Ctrl+1…9.
+  const shown = all.filter((s) => !foldedAway(s));
+  const tabOf = (s) => {
+    const tab = sessionTab(s, all.indexOf(s), true);   // the index gives its Ctrl+1…9, as in the tab row
+    // One another session started sits beneath it (see nestStarted).
+    if (s.nestDepth > 0) {
+      tab.classList.add('nested');
+      tab.style.setProperty('--depth', String(s.nestDepth));
+    }
+    if (s.nestKids > 0) {
+      const open = !state.collapsedStarters.has(s.id);
+      tab.classList.add('starter');
+      tab.prepend(h('button', {
+        class: 'nest-toggle', 'aria-expanded': String(open),
+        title: `${open ? 'Hide' : 'Show'} the sessions ${s.name} started`,
+        onclick: (e) => { e.stopPropagation(); toggleStarter(s.id); },
+      }, iconEl('chevD')));
+      // Folded: how many beneath it, on the name's line.
+      const name = !open && tab.querySelector('.tab-text .tab-name');
+      if (name) { const line = h('span', { class: 'tab-line' }); name.replaceWith(line); line.append(name, nestFold(s)); }
+    }
+    return tab;
+  };
   const rows = groups.map((p) => {
     const members = shown.filter((s) => groupOf(s) === p.id);
     return h('div', { class: 'nav-group' + (p.unknown ? ' unknown' : ''), style: p.unknown ? null : `--proj:${projectColor(p)}` },
@@ -667,6 +785,8 @@ function renderNav() {
 function projectMenu(p, x, y) {
   if (p.unknown) {   // a group, not a project: nothing to rename, move or delete
     showMenu(x, y, [
+      ...projectNewSessionItems(UNKNOWN),
+      '-',
       { label: 'Project view: its worktrees side by side', action: () => openProjectView(UNKNOWN) },
       '-',
       { label: 'Show only sessions with no project', action: () => showOnlyProject(UNKNOWN) },
@@ -679,6 +799,8 @@ function projectMenu(p, x, y) {
   const i = state.projects.indexOf(p);
   const across = state.navLayout === 'top';   // a row of tabs; down the left, a list
   showMenu(x, y, [
+    ...projectNewSessionItems(p.id),
+    '-',
     { label: 'Project view: its worktrees side by side', action: () => openProjectView(p.id) },
     '-',
     { label: 'Show only this project', action: () => showOnlyProject(p.id) },
@@ -708,6 +830,9 @@ function moveProject(p, delta) {
  */
 function projectDialog(title, initial, okLabel, onOk) {
   const name = h('input', { value: initial.name, placeholder: 'e.g. FiscFlow', spellcheck: 'false', maxlength: '60' });
+  // When its Claude and Codex sessions start, for those without a setting of their own (ProjectInfo.StartWithApp).
+  const starts = h('select', {}, START_CHOICES.map(([value, label]) =>
+    h('option', { value, selected: (initial.startWithApp || 'click') === value }, label)));
   const error = h('div', { class: 'form-error', hidden: true });
   let color = initial.color ?? null;
   const automatic = initial.id ? autoProjectColor(initial.id) : PROJECT_COLORS[0];
@@ -735,27 +860,31 @@ function projectDialog(title, initial, okLabel, onOk) {
 
   const ok = async () => {
     if (!name.value.trim()) { error.hidden = false; error.textContent = 'Enter a name.'; return; }
-    try { await onOk(name.value.trim(), color); closeModal(); } catch (e) { error.hidden = false; error.textContent = e.message; }
+    const startWithApp = starts.value === 'click' ? '' : starts.value;
+    try { await onOk(name.value.trim(), color, startWithApp); closeModal(); } catch (e) { error.hidden = false; error.textContent = e.message; }
   };
   name.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok(); });
   openModal(title, [
     field('Name', name),
     field('Colour', h('div', { class: 'swatch-row' }, autoBtn, swatches, customBtn, custom, preview)),
+    field('Its sessions start', comboSelect(starts),
+      'For its Claude and Codex sessions on this computer, unless a session has its own (in New session, or its ⋯ menu › Rename / edit command…). ' + STARTS_HELP),
     error,
   ], [h('button', { class: 'btn', onclick: closeModal }, 'Cancel'), h('button', { class: 'btn primary', onclick: ok }, okLabel)]);
   pick(color);
 }
 
 function showNewProjectDialog() {
-  projectDialog('New project', { name: '', color: null }, 'Create', async (name, color) => {
-    await request('projects.add', { name, color });
+  projectDialog('New project', { name: '', color: null }, 'Create', async (name, color, startWithApp) => {
+    await request('projects.add', { name, color, startWithApp });
     if (!state.sessions.length) return;
     toast(`Project "${name}" created. Put sessions in it with right-click → Move to project…, or pick it when adding a session.`);
   });
 }
 
 function showEditProjectDialog(p) {
-  projectDialog('Edit project', p, 'Save', (name, color) => request('projects.rename', { id: p.id, name, color: color ?? '' }));
+  projectDialog('Edit project', p, 'Save', (name, color, startWithApp) =>
+    request('projects.rename', { id: p.id, name, color: color ?? '', startWithApp }));
 }
 
 function confirmDeleteProject(p) {
@@ -1965,11 +2094,17 @@ setInterval(() => {
       else renderTileState(s);
     }
     // Once the screen has settled after new output has been drawn (mid-redraw it can be half drawn), see whether the
-    // agent is asking. Only agents: a shell or a dev server can print text that looks like their menus.
-    const asks = s.running && !s.reportsState && a.drawnAt !== a.readAt && now - a.drawnAt > 250 && askingScreen(s.command);
+    // agent is asking. Only agents: a shell or a dev server can print text that looks like their menus. An agent that
+    // keeps redrawing while it asks (Grok ticks a timer) never settles, so its screen is read once a second anyway, and
+    // such a reading only counts once the next one agrees, so a half-drawn screen can't flip the dot.
+    const settled = now - a.drawnAt > 250;
+    const asks = s.running && !s.reportsState && a.drawnAt !== a.readAt && (settled || now - (a.readTime ?? 0) > 1000) && askingScreen(s.command);
     if (asks) {
       a.readAt = a.drawnAt;
-      setAsking(s, isAsking(s.term, asks));
+      a.readTime = now;
+      const on = isAsking(s.term, asks);
+      if (settled || a.lastReading === on) setAsking(s, on);
+      a.lastReading = on;
     }
   }
 }, 500);
@@ -2009,15 +2144,16 @@ function askingScreen(command) {
 }
 
 // An agent asks by putting a menu on screen, with a line its profile recognises (Claude's picked numbered choice, say).
-// While its prompt box (a rule with the prompt under it) is there, it wants a prompt instead, so text like that in the
-// conversation above doesn't count.
+// A menu above its prompt box (a rule with the prompt under it) has been answered, and the box wants a prompt, so text
+// like that in the conversation above doesn't count; a menu below the last prompt box does (agy keeps an answered
+// menu's lines in the conversation, and its prompts there sit under a rule like the box's).
 function isAsking(term, asks) {
   const b = term.buffer.active;
   let choice = false, prev = '';
   for (let y = b.baseY; y < b.baseY + term.rows; y++) {
     const line = b.getLine(y)?.translateToString(true) ?? '';
-    if (asks.promptRule?.test(prev) && asks.promptLine?.test(line)) return false;
-    if (asks.choice.test(line)) choice = true;
+    if (asks.promptRule?.test(prev) && asks.promptLine?.test(line)) choice = false;
+    else if (asks.choice.test(line)) choice = true;
     prev = line;
   }
   return choice;
@@ -2085,6 +2221,7 @@ function renderTileState(s) {
   syncStatus(s.header);
   if (tab) syncStatus(tab);
   updateProjectIndicators(groupOf(s));
+  if (s.nestParent) updateNestFolds();
   projectViewChanged(s);
   relayNotify(s);   // an idle session told of messages it has
 }
@@ -2130,6 +2267,7 @@ function renderTileHeader(s) {
     relayTileMark(s),
     startedByMark(s),
     h('span', { class: 'tile-title', title: s.title }, s.title),
+    contextChip(s),
     gs && h(gitTabOn('changes') ? 'button' : 'span', {
       class: 'chip', title: `${gs.count} changed file(s) on ${gs.branch}${gitTabOn('changes') ? ' — show in Git Changes' : ''}`,
       onclick: gitTabOn('changes') && (() => showGit(s.id)),
@@ -2147,8 +2285,94 @@ function renderTileHeader(s) {
   syncControlStatus(s);
 }
 
+// ---- the context meter
+//
+// How full a session's conversation is, on its tile: the tokens its agent holds against where it would compact on its
+// own, or the model's window (see ContextUsage in ActivityReader.cs, and each agent's conversation store). A
+// conversation answers worse long before it is full, so the meter turns amber, then red, well ahead of that. A click
+// offers the agent's own compact command (agent.compact), typed as you could type it; any agent whose profile names one
+// has a meter.
+
+const CONTEXT_POLL_MS = 10_000;
+const CONTEXT_WARM = 50, CONTEXT_HOT = 80;   // percent of the limit
+const contextPct = (c) => Math.min(100, Math.round(c.tokens / c.limit * 100));
+const contextLevel = (c) => { const p = contextPct(c); return p >= CONTEXT_HOT ? 'hot' : p >= CONTEXT_WARM ? 'warm' : ''; };
+const kTokens = (n) => (n >= 1_000_000 ? (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(n));
+
+/** The meter's numbers in words: for its tooltip, its menu and the session's tab. */
+function contextLine(s) {
+  const c = s.ctx;
+  if (!c) return null;
+  const of = `${kTokens(c.limit)}, ${c.limitIs ?? (c.learned ? 'where it last compacted on its own' : "the model's window")}`;
+  const compacted = !c.compactions ? 'never compacted' : `compacted ${c.compactions === 1 ? 'once' : c.compactions + ' times'}${c.compactedAt ? `, last ${relTime(c.compactedAt)}` : ''}`;
+  return `Context: ${kTokens(c.tokens)} tokens of ${of} (${contextPct(c)}%) · ${compacted}`;
+}
+
+/** The meter on a session's tile: a bar and a percentage, amber then red as it fills; a click opens its menu. */
+function contextChip(s) {
+  const c = s.ctx;
+  if (!c) return null;
+  return h('button', {
+    class: 'chip ctx ' + contextLevel(c),
+    title: `${contextLine(s)}\nClick to compact it`,
+    onclick: (e) => { const r = e.currentTarget.getBoundingClientRect(); contextMenu(s, r.left, r.bottom + 2); },
+  }, h('span', { class: 'ctx-bar' }, h('span', { style: `width: ${Math.max(6, contextPct(c))}%` })), contextPct(c) + '%',
+  c.compactions ? h('span', { class: 'ctx-n' }, '↻' + c.compactions) : null);
+}
+
+/** Asks the app how full the session's conversation is, and redraws its tile's header when the answer has changed. */
+async function loadContext(s) {
+  if (!agentOf(s.command)?.compact || s.ctxLoading) return;   // only an agent that can be compacted has a meter
+  s.ctxLoading = true;
+  let c = null;
+  try { const r = await request('context', { id: s.id }); c = r?.found ? r : null; } catch { /* the session went away, or its server can't say */ } finally { s.ctxLoading = false; }
+  const key = (x) => (x ? [x.conversation, x.tokens, x.limit, x.compactions].join('|') : '');
+  const changed = key(c) !== key(s.ctx ?? null);
+  s.ctx = c;
+  if (!changed || state.byId.get(s.id) !== s || !s.header) return;
+  renderTileHeader(s);
+  const tab = $(`.session-tab[data-id="${s.id}"]`);
+  if (tab) tab.title = sessionTabTitle(s);
+  tab?.querySelector('.tab-ctx')?.remove();
+  const mark = contextMark(s);
+  if (mark) tab?.querySelector('.tab-text')?.after(mark);
+}
+
+/** In the list down the left: the percentage once the conversation is filling up (amber, then red), nothing before. */
+function contextMark(s) {
+  const level = s.ctx && contextLevel(s.ctx);
+  return level ? h('span', { class: 'tab-ctx ' + level, title: contextLine(s) }, contextPct(s.ctx) + '%') : null;
+}
+
+setInterval(() => {
+  if (document.hidden) return;
+  for (const s of state.sessions) if (s.running || s.ctx === undefined) loadContext(s);
+}, CONTEXT_POLL_MS);
+setTimeout(() => { for (const s of state.sessions) loadContext(s); }, 1500);
+
+function contextMenu(s, x, y) {
+  const agent = agentOf(s.command);
+  showMenu(x, y, [
+    { header: s.ctx ? `Context ${contextPct(s.ctx)}% · ${kTokens(s.ctx.tokens)} of ${kTokens(s.ctx.limit)} tokens` : 'Context' },
+    { label: `Compact (${agent.compact})`, action: () => compactNow(s) },
+  ]);
+}
+
+/**
+ * Types the agent's compact command into the session, as you could. Only at its prompt: not working, and not asking
+ * you something (a menu at its start counts, such as Codex offering an update, whose Enter would install it).
+ */
+function compactNow(s) {
+  const why = !s.running ? 'isn’t running' : s.asking ? 'is asking you something' : s.act.state === 'working' ? 'is working' : null;
+  if (why) { toast(`“${s.name}” ${why}. Compact it when it’s idle.`, true); return; }
+  s.term.paste(agentOf(s.command).compact);
+  enterAfterTyping(s);
+  toast(`Asked “${s.name}” to compact its conversation.`);
+}
+
 function sessionTabTitle(s) {
-  return [s.directory, s.git?.branch && `Branch: ${s.git.branch}`, s.server && serverTitle(serverOf(s)), statusText(s), conversationLine(s), 'Click again to go back to all sessions · middle-click to close'].filter(Boolean).join('\n');
+  const by = s.startedBy && state.byId.get(s.startedBy);
+  return [s.directory, s.git?.branch && `Branch: ${s.git.branch}`, by && `Started by “${by.name}”`, s.server && serverTitle(serverOf(s)), statusText(s), conversationLine(s), contextLine(s), 'Click again to go back to all sessions · middle-click to close'].filter(Boolean).join('\n');
 }
 
 /**
@@ -2204,6 +2428,7 @@ function sessionTab(s, i, marks = false) {
     statusDot(s),
     // Down the left, its branch beneath the name.
     marks ? h('span', { class: 'tab-text' }, h('span', { class: 'tab-name' }, s.name), tabBranch(s)) : h('span', { class: 'tab-name' }, s.name),
+    marks ? contextMark(s) : null,   // how full its conversation is, once it's filling up
     // Down the left, icons for its agent and where it runs; across the top, the server's name for a session on one.
     marks ? sessionMarks(s) : s.server &&h('span', { class: 'tab-server' + (serverDown(s) ? ' down' : ''), title: serverTitle(serverOf(s)) }, iconEl('server'), h('span', {}, serverName(serverOf(s)))),
     i < 9 ? h('span', { class: 'key' }, `Ctrl+${i + 1}`) : null),
@@ -2602,9 +2827,12 @@ function showMenu(x, y, items) {
         lead && h('span', { class: 'menu-icon' }, it.checked ? '✓' : typeof it.icon === 'string' ? iconEl(it.icon) : it.icon ?? ''),
         it.label, it.kbd && h('span', { class: 'kbd' }, it.kbd))));
   $('#menuHost').append(menu);
+  // Kept inside the window: moved up or left when it would run off the bottom or right, and never above the top. A menu
+  // taller than the window (the palette menu with many themes and plugins on a small screen) scrolls instead of being cut off.
+  menu.style.maxHeight = innerHeight - 8 + 'px';
   const r = menu.getBoundingClientRect();
-  menu.style.left = Math.min(x, innerWidth - r.width - 4) + 'px';
-  menu.style.top = Math.min(y, innerHeight - r.height - 4) + 'px';
+  menu.style.left = Math.max(4, Math.min(x, innerWidth - r.width - 4)) + 'px';
+  menu.style.top = Math.max(4, Math.min(y, innerHeight - r.height - 4)) + 'px';
   // Opened from the keyboard (a focused button's Enter or Space reports no click count): start on the first item.
   if (window.event?.type === 'click' && window.event.detail === 0) menu.querySelector('.menu-item')?.classList.add('active');
   openMenuEl = menu;
@@ -2692,6 +2920,10 @@ function terminalMenuItems(s) {
 // Both are looked for, as apostrophes in prose can look like quotes around a path.
 const PATH_WORD = /[^\s"'`<>|,;()[\]{}]+/g;
 const QUOTED_PATH = /"([^"\n]{2,})"|'([^'\n]{2,})'|`([^`\n]{2,})`/g;
+// Where an unquoted absolute path starts (C:\, \\server, ~/ or /), at the start of a word. Such a path may have spaces
+// in it (C:\My Files\a.txt), so it's also tried with the next few words added on; the longest one there is the link.
+const ABS_PATH_START = /(?<![^\s(\[{<,;=])(?:[A-Za-z]:[\\/]|\\\\(?=[^\\\s])|~[\\/]|\/(?=[^\s/]))/g;
+const ABS_PATH_MAX_SPACES = 6;
 
 /**
  * The path in a word of terminal output, or null if it can't be one: unless it was quoted, it needs a folder
@@ -2778,6 +3010,20 @@ function pathLinkProvider(s) {
       };
       for (const m of text.matchAll(QUOTED_PATH)) add(m[1] ?? m[2] ?? m[3], m.index + 1, true);
       for (const m of text.matchAll(PATH_WORD)) add(m[0], m.index);
+      for (const m of text.matchAll(ABS_PATH_START)) {
+        // The path with 1, 2, ... more words on it (single spaces only), stopping at anything a path word can't have.
+        let end = m.index;
+        for (let spaces = 0; spaces <= ABS_PATH_MAX_SPACES; spaces++) {
+          PATH_WORD.lastIndex = end;
+          const w = PATH_WORD.exec(text);
+          if (!w || w.index !== end) break;
+          end = w.index + w[0].length;
+          if (spaces > 0) add(text.slice(m.index, end), m.index);
+          if (text[end] !== ' ' || text[end + 1] === ' ') break;
+          end++;
+        }
+      }
+      PATH_WORD.lastIndex = 0;
       if (!words.length) return callback(undefined);
       const ask = [...new Set(words.map((w) => w.path).filter((p) => !fresh(cache.get(p))))];
       const lookup = ask.length ? request('terminal.paths', { id: s.id, paths: ask }) : Promise.resolve([]);
@@ -2910,18 +3156,45 @@ function defaultProjectId() {
 }
 
 /**
- * When a Claude or Codex session on this computer starts: when its terminal is first shown (''), or as LlamaTree opens ("always",
- * or "running": if it was running as LlamaTree closed). See SessionInfo.StartWithApp.
+ * When a Claude or Codex session on this computer starts: when its terminal is first shown ("click"), or as LlamaTree
+ * opens ("always", or "running": if it was running as LlamaTree closed). A project has one of these for its sessions
+ * (with null for "click"), and a session has its own or '' for its project's. See SessionInfo.StartWithApp.
  */
-function startsField(selected) {
-  const select = h('select', {},
-    [['', 'When you first click on its terminal'], ['running', 'When LlamaTree opens, if its terminal was running when LlamaTree last closed'], ['always', 'When LlamaTree opens, always']]
-      .map(([value, label]) => h('option', { value, selected: (selected ?? '') === value }, label)));
-  return {
-    select,
-    el: field('Starts', h('div', { class: 'combo' }, select, h('span', { class: 'combo-btn' }, iconEl('chevD'))),
-      'Started when you first click on its terminal, its start-up context (hooks, the date, Git status) is fresh when you use it. "If its terminal was running" brings back the terminals you were using, even after you sign out or restart the computer.'),
+const START_CHOICES = [
+  ['click', 'When you first click on its terminal', 'when you first click on its terminal'],
+  ['running', 'When LlamaTree opens, if its terminal was running when LlamaTree last closed', 'when LlamaTree opens, if it was running'],
+  ['always', 'When LlamaTree opens, always', 'when LlamaTree opens, always'],
+];
+const STARTS_HELP = 'Started when you first click on its terminal, its start-up context (hooks, the date, Git status) is fresh when you use it. "If its terminal was running" brings back the terminals you were using, even after you sign out or restart the computer.';
+
+const comboSelect = (select) => h('div', { class: 'combo' }, select, h('span', { class: 'combo-btn' }, iconEl('chevD')));
+
+/** "When you first click on its terminal", in short, for what a session following project `id` (or none) does. */
+function projectStartText(id) {
+  const value = state.projects.find((p) => p.id === id)?.startWithApp || 'click';
+  return START_CHOICES.find(([v]) => v === value)[2];
+}
+
+/**
+ * A session's Starts: its project's (the first choice, which says what that is), or one of its own. setProject(id)
+ * keeps the first choice's words right when the project is changed in the same dialog.
+ */
+function startsField(selected, projectId) {
+  const same = h('option', { value: '', selected: !selected });
+  const setProject = (id) => {
+    const p = state.projects.find((x) => x.id === id);
+    same.textContent = p ? `Same as ${p.name}: ${projectStartText(id)}`
+      : id === '__new__' ? `Same as the new project: ${projectStartText(null)}`   // projectField's "New project…"
+      : `Default (no project): ${projectStartText(null)}`;
   };
+  setProject(projectId);
+  const select = h('select', {}, same, START_CHOICES.map(([value, label]) => h('option', { value, selected: selected === value }, label)));
+  return { select, setProject, el: field('Starts', comboSelect(select), STARTS_HELP) };
+}
+
+/** Follows a project picker (projectField) in a session's dialog: a new project's sessions start when clicked. */
+function startsFollowProject(starts, project) {
+  project.select.addEventListener('change', () => starts.setProject(project.select.value));
 }
 
 function showEditDialog(s, focus) {
@@ -2929,7 +3202,17 @@ function showEditDialog(s, focus) {
   const name = h('input', { value: s.name, spellcheck: 'false' });
   const command = h('input', { value: s.command, spellcheck: 'false' });
   const project = projectField(s.project);
-  const starts = agent && !s.server ? startsField(s.startWithApp) : null;   // a server's session runs with its own LlamaTree
+  const starts = agent && !s.server ? startsField(s.startWithApp, s.project) : null;   // a server's session runs with its own LlamaTree
+  if (starts) startsFollowProject(starts, project);
+  // A session on this computer can move: its folder is moved on disk (a worktree by git), and the session with it.
+  const folder = h('input', { value: s.directory, readonly: !!s.server, spellcheck: 'false' });
+  const browse = !s.server && h('button', {
+    class: 'btn', title: 'Pick the folder to move it into; it keeps its name there',
+    onclick: async () => {
+      const parent = await request('pickFolder', { initial: parentFolder(folder.value.trim() || s.directory) });
+      if (parent) folder.value = parent.replace(/[\\/]+$/, '') + pathSep(parent) + leafName(s.directory.replace(/[\\/]+$/, ''));
+    },
+  }, 'Browse…');
   const error = h('div', { class: 'form-error', hidden: true });
   const save = async () => {
     let projectId;
@@ -2940,19 +3223,23 @@ function showEditDialog(s, focus) {
       error.textContent = e.message;
       return;
     }
+    const target = folder.value.trim();
+    const moving = !s.server && target && normPath(target) !== normPath(s.directory);
     request('updateSession', {
       id: s.id, name: name.value, command: command.value, project: projectId ?? '', ...(starts && { startWithApp: starts.select.value }),
     }).catch((e) => toast(e.message, true));
     closeModal();
-    if (s.running && command.value.trim() !== s.command) toast('Command changes apply the next time the session starts.');
+    if (moving) confirmMoveFolder(s, target);
+    else if (s.running && command.value.trim() !== s.command) toast('Command changes apply the next time the session starts.');
     if (projectId && state.hiddenProjects.has(projectId)) toast(`"${s.name}" moved to a project that's hidden; tick it above to see the session.`);
   };
-  for (const i of [name, command, project.newName]) i.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+  for (const i of [name, command, project.newName, folder]) i.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
   openModal('Edit session', [
     field('Name', name),
     field('Command', command, 'For example: claude, claude --model opus, codex'),
     project.el,
-    field('Folder', h('input', { value: s.directory, readonly: true })),
+    field('Folder', s.server ? folder : h('div', { class: 'inline' }, folder, browse),
+      !s.server && 'Change it to move the folder itself on disk, and the session with it (a worktree is moved with git). Its conversations go along.'),
     agent && field('Conversation',
       h('input', {
         value: s.conversation ?? '', readonly: true, spellcheck: 'false',
@@ -2975,6 +3262,48 @@ function agentTag(id) {
 }
 
 const leafName = (path) => (path || '').split(/[\\/]/).filter(Boolean).pop() || path;
+/** The separator the path is written with. */
+const pathSep = (path) => /^[a-z]:|\\/i.test(path) ? '\\' : '/';
+/** The folder the path is in (itself for a drive or the root). */
+const parentFolder = (path) => {
+  const p = (path || '').replace(/[\\/]+$/, '');
+  const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'));
+  return i > 0 && !/^[a-z]:$/i.test(p.slice(0, i)) ? p.slice(0, i) : p.slice(0, i + 1) || p;
+};
+
+/**
+ * Moving a session's folder (Edit session): what goes with it, then the move. Every session on this computer in the
+ * folder or inside it moves too, and running ones are stopped first, since their programs hold the folder.
+ */
+function confirmMoveFolder(s, target) {
+  const from = s.directory;
+  const along = state.sessions.filter((x) => x !== s && !x.server && underPath(x.directory, from));
+  const running = [s, ...along].filter((x) => x.running);
+  const names = (list) => list.map((x) => `“${x.name}”`).join(', ');
+  openModal('Move folder', [
+    h('div', {}, `Move the folder of “${s.name}” on disk, with everything in it?`),
+    field('From', h('input', { value: from, readonly: true })),
+    field('To', h('input', { value: target, readonly: true })),
+    h('div', { class: 'dim' }, s.git?.isRepo && normPath(s.git.root) === normPath(from)
+      ? 'It’s a Git repository folder: a worktree is moved with git worktree move, and a repository’s main folder has its other worktrees repaired afterwards.'
+      : 'Nothing else changes: the folder is renamed to its new place.'),
+    along.length > 0 && h('div', {}, `${along.length === 1 ? 'This session moves' : 'These sessions move'} with it: ${names(along)}.`),
+    running.length > 0 && h('div', { class: 'form-error' }, `${names(running)} ${running.length === 1 ? 'is' : 'are'} running and will be stopped first. Start ${running.length === 1 ? 'it' : 'them'} again afterwards: the conversation carries on.`),
+    h('div', { class: 'dim' }, 'Claude and Codex conversations had in the folder move with it, so the session reopens its conversation there. Anything else with the folder open (an editor, a build server) has to let go of it first.'),
+  ], [
+    h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
+    h('button', {
+      class: 'btn primary' + (running.length ? ' danger' : ''),
+      onclick: () => {
+        closeModal();
+        toast(`Moving ${from}…`);
+        request('moveSession', { id: s.id, directory: target, stop: running.length > 0 })
+          .then(() => toast(`Moved to ${target}.`))
+          .catch((e) => toast(e.message, true));
+      },
+    }, running.length ? 'Stop and move' : 'Move'),
+  ]);
+}
 
 /**
  * Searchable list of Claude Code's and Codex's saved conversations (optionally limited to one folder, or one agent's).
@@ -3314,7 +3643,8 @@ function showAddDialog(mode = 'new', from = null) {
   const firstPrompt = from?.prompt != null && h('textarea', { class: 'first-prompt', spellcheck: 'false' }, from.prompt);
   const commandNote = h('span');
   // Only a Claude or Codex session on this computer can start with LlamaTree (a server's runs with its own).
-  const starts = startsField(null);
+  const starts = startsField(null, from ? from.project : defaultProjectId());   // its project's, unless you pick
+  startsFollowProject(starts, project);
   const showStarts = () => { starts.el.hidden = !agentOf(command.value.trim() || DEFAULT_COMMAND) || !!serverValue(); };
   let picked = null;   // the saved conversation chosen in "Resume existing conversation"
 
@@ -3494,14 +3824,30 @@ function showAddDialog(mode = 'new', from = null) {
  */
 function quickAddMenu(s, anchor) {
   const r = anchor.getBoundingClientRect();
+  showMenu(r.left, r.bottom + 2, newSessionItems(s));
+}
+
+/** What quickAddMenu offers: a header naming the project, then where the new session goes. */
+function newSessionItems(s) {
   const p = projectOf(s);
-  showMenu(r.left, r.bottom + 2, [
+  return [
     { header: p ? `New session in ${p.name}` : 'New session with no project' },
-    { label: 'In the same folder', action: () => quickSession(s) },
+    { label: 'In the same folder…', action: () => quickSession(s) },
     s.git?.isRepo && { label: 'In a new worktree…', action: () => showWorktreeDialog(s) },   // worktrees need a Git repository
     '-',
     { label: 'A different folder…', action: () => showAddDialog('new', { directory: s.directory, project: s.project ?? null, server: s.server ?? null }) },
-  ]);
+  ];
+}
+
+/**
+ * New session items for a project's right-click menu: as its + offers, like its current session (else its first, shown
+ * or not); a project with no sessions has no + and nothing to be like, so it opens New session with the project picked.
+ */
+function projectNewSessionItems(projectId) {
+  const members = state.sessions.filter((s) => groupOf(s) === projectId);
+  const like = members.find((s) => s.id === state.currentId) || members[0];
+  if (like) return newSessionItems(like);
+  return [{ label: 'New session…', action: () => showAddDialog('new', { project: projectId === UNKNOWN ? null : projectId }) }];
 }
 
 /** The session's command without anything that picks a conversation: a new session gets one of its own. */
@@ -3527,10 +3873,22 @@ async function addAndOpen(item) {
   if (added) expand(added.id);
 }
 
-/** One click: another session in the same folder and project, with a conversation of its own. */
+/**
+ * Another session in the same folder and project, with a conversation of its own: it only asks for a name, offering
+ * the next free one ("checkout-api 2"), selected so typing replaces it and Enter takes it.
+ */
 function quickSession(s) {
-  addAndOpen({ directory: s.directory, name: freeName(s.name), command: ownOptionsOnly(s.command), project: s.project ?? '', server: s.server ?? undefined })
-    .catch((e) => toast(e.message, true));
+  const suggested = freeName(s.name);
+  const name = h('input', { value: suggested, spellcheck: 'false' });
+  const add = () => {
+    closeModal();
+    addAndOpen({ directory: s.directory, name: name.value.trim() || suggested, command: ownOptionsOnly(s.command), project: s.project ?? '', server: s.server ?? undefined })
+      .catch((e) => toast(e.message, true));
+  };
+  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+  openModal('New session', [field('Name', name, `In ${s.directory}`)],
+    [h('button', { class: 'btn', onclick: closeModal }, 'Cancel'), h('button', { class: 'btn primary', onclick: add }, 'Add')]);
+  setTimeout(() => name.select(), 30);   // after openModal's focus
 }
 
 /**
@@ -3811,17 +4169,31 @@ function loadDock() {
       // Each tab once, and only tabs the app knows how to show.
       tabs: g.tabs.filter((t) => typeof t === 'string' && (t in GIT_TABS || isPanelTab(t) || isPluginDockTab(t)) && !seen.has(t) && seen.add(t)),
       active: typeof g.active === 'string' ? g.active : null,
+      bySession: Object.fromEntries(Object.entries(g.bySession && typeof g.bySession === 'object' ? g.bySession : {})
+        .filter(([, t]) => typeof t === 'string')),
       size: Number(g.size) > 0 ? Number(g.size) : 1,
       folded: g.folded === true,
     }))
     .filter((g) => g.tabs.length);
-  if (!groups.length) groups.push({ tabs: [], active: 'changes', size: 1 });
+  if (!groups.length) groups.push({ tabs: [], active: 'changes', bySession: {}, size: 1 });
   for (const t of Object.keys(GIT_TABS)) if (!seen.has(t)) groups[0].tabs.push(t);
   return groups;
 }
 
 function saveDock() {
-  store.set('dock', { groups: dock.groups.map((g) => ({ tabs: g.tabs, active: g.active, size: g.size, folded: !!g.folded })) });
+  // A removed session's choices go (once the sessions are known).
+  const known = (id) => !state.byId?.size || state.byId.has(id);
+  for (const g of dock.groups) for (const id of Object.keys(g.bySession ?? {})) if (!known(id)) delete g.bySession[id];
+  store.set('dock', { groups: dock.groups.map((g) => ({ tabs: g.tabs, active: g.active, bySession: g.bySession ?? {}, size: g.size, folded: !!g.folded })) });
+}
+
+/**
+ * Opens tab t in group g for a session (the selected one unless said): each session keeps the tab it had open, since
+ * a panel shows with its own session only, and the last choice anywhere is what a session with none of its own opens.
+ */
+function chooseTab(g, t, sessionId = state.currentId) {
+  g.active = t;
+  if (sessionId) (g.bySession ??= {})[sessionId] = t;
 }
 
 const groupOfTab = (t) => dock.groups.find((g) => g.tabs.includes(t));
@@ -3850,10 +4222,15 @@ const groupTabs = (g) => g.tabs.filter((t) => isPluginDockTab(t) ? !!pluginById(
   : gitTabOn(t));
 
 /**
- * The tab a group has open: its chosen one, or its first while the chosen one isn't shown for this session. The choice
- * itself is kept, so a panel tab opens again when its session (or the panel list, at start) comes back.
+ * The tab a group has open: the one the selected session last had open there, else the latest chosen in any session,
+ * else its first. A choice is kept while its tab isn't shown, so a panel tab opens again when its session (or the panel
+ * list, at start) comes back.
  */
-const shownActive = (g) => { const tabs = groupTabs(g); return tabs.includes(g.active) ? g.active : tabs[0] ?? null; };
+const shownActive = (g) => {
+  const tabs = groupTabs(g);
+  const mine = g.bySession?.[state.currentId];
+  return tabs.includes(mine) ? mine : tabs.includes(g.active) ? g.active : tabs[0] ?? null;
+};
 
 /** Whether a tab is on screen now: open in its group (not folded), with the side panel showing. */
 const isTabShown = (t) => state.gitVisible && dock.groups.some((g) => !g.folded && shownActive(g) === t);
@@ -3970,7 +4347,7 @@ function renderDockTabs(g, tabs, open) {
 }
 
 function activateTab(g, t) {
-  g.active = t;
+  chooseTab(g, t);
   g.folded = false;   // opening a tab in a folded group unfolds it
   saveDock();
   const s = currentSession();
@@ -4000,12 +4377,12 @@ function moveTab(tab, to) {
     from.tabs.splice(from.tabs.indexOf(tab), 1);
     const at = to.before ? to.group.tabs.indexOf(to.before) : -1;
     to.group.tabs.splice(at < 0 ? to.group.tabs.length : at, 0, tab);
-    to.group.active = tab;
+    chooseTab(to.group, tab);
   } else {
     if (to.group === from && from.tabs.length === 1) return;   // splitting a group off itself changes nothing
     from.tabs.splice(from.tabs.indexOf(tab), 1);
     to.group.size /= 2;
-    const fresh = { tabs: [tab], active: tab, size: to.group.size };
+    const fresh = { tabs: [tab], active: tab, bySession: state.currentId ? { [state.currentId]: tab } : {}, size: to.group.size };
     const i = dock.groups.indexOf(to.group);
     dock.groups.splice(to.kind === 'above' ? i : i + 1, 0, fresh);
   }
@@ -4036,7 +4413,7 @@ function reopenItems() {
 function resetDock() {
   const tabs = ['changes', 'repo', ...dock.groups.flatMap((g) => g.tabs).filter((t) => isPanelTab(t) || isPluginDockTab(t))];
   for (const g of dock.groups) { g.el?.remove(); g.divider?.remove(); }
-  dock.groups = [{ tabs, active: 'changes', size: 1 }];
+  dock.groups = [{ tabs, active: 'changes', bySession: {}, size: 1 }];
   saveDock();
   renderGit();
 }
@@ -5115,7 +5492,7 @@ function onPanels(m) {
   if (c?.created && c.owner === state.currentId) {
     placePanels();   // its tab goes to the bottom group, and opens there
     const g = groupOfTab(panelTab(c));
-    if (g) { g.active = panelTab(c); saveDock(); }
+    if (g) { chooseTab(g, panelTab(c), c.owner); saveDock(); }
     if (!state.gitVisible) { state.gitVisible = true; store.set('gitVisible', true); applyGitVisibility(); }
   }
   renderGit();
@@ -8126,8 +8503,34 @@ async function loadPlugins() {
     Object.assign(plugins, { list: r.plugins, problems: r.problems, folder: r.folder, loaded: true });
     renderPluginButtons();
     seatPanelPlugins();
+    pluginsReplacing.clear();
+    runBackgroundPlugins();
   }
   catch (e) { console.error('The plugins could not be read', e); }
+}
+
+/**
+ * A plugin whose plugin.json says "background": true runs from when the app has read the plugins, out of sight, so it
+ * can answer messages sessions send it while its tab isn't open. Opening it moves its page into its tab (where it loads
+ * afresh); closing the tab puts it back here.
+ */
+// Plugins being updated or removed (closePluginEverywhere): they don't start again here until the plugins are read again.
+const pluginsReplacing = new Set();
+
+function runBackgroundPlugins() {
+  let holder = $('#pluginBackground');
+  if (!holder) {
+    holder = h('div', { id: 'pluginBackground', hidden: true, 'aria-hidden': 'true' });
+    document.body.append(holder);
+  }
+  // One that's gone, or no longer asks to run in the background, stops.
+  for (const [id, f] of [...pluginFrames]) if (f.frame.parentNode === holder && !pluginById(id)?.background) closePluginFrame(id);
+  for (const p of plugins.list) {
+    if (!p.background || pluginFrames.has(p.id) || pluginsReplacing.has(p.id)) continue;
+    const f = pluginFrame(p);
+    f.ready = false;
+    holder.append(f.frame);
+  }
 }
 
 // A side panel plugin takes a tab in the side panel on its own, so it's there without being opened first; one you
@@ -8311,6 +8714,7 @@ function closePluginFrame(id) {
   pluginFrames.get(id)?.frame.remove();
   pluginFrames.delete(id);
   pluginPlaces.delete(id);
+  if (pluginById(id)?.background && !pluginsReplacing.has(id)) setTimeout(runBackgroundPlugins);   // a background plugin carries on out of sight
 }
 
 /**
@@ -8769,6 +9173,7 @@ async function galleryDo(by, id, work) {
 
 /** A plugin's page closes before its folder is replaced or removed (its files can't be swapped under it); says whether it had a tab open. */
 function closePluginEverywhere(id) {
+  pluginsReplacing.add(id);   // updated or removed: it starts again, if at all, once the plugins are read again
   const hadTab = docs.tabs.some((t) => t.key === pluginKey(id));
   if (hadTab) closeDoc(pluginKey(id));
   if (groupOfTab('plugin:' + id)) closeDockPlugin('plugin:' + id, false);
@@ -9691,9 +10096,15 @@ const pluginSessionInfo = (s) => ({
  *   ask { question, ids, history } → { answer, writer, sessions }: Claude run headless with no tools (or Codex read-only
  *                          when Claude isn't installed; writer names it) answers the question from the conversations of the sessions named; history is earlier
  *                          [{ question, answer }] of the same chat, so a follow-up makes sense
+ * Any plugin, with no access asked for:
+ *   getData → what it last saved with setData, or null
+ *   setData { data } → keeps data (any JSON, up to 5 MB) for it alone, in place of what it kept; null removes it
  * Nothing lets a plugin type into a session: what it has to say reaches an agent as a message from it ("message").
  */
 async function pluginRequest(p, m) {
+  // Its own data (PluginData.cs): kept for it alone, so asking for it needs no access you allow.
+  if (m.name === 'getData') return (await request('plugins.data.get', { id: p.id })).data ?? null;
+  if (m.name === 'setData') { await request('plugins.data.set', { id: p.id, data: m.data ?? null }); return true; }
   // A session hidden from the plugin is, to it, a session that doesn't exist.
   const sees = (id) => state.byId.has(id) && pluginSeesSession(p.id, id);
   const sessionArg = () => {

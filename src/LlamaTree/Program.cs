@@ -11,6 +11,8 @@ static class Program
     [STAThread]
     static int Main(string[] args)
     {
+        // An agent's stdio MCP server, relaying to the panel server named in its session's environment (see PanelBridge).
+        if (args is [Panels.PanelBridge.Argument, ..]) return Panels.PanelBridge.Run();
         // The session host: the sessions themselves, without a window (started by the window; see SessionHost).
         // --data: a separate profile's, from a starter that can't pass LLAMATREE_DATA (see WindowsHostStart).
         if (args is ["--host", "--data", { Length: > 0 } data, ..]) Environment.SetEnvironmentVariable("LLAMATREE_DATA", data);
