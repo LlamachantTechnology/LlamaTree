@@ -1,6 +1,6 @@
 # Getting started
 
-LlamaTree is a desktop app that runs your AI coding agents side by side, shows which one needs you, and gives each one a Git panel. This page gets you from nothing to three sessions in a few minutes.
+LlamaTree is a desktop app that runs your AI agents side by side, shows which one needs you, and gives each one a Git panel. This page gets you from nothing to three sessions in a few minutes.
 
 ## What you need
 

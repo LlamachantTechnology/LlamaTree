@@ -7,7 +7,7 @@
 
 **[llamatree.dev](https://llamatree.dev)** · *Formerly Claude Terminals.*
 
-One window for all your AI coding agents, on this computer and on your servers, with a Visual Studio–style Git Changes / Git Repository view and diff viewer for each session's worktree.
+One window for all your AI agents, on this computer and on your servers, with a Visual Studio–style Git Changes / Git Repository view and diff viewer for each session's worktree.
 
 Works with Claude Code, Codex, Antigravity and Grok: see [AI agents](docs/agents.md) for what each gets.
 
