@@ -4,13 +4,15 @@
 #   .\tools\screenshots\run.ps1 -KeepDemo       # leave the demo repos for poking around
 #   .\tools\screenshots\run.ps1 -SiteDir <dir>  # also the llamatree.dev home page's shots, as PNGs in <dir>
 #   .\tools\screenshots\run.ps1 -WebDir <dir>   # a worktree: build with another checkout's web folder (its node_modules)
+#   .\tools\screenshots\run.ps1 -Version 1.4.0  # the version the app shows, for shots of a release not yet bumped
 param(
     # One level below the drive root: some tools refuse to delete a folder directly under it.
     [string]$DemoRoot = (Join-Path ([IO.Path]::GetPathRoot($PSScriptRoot)) 'Demos\acme'),
     [int]$Port = 9333,
     [switch]$KeepDemo,
     [string]$SiteDir,
-    [string]$WebDir
+    [string]$WebDir,
+    [string]$Version
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,6 +21,7 @@ $exe = Join-Path $repo 'src\LlamaTree\bin\Debug\net10.0-windows\LlamaTree.exe'
 
 $webArg = @()
 if ($WebDir) { $webArg += "-p:WebDir=$WebDir" }
+if ($Version) { $webArg += "-p:Version=$Version" }
 dotnet build (Join-Path $repo 'src\LlamaTree') -v q -nologo @webArg | Out-Null
 if ($LASTEXITCODE) { throw 'Build failed' }
 
