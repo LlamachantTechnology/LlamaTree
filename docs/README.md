@@ -14,7 +14,7 @@ Everything about using LlamaTree, one page per topic. The same pages are on [lla
 - [Panels and messages](panels.md): panels agents show beside the terminal, and messages between sessions.
 - [Helper sessions](helpers.md): agents starting, driving and closing sessions of their own.
 - [Sessions on a server](servers.md): run sessions on another machine over SSH, beside your local ones.
-- [Claude Code, Codex, Antigravity and Grok](claude-and-codex.md): what each agent gets, and other commands.
+- [AI agents](agents.md): the agents LlamaTree works with, what each gets, and other commands.
 - [Themes and plugins](customize.md): themes, accent colours, and plugins with the plugin reference.
 
 ## Reference

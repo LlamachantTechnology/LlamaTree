@@ -45,7 +45,7 @@ A new Claude session's command is just `claude` (plus any options you add). Llam
 - Commands with their own `--resume`, `--session-id` or `--fork-session` are left alone.
 - **Older sessions:** a session made with `claude --continue` (the previous default) starts on the folder's latest conversation once, then keeps that one. A plain `claude` session saved before 1.1.0 never told the app which conversation it was in, so it gets a new one of its own, and the app says once which sessions those are; *Resume a different conversation…* takes one back to an earlier conversation.
 
-Codex, Antigravity and Grok sessions work the same way, with a few differences: see [Codex](claude-and-codex.md#codex), [Antigravity](claude-and-codex.md#antigravity) and [Grok](claude-and-codex.md#grok).
+Codex, Antigravity and Grok sessions work the same way, with a few differences: see [Codex](agents.md#codex), [Antigravity](agents.md#antigravity) and [Grok](agents.md#grok).
 
 ### Resuming a conversation
 
@@ -76,9 +76,9 @@ Tick *Don't ask again* to always do one or the other; the version menu (top righ
 
 ### Restarting
 
-After a restart, the sessions come back, each in its own conversation. A Claude or Codex session brought back after a restart waits until you first click on its terminal (its tile says *Starts when you click it*; pressing Enter in it works too). Its start-up context, such as hooks, the date and Git status, is then fresh when you use the session, and a session you don't click on costs nothing. A message from another session starts it too, so the sender isn't left waiting. New sessions, and sessions running other commands (a dev server, say), start straight away.
+After a restart, the sessions come back, each in its own conversation. An agent session brought back after a restart waits until you first click on its terminal (its tile says *Starts when you click it*; pressing Enter in it works too). Its start-up context, such as hooks, the date and Git status, is then fresh when you use the session, and a session you don't click on costs nothing. A message from another session starts it too, so the sender isn't left waiting. New sessions, and sessions running other commands (a dev server, say), start straight away.
 
-To have Claude or Codex sessions start as soon as LlamaTree opens instead, choose when they start:
+To have agent sessions start as soon as LlamaTree opens instead, choose when they start:
 
 - **When you first click on its terminal**: the default, as above.
 - **When LlamaTree opens, if its terminal was running when LlamaTree last closed**: brings back the sessions you were using, whether you stopped them by closing LlamaTree, signing out or restarting the computer. A session you stopped yourself, or whose Claude you quit (`/exit`), waits to be clicked on as usual.

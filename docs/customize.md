@@ -278,7 +278,7 @@ A session in a project you ticked is seen as it comes and goes; a new project is
 
 ### Messaging your sessions
 
-A plugin with `"access": ["message"]` can message Claude and Codex sessions through the same relay sessions use (see [Messages between sessions](panels.md#messages-between-sessions)). You're asked first, and choose the projects whose sessions it may message, as for seeing them; the two share the same projects and the sessions you hid.
+A plugin with `"access": ["message"]` can message agent sessions through the same relay sessions use (see [Messages between sessions](panels.md#messages-between-sessions)). You're asked first, and choose the projects whose sessions it may message, as for seeing them; the two share the same projects and the sessions you hid.
 
 Its messages reach an agent as from the plugin ("Messenger (plugin)"), never from you, and the agent is told it has one as for any message. With `"inbox": true` sessions may message it first too; otherwise they can only answer it. Plugins never message each other, and every message is in Permissions › **Messages**.
 
@@ -310,10 +310,10 @@ The palette menu's **Permissions** opens a tab showing what every plugin and ses
 - A plugin allowed to see your sessions sees those in the projects you chose (**Change projects** changes them) except any you've hidden from it, which are listed under its access with **Show all**.
 - Answers about a plugin you've since removed are listed too, with **Forget**.
 
-**By session** starts with **All sessions**: the global rules for every Claude and Codex session messaging a session in the same project, and any other session (**Allowed**, **Ask first** or **Not allowed**). Then each session, with:
+**By session** starts with **All sessions**: the global rules for every agent session messaging a session in the same project, and any other session (**Allowed**, **Ask first** or **Not allowed**). Then each session, with:
 
 - the plugins that ask to see sessions, each marked whether it sees this one. Click one to hide the session from it, or show it again; a plugin can't tell a hidden session from one that doesn't exist, and hiding one reloads its page.
-- for Claude and Codex sessions, **Messages it may send**: its own rules for any other session, for sessions in its project, and for each other session. Each of a session's own is **Default** unless you set it, leaving it to the next rule, and says what that comes to.
+- for agent sessions, **Messages it may send**: its own rules for any other session, for sessions in its project, and for each other session. Each of a session's own is **Default** unless you set it, leaving it to the next rule, and says what that comes to.
 
 The most specific rule decides: one for that very session, then the session's rule for its project, then for anyone, then the global rule for the same project, then for anyone; with none, you're asked. Messages waiting for your answer are marked there, and clicking the mark asks you again. **Pause messages** on the toolbar stops every session messaging another until you resume. **Messages** lists the messages themselves (see [Messages between sessions](panels.md#seeing-and-changing-it)).
 
