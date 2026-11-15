@@ -24,4 +24,13 @@ internal sealed class ClaudeConversationStore() : ConversationStore(new NamedByP
 
     public override bool MovesWithFolder => true;
     public override void MoveFolder(string from, string to) => FolderMove.MoveClaudeConversations(from, to);
+
+    /// <summary>From the transcript's usage and compactions (see <see cref="ActivityReader.Context"/>).</summary>
+    public override ContextUsage? Context(TerminalSession session)
+    {
+        if (session.Info.Conversation is not { } id || ConversationReader.FindTranscript(id, session.Info.Directory) is not { } path) return null;
+        var usage = ActivityReader.Context(path);
+        if (usage.Tokens == 0 && usage.Compactions == 0) return null;
+        return usage with { LimitIs = usage.Learned ? "where Claude last compacted on its own" : "the model's window" };
+    }
 }

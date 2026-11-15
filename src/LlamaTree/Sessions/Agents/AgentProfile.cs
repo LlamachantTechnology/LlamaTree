@@ -64,6 +64,12 @@ internal abstract class AgentProfile
     /// <summary>Its saved conversations, or null when the app doesn't follow them (its sessions just run as typed).</summary>
     public virtual IConversationStore? Conversations => null;
 
+    /// <summary>
+    /// The command typed at its prompt that replaces the conversation with a summary ("/compact"), which the context
+    /// meter offers; null for an agent with no meter.
+    /// </summary>
+    public virtual string? CompactCommand => null;
+
     /// <summary>Anything only this agent adds to an interactive start (Claude's theme --settings), after the first prompt.</summary>
     public virtual IEnumerable<string> ExtraArguments(Launch launch, ParsedCommand parsed) => [];
 
@@ -141,7 +147,7 @@ internal abstract class AgentProfile
     {
         id = Id, name = Name, programs = Programs, color = Color, choosesId = ChoosesConversationId, follows = Follows,
         ownConversation = Command.OwnConversationPattern, @continue = Command.ContinuePattern, showsConversation = ShowsConversation, asks = Asks,
-        suggests = HeadlessCommand != null,
+        suggests = HeadlessCommand != null, compact = Conversations != null ? CompactCommand : null,
     };
 
     /// <summary>The start's questions answered from the agent's store (or, without one, as for a conversation never saved).</summary>

@@ -155,6 +155,9 @@ public class AgentCommandTests
     [InlineData("grok", "  1/5:select  │  Tab:next option  │  ←/→:scope  │  e:edit pattern  │  Ctrl+o:always-approve", true)]
     [InlineData("grok", "  Tab/Space:permission  │  Ctrl+e:expand thinking  │  Ctrl+c:cancel  │  Ctrl+b:send to bg", true)]   // scrolled back, still asking
     [InlineData("grok", "  Shift+Tab:mode  │  Ctrl+x:shortcuts", false)]
+    [InlineData("codex", "› 1. Update now (runs `npm install -g @openai/codex`)", true)]   // Enter here installs it
+    [InlineData("codex", "› 1. Trust and continue", true)]
+    [InlineData("codex", "› Ask Codex to do anything", false)]
     [InlineData("grok", "  │  3 (•) Yes, proceed", false)]
     public void Its_screen_shows_when_it_is_asking(string id, string line, bool asking)
     {

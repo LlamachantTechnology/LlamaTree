@@ -45,4 +45,6 @@ internal sealed class GrokAgent : AgentProfile
         _ => "--allow mcp__" + LlamaTree.Panels.PanelMcp.ServerName);
 
     public override IConversationStore Conversations { get; } = new GrokConversationStore();
+
+    public override string CompactCommand => "/compact";
 }

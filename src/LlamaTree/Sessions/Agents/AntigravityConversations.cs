@@ -81,6 +81,41 @@ internal static partial class AntigravityConversations
         new(id, cwd, null, Title(id) ?? Truncate(prompts.First, 120) ?? "(untitled)", Truncate(prompts.First, 300), null,
             file.LastWriteTime, file.Length, prompts.Started?.ToLocalTime(), Agents.Antigravity.Id);
 
+    /// <summary>
+    /// How full the conversation is, from its transcript: each PLANNER_RESPONSE step says what the model was sent
+    /// (input_tokens, plus cache_read_tokens read from its cache) and wrote (output_tokens), and a CHECKPOINT step is
+    /// a compaction. agy doesn't write the model's window, so it's the window of the model the step names.
+    /// </summary>
+    public static ContextUsage? Context(string id)
+    {
+        if (TranscriptFile(id) is not { } file) return null;
+        var t = ContextTally.Read(file.FullName, ContextLine);
+        if (t.Tokens == 0 && t.Compactions == 0) return null;
+        return new ContextUsage(t.Tokens, WindowOf(t.Model), false, t.Compactions, t.CompactedAt, t.Model) { LimitIs = "the model's window" };
+    }
+
+    private static void ContextLine(JsonElement e, ContextTally t)
+    {
+        switch (Str(e, "type"))
+        {
+            case "CHECKPOINT":
+                t.Compacted(ConversationReader.Time(e, "created_at"));
+                break;
+            case "PLANNER_RESPONSE" when ContextTally.Int(e, "input_tokens") + ContextTally.Int(e, "cache_read_tokens") is > 0 and var sent:
+                t.Tokens = sent + ContextTally.Int(e, "output_tokens");
+                if (Str(e, "model") is { Length: > 0 } model) t.Model = model;
+                break;
+        }
+    }
+
+    /// <summary>The context window of the models agy offers (agy models, 1.5.9): Gemini's 1M, Claude's 200k, GPT-OSS's 128k.</summary>
+    internal static int WindowOf(string? model) => model?.ToLowerInvariant() switch
+    {
+        { } m when m.StartsWith("gemini", StringComparison.Ordinal) => 1_048_576,
+        { } m when m.StartsWith("gpt-oss", StringComparison.Ordinal) => 131_072,
+        _ => 200_000,
+    };
+
     /// <summary>The full transcript, or the shorter one agy also writes.</summary>
     private static FileInfo? TranscriptFile(string id)
     {
@@ -245,6 +280,9 @@ internal sealed class AntigravityConversationStore() : ConversationStore(new Lat
     public override ConversationInfo? Find(string id, string directory) => AntigravityConversations.Find(id);
     public override bool IsSaved(string id, string directory) => AntigravityConversations.IsSaved(id);
     protected override Conversation? Read(string id, string directory) => AntigravityConversations.Read(id);
+
+    public override ContextUsage? Context(TerminalSession session) =>
+        session.Info.Conversation is { } id ? AntigravityConversations.Context(id) : null;
 }
 
 /// <summary>

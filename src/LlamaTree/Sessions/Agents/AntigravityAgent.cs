@@ -45,6 +45,8 @@ internal sealed class AntigravityAgent : AgentProfile
 
     public override IConversationStore Conversations { get; } = new AntigravityConversationStore();
 
+    public override string CompactCommand => "/compact";
+
     /// <summary>The permission rule that allows every tool of the panel server.</summary>
     internal const string PanelToolsRule = "mcp(" + LlamaTree.Panels.PanelMcp.ServerName + "/*)";
 

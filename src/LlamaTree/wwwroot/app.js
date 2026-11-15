@@ -2251,6 +2251,7 @@ function renderTileHeader(s) {
     relayTileMark(s),
     startedByMark(s),
     h('span', { class: 'tile-title', title: s.title }, s.title),
+    contextChip(s),
     gs && h(gitTabOn('changes') ? 'button' : 'span', {
       class: 'chip', title: `${gs.count} changed file(s) on ${gs.branch}${gitTabOn('changes') ? ' — show in Git Changes' : ''}`,
       onclick: gitTabOn('changes') && (() => showGit(s.id)),
@@ -2268,9 +2269,94 @@ function renderTileHeader(s) {
   syncControlStatus(s);
 }
 
+// ---- the context meter
+//
+// How full a session's conversation is, on its tile: the tokens its agent holds against where it would compact on its
+// own, or the model's window (see ContextUsage in ActivityReader.cs, and each agent's conversation store). A
+// conversation answers worse long before it is full, so the meter turns amber, then red, well ahead of that. A click
+// offers the agent's own compact command (agent.compact), typed as you could type it; any agent whose profile names one
+// has a meter.
+
+const CONTEXT_POLL_MS = 10_000;
+const CONTEXT_WARM = 50, CONTEXT_HOT = 80;   // percent of the limit
+const contextPct = (c) => Math.min(100, Math.round(c.tokens / c.limit * 100));
+const contextLevel = (c) => { const p = contextPct(c); return p >= CONTEXT_HOT ? 'hot' : p >= CONTEXT_WARM ? 'warm' : ''; };
+const kTokens = (n) => (n >= 1_000_000 ? (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(n));
+
+/** The meter's numbers in words: for its tooltip, its menu and the session's tab. */
+function contextLine(s) {
+  const c = s.ctx;
+  if (!c) return null;
+  const of = `${kTokens(c.limit)}, ${c.limitIs ?? (c.learned ? 'where it last compacted on its own' : "the model's window")}`;
+  const compacted = !c.compactions ? 'never compacted' : `compacted ${c.compactions === 1 ? 'once' : c.compactions + ' times'}${c.compactedAt ? `, last ${relTime(c.compactedAt)}` : ''}`;
+  return `Context: ${kTokens(c.tokens)} tokens of ${of} (${contextPct(c)}%) · ${compacted}`;
+}
+
+/** The meter on a session's tile: a bar and a percentage, amber then red as it fills; a click opens its menu. */
+function contextChip(s) {
+  const c = s.ctx;
+  if (!c) return null;
+  return h('button', {
+    class: 'chip ctx ' + contextLevel(c),
+    title: `${contextLine(s)}\nClick to compact it`,
+    onclick: (e) => { const r = e.currentTarget.getBoundingClientRect(); contextMenu(s, r.left, r.bottom + 2); },
+  }, h('span', { class: 'ctx-bar' }, h('span', { style: `width: ${Math.max(6, contextPct(c))}%` })), contextPct(c) + '%',
+  c.compactions ? h('span', { class: 'ctx-n' }, '↻' + c.compactions) : null);
+}
+
+/** Asks the app how full the session's conversation is, and redraws its tile's header when the answer has changed. */
+async function loadContext(s) {
+  if (!agentOf(s.command)?.compact || s.ctxLoading) return;   // only an agent that can be compacted has a meter
+  s.ctxLoading = true;
+  let c = null;
+  try { const r = await request('context', { id: s.id }); c = r?.found ? r : null; } catch { /* the session went away, or its server can't say */ } finally { s.ctxLoading = false; }
+  const key = (x) => (x ? [x.conversation, x.tokens, x.limit, x.compactions].join('|') : '');
+  const changed = key(c) !== key(s.ctx ?? null);
+  s.ctx = c;
+  if (!changed || state.byId.get(s.id) !== s || !s.header) return;
+  renderTileHeader(s);
+  const tab = $(`.session-tab[data-id="${s.id}"]`);
+  if (tab) tab.title = sessionTabTitle(s);
+  tab?.querySelector('.tab-ctx')?.remove();
+  const mark = contextMark(s);
+  if (mark) tab?.querySelector('.tab-text')?.after(mark);
+}
+
+/** In the list down the left: the percentage once the conversation is filling up (amber, then red), nothing before. */
+function contextMark(s) {
+  const level = s.ctx && contextLevel(s.ctx);
+  return level ? h('span', { class: 'tab-ctx ' + level, title: contextLine(s) }, contextPct(s.ctx) + '%') : null;
+}
+
+setInterval(() => {
+  if (document.hidden) return;
+  for (const s of state.sessions) if (s.running || s.ctx === undefined) loadContext(s);
+}, CONTEXT_POLL_MS);
+setTimeout(() => { for (const s of state.sessions) loadContext(s); }, 1500);
+
+function contextMenu(s, x, y) {
+  const agent = agentOf(s.command);
+  showMenu(x, y, [
+    { header: s.ctx ? `Context ${contextPct(s.ctx)}% · ${kTokens(s.ctx.tokens)} of ${kTokens(s.ctx.limit)} tokens` : 'Context' },
+    { label: `Compact (${agent.compact})`, action: () => compactNow(s) },
+  ]);
+}
+
+/**
+ * Types the agent's compact command into the session, as you could. Only at its prompt: not working, and not asking
+ * you something (a menu at its start counts, such as Codex offering an update, whose Enter would install it).
+ */
+function compactNow(s) {
+  const why = !s.running ? 'isn’t running' : s.asking ? 'is asking you something' : s.act.state === 'working' ? 'is working' : null;
+  if (why) { toast(`“${s.name}” ${why}. Compact it when it’s idle.`, true); return; }
+  s.term.paste(agentOf(s.command).compact);
+  enterAfterTyping(s);
+  toast(`Asked “${s.name}” to compact its conversation.`);
+}
+
 function sessionTabTitle(s) {
   const by = s.startedBy && state.byId.get(s.startedBy);
-  return [s.directory, s.git?.branch && `Branch: ${s.git.branch}`, by && `Started by “${by.name}”`, s.server && serverTitle(serverOf(s)), statusText(s), conversationLine(s), 'Click again to go back to all sessions · middle-click to close'].filter(Boolean).join('\n');
+  return [s.directory, s.git?.branch && `Branch: ${s.git.branch}`, by && `Started by “${by.name}”`, s.server && serverTitle(serverOf(s)), statusText(s), conversationLine(s), contextLine(s), 'Click again to go back to all sessions · middle-click to close'].filter(Boolean).join('\n');
 }
 
 /**
@@ -2326,6 +2412,7 @@ function sessionTab(s, i, marks = false) {
     statusDot(s),
     // Down the left, its branch beneath the name.
     marks ? h('span', { class: 'tab-text' }, h('span', { class: 'tab-name' }, s.name), tabBranch(s)) : h('span', { class: 'tab-name' }, s.name),
+    marks ? contextMark(s) : null,   // how full its conversation is, once it's filling up
     // Down the left, icons for its agent and where it runs; across the top, the server's name for a session on one.
     marks ? sessionMarks(s) : s.server &&h('span', { class: 'tab-server' + (serverDown(s) ? ' down' : ''), title: serverTitle(serverOf(s)) }, iconEl('server'), h('span', {}, serverName(serverOf(s)))),
     i < 9 ? h('span', { class: 'key' }, `Ctrl+${i + 1}`) : null),

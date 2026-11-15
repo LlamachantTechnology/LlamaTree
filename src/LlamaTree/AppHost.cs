@@ -1441,6 +1441,16 @@ internal sealed partial class AppHost
                 var c = await Task.Run(() => s.Agent?.FindConversation(id, s.Info.Directory));
                 return new { id, saved = c != null, title = c?.Title, started = c?.Started, modified = c?.Modified };
             }
+            case "context":
+            {
+                // How full the session's conversation is, for the meter on its tile: read from its agent's own files, so
+                // only a session whose agent says, with a conversation of its own, has one.
+                var s = Get(msg);
+                if (s.Agent is not { CompactCommand: not null, Conversations: { } store } || s.Info.Conversation is not { } id) return new { found = false };
+                var usage = await Task.Run(() => store.Context(s));
+                if (usage == null || usage.Limit <= 0) return new { found = false };
+                return new { found = true, conversation = id, tokens = usage.Tokens, limit = usage.Limit, learned = usage.Learned, limitIs = usage.LimitIs, compactions = usage.Compactions, compactedAt = usage.CompactedAt, model = usage.Model };
+            }
             case "openFolder":
                 OpenFolder(Get(msg).Info.Directory);
                 return null;

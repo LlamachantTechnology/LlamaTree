@@ -159,6 +159,40 @@ internal static class CodexConversations
     public static Conversation? Read(string id) =>
         Resumable(id) is { } open && FindRollout(open) is { } file ? ConversationReader.Read(open, file.FullName, CodexTranscript.Line) : null;
 
+    /// <summary>
+    /// How full the conversation <paramref name="id"/> is, from its rollout: each reply's token_count gives what it was
+    /// sent and wrote (last_token_usage) and the model's window (model_context_window); a compacted line marks a
+    /// compaction, after which the size is unknown until the next reply. Measured against the window.
+    /// </summary>
+    public static ContextUsage? Context(string id)
+    {
+        if (Resumable(id) is not { } open || FindRollout(open) is not { } file) return null;
+        var t = ContextTally.Read(file.FullName, ContextLine);
+        if (t.Window == 0 || t.Tokens == 0 && t.Compactions == 0) return null;
+        return new ContextUsage(t.Tokens, t.Window, false, t.Compactions, t.CompactedAt, t.Model) { LimitIs = "the model's window" };
+    }
+
+    private static void ContextLine(JsonElement e, ContextTally t)
+    {
+        var at = ConversationReader.Time(e, "timestamp");
+        switch (Str(e, "type"))
+        {
+            case "compacted":
+                t.Compacted(at);
+                break;
+            case "turn_context" when ConversationReader.Obj(e, "payload", out var p) && Str(p, "model") is { Length: > 0 } model:
+                t.Model = model;
+                break;
+            case "event_msg" when ConversationReader.Obj(e, "payload", out var p) && Str(p, "type") == "token_count" &&
+                                  ConversationReader.Obj(p, "info", out var info):
+                if (ContextTally.Int(info, "model_context_window") is > 0 and var window) t.Window = window;
+                // A count of nothing (as Codex writes straight after compacting) says nothing about the size.
+                if (ConversationReader.Obj(info, "last_token_usage", out var last) && ContextTally.Int(last, "input_tokens") is > 0 and var input)
+                    t.Tokens = input + ContextTally.Int(last, "output_tokens");
+                break;
+        }
+    }
+
     /// <summary>Where each conversation's rollout is: the rail asks every few seconds, and finding one searches every day's folder.</summary>
     private static readonly ConcurrentDictionary<string, string> RolloutPaths = new(StringComparer.OrdinalIgnoreCase);
 
@@ -297,4 +331,7 @@ internal sealed class CodexConversationStore() : ConversationStore(new LatestInF
 
     public override bool MovesWithFolder => true;
     public override void MoveFolder(string from, string to) => FolderMove.MoveCodexConversations(from, to);
+
+    public override ContextUsage? Context(TerminalSession session) =>
+        session.Info.Conversation is { } id ? CodexConversations.Context(id) : null;
 }

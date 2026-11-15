@@ -78,6 +78,62 @@ internal static class GrokConversations
     public static Conversation? Read(string id) =>
         FindSummary(id) is { } s && Updates(s.Folder) is { Length: > 0 } file ? ConversationReader.Read(id, file.FullName, GrokTranscript.Line) : null;
 
+    /// <summary>
+    /// How full the conversation is, from the session's signals.json (contextTokensUsed of contextWindowTokens, and
+    /// compactionCount), measured against where Grok compacts on its own: auto_compact_threshold_percent of the window
+    /// (85% unless its config.toml says otherwise).
+    /// </summary>
+    public static ContextUsage? Context(string id)
+    {
+        if (FindSummary(id) is not { } s) return null;
+        try
+        {
+            var file = Path.Combine(s.Folder, "signals.json");
+            if (!File.Exists(file)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(file));
+            var e = doc.RootElement;
+            int tokens = ContextTally.Int(e, "contextTokensUsed"), window = ContextTally.Int(e, "contextWindowTokens"), compactions = ContextTally.Int(e, "compactionCount");
+            // signals.json is written as a turn ends, and a /compact is a turn of no reply: its log says so at once.
+            var log = ContextTally.Read(Path.Combine(s.Folder, "updates.jsonl"), CompactionLine);
+            if (log.Compactions > 0 && log.CompactedAt > File.GetLastWriteTimeUtc(file)) tokens = log.Tokens;
+            compactions = Math.Max(compactions, log.Compactions);
+            if (window == 0 || tokens == 0 && compactions == 0) return null;
+            var percent = AutoCompactPercent();
+            return new ContextUsage(tokens, (int)((long)window * percent / 100), true, compactions, log.CompactedAt, Str(e, "primaryModelId"))
+            {
+                LimitIs = $"where Grok compacts on its own, at {percent}% of its {window / 1000}k window",
+            };
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A compaction in updates.jsonl: an auto_compact_completed update (for /compact too), with what it left in tokens_after.</summary>
+    private static void CompactionLine(JsonElement e, ContextTally t)
+    {
+        if (!ConversationReader.Obj(e, "params", out var p) || !ConversationReader.Obj(p, "update", out var u) || Str(u, "sessionUpdate") != "auto_compact_completed") return;
+        var at = e.TryGetProperty("timestamp", out var ts) && ts.TryGetInt64(out var seconds) && seconds is > 0 and < 253402300799
+            ? DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime : (DateTime?)null;
+        t.Compacted(at);
+        t.Tokens = ContextTally.Int(u, "tokens_after");
+    }
+
+    /// <summary>[session] auto_compact_threshold_percent in Grok's config.toml, or its default, 85.</summary>
+    private static int AutoCompactPercent()
+    {
+        try
+        {
+            var config = Path.Combine(Home, "config.toml");
+            if (File.Exists(config) && System.Text.RegularExpressions.Regex.Match(File.ReadAllText(config), @"(?m)^\s*auto_compact_threshold_percent\s*=\s*(\d{1,3})\b") is { Success: true } m &&
+                int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) is >= 10 and <= 100 and var set)
+                return set;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return 85;
+    }
+
     private static ConversationInfo ToInfo(Summary s) =>
         new(s.Id, s.Cwd, null, s.Title ?? "(untitled)", null, null, s.Updated.ToLocalTime(), Updates(s.Folder)?.Length ?? 0,
             s.Created.ToLocalTime(), Agents.Grok.Id);
@@ -167,6 +223,9 @@ internal sealed class GrokConversationStore() : ConversationStore(new FirstOf(
     public override ConversationInfo? Find(string id, string directory) => GrokConversations.Find(id);
     public override bool IsSaved(string id, string directory) => GrokConversations.IsSaved(id);
     protected override Conversation? Read(string id, string directory) => GrokConversations.Read(id);
+
+    public override ContextUsage? Context(TerminalSession session) =>
+        session.Info.Conversation is { } id ? GrokConversations.Context(id) : null;
 }
 
 /// <summary>
