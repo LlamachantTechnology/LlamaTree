@@ -830,7 +830,7 @@ function moveProject(p, delta) {
  */
 function projectDialog(title, initial, okLabel, onOk) {
   const name = h('input', { value: initial.name, placeholder: 'e.g. FiscFlow', spellcheck: 'false', maxlength: '60' });
-  // When its Claude and Codex sessions start, for those without a setting of their own (ProjectInfo.StartWithApp).
+  // When its agent sessions start, for those without a setting of their own (ProjectInfo.StartWithApp).
   const starts = h('select', {}, START_CHOICES.map(([value, label]) =>
     h('option', { value, selected: (initial.startWithApp || 'click') === value }, label)));
   const error = h('div', { class: 'form-error', hidden: true });
@@ -868,7 +868,7 @@ function projectDialog(title, initial, okLabel, onOk) {
     field('Name', name),
     field('Colour', h('div', { class: 'swatch-row' }, autoBtn, swatches, customBtn, custom, preview)),
     field('Its sessions start', comboSelect(starts),
-      'For its Claude and Codex sessions on this computer, unless a session has its own (in New session, or its ⋯ menu › Rename / edit command…). ' + STARTS_HELP),
+      'For its agent sessions on this computer, unless a session has its own (in New session, or its ⋯ menu › Rename / edit command…). ' + STARTS_HELP),
     error,
   ], [h('button', { class: 'btn', onclick: closeModal }, 'Cancel'), h('button', { class: 'btn primary', onclick: ok }, okLabel)]);
   pick(color);
@@ -2444,7 +2444,7 @@ function updateTabBranch(s) {
 const AGENT_ICONS = { claude: 'agentClaude', codex: 'agentCodex' };   // by AgentProfile.Id
 
 /**
- * Two small icons: the agent the session runs (Claude or Codex in its colour, AgentProfile.Color; a terminal for any
+ * Two small icons: the agent the session runs (in its colour, AgentProfile.Color; a terminal for any
  * other command) and where it runs (this computer, or its server, in red while that can't be reached).
  */
 function sessionMarks(s) {
@@ -2718,7 +2718,7 @@ async function pasteClipboard(s) {
 
 /**
  * An image on the clipboard (a screenshot, a copied picture) is saved as a PNG by the host and its path pasted; files
- * copied in Explorer paste as their paths. Claude Code and Codex attach an image whose path is pasted.
+ * copied in Explorer paste as their paths. Claude Code and Codex attach an image whose path is pasted; other agents get the path.
  */
 async function pasteClipboardFiles(s) {
   try {
@@ -3147,7 +3147,7 @@ function defaultProjectId() {
 }
 
 /**
- * When a Claude or Codex session on this computer starts: when its terminal is first shown ("click"), or as LlamaTree
+ * When an agent session on this computer starts: when its terminal is first shown ("click"), or as LlamaTree
  * opens ("always", or "running": if it was running as LlamaTree closed). A project has one of these for its sessions
  * (with null for "click"), and a session has its own or '' for its project's. See SessionInfo.StartWithApp.
  */
@@ -3368,7 +3368,7 @@ function renderWelcome(on) {
   if (!on) return;
   $('#empty .empty-title').textContent = 'Welcome to LlamaTree';
   $('#empty .empty-sub').textContent = !known ? ''
-    : noAgents ? 'Each session runs Claude Code or Codex in a folder of yours. Install one of them to get started.'
+    : noAgents ? 'Each session runs an AI agent in a folder of yours. Install one to get started.'
     : list ? 'Pick up where you left off: tick the conversations to carry on and open them as sessions, or start a new one.'
     : 'Start your first session: pick a folder to work in, and it opens there.';
 }
@@ -3420,6 +3420,16 @@ const AGENT_INSTALLS = [
     windows: 'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"',
     unix: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
   },
+  {
+    name: 'Antigravity', guide: 'https://antigravity.google/cli',
+    windows: 'irm https://antigravity.google/cli/install.ps1 | iex',
+    unix: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
+  },
+  {
+    name: 'Grok', guide: 'https://github.com/xai-org/grok-build',
+    windows: 'irm https://x.ai/cli/install.ps1 | iex',
+    unix: 'curl -fsSL https://x.ai/cli/install.sh | bash',
+  },
 ];
 
 function buildWelcomeAgents() {
@@ -3430,8 +3440,8 @@ function buildWelcomeAgents() {
     .catch((e) => toast(e.message, true));
   $('#emptyAgents').replaceChildren(
     h('div', { class: 'agents-missing' }, machine
-      ? 'Neither Claude Code nor Codex is installed on this server, so its sessions have nothing to run.'
-      : 'Neither Claude Code nor Codex is installed on this computer, so sessions have nothing to run.'),
+      ? 'No AI agent is installed on this server, so its sessions have nothing to run. Install one of these:'
+      : 'No AI agent is installed on this computer, so sessions have nothing to run. Install one of these:'),
     ...AGENT_INSTALLS.map((a) => h('div', { class: 'agent-install' },
       h('div', { class: 'agent-install-head' }, h('b', {}, a.name),
         h('a', { href: '#', onclick: (e) => { e.preventDefault(); request('openUrl', { uri: a.guide }).catch((err) => toast(err.message, true)); } }, 'Install guide')),
@@ -3633,7 +3643,7 @@ function showAddDialog(mode = 'new', from = null) {
   const project = projectField(from ? from.project : defaultProjectId());
   const firstPrompt = from?.prompt != null && h('textarea', { class: 'first-prompt', spellcheck: 'false' }, from.prompt);
   const commandNote = h('span');
-  // Only a Claude or Codex session on this computer can start with LlamaTree (a server's runs with its own).
+  // Only an agent session on this computer can start with LlamaTree (a server's runs with its own).
   const starts = startsField(null, from ? from.project : defaultProjectId());   // its project's, unless you pick
   startsFollowProject(starts, project);
   const showStarts = () => { starts.el.hidden = !agentOf(command.value.trim() || DEFAULT_COMMAND) || !!serverValue(); };
@@ -8828,12 +8838,12 @@ const PLUGIN_ACCESS = {
   },
   message: {
     verb: 'message your sessions', title: 'Message your sessions',
-    about: 'Send messages to the Claude and Codex sessions in the projects you choose, and read their answers' +
+    about: 'Send messages to the agent sessions in the projects you choose, and read their answers' +
       ' (and, if it takes messages, ones they send it first). Its messages reach an agent as from a plugin, not from you.',
     dialog: (p) => [
       h('p', {}, `${p.title} is a plugin, from ${plugins.folder}\\${p.id}. It asks to message your sessions:`),
       h('ul', {},
-        h('li', {}, 'it can send a message to the Claude or Codex session in a project you choose here, which that agent reads as a message from a plugin, not as your prompt, and may act on;'),
+        h('li', {}, 'it can send a message to an agent session in a project you choose here, which that agent reads as a message from a plugin, not as your prompt, and may act on;'),
         h('li', {}, 'it reads the answers they send back' + (p.inbox ? ', and messages they send it first (it takes messages);' : ';')),
         h('li', {}, 'every message is in Permissions › Messages.')),
       h('p', {}, 'A message can ask an agent to do things, so allow only a plugin you trust. You can change your answer any time in Permissions, on the palette menu.'),

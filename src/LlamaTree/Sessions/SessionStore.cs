@@ -39,7 +39,7 @@ internal sealed class SessionInfo
     /// </summary>
     public string? Within { get; set; }
     /// <summary>
-    /// When a Claude or Codex session starts: "always" as soon as LlamaTree opens, "running" as LlamaTree opens if it was
+    /// When an agent session starts: "always" as soon as LlamaTree opens, "running" as LlamaTree opens if it was
     /// running as LlamaTree last closed (<see cref="WasRunning"/>), "click" when it's first opened, or null for whatever
     /// its project says (<see cref="ProjectInfo.StartWithApp"/>; with no project, when it's first opened). Sessions saved
     /// before projects had the setting have null or their own choice, and projects start with none, so none change.
@@ -73,7 +73,7 @@ internal sealed partial class ProjectInfo
     /// <summary>A chosen colour as #rrggbb, or null for the automatic one (derived from the id).</summary>
     public string? Color { get; set; }
     /// <summary>
-    /// When its Claude and Codex sessions start, for those without a setting of their own (see
+    /// When its agent sessions start, for those without a setting of their own (see
     /// <see cref="SessionInfo.StartWithApp"/>): "always", "running", or null for when each is first opened.
     /// </summary>
     public string? StartWithApp { get; set; }
