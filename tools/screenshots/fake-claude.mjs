@@ -243,13 +243,26 @@ function tail() {
   return [spinnerLine(), '', ...promptBox()];
 }
 
-// From where drawAll saved the cursor (ESC 7 / ESC 8), so it lands right below the lines even where a narrow terminal wraps them.
+// The rows a line takes in the terminal, wrapped at its width.
+const rowsOf = (line) => Math.max(1, Math.ceil(visible(line).length / (process.stdout.columns || 200)));
+
+// The lines that fit above the tail, from the end. Nothing may scroll: the console pushes what a clear erases into the
+// scrollback, where it would stay as copies of the spinner. Room is kept for the tallest tail (the question it asks).
+function fitting() {
+  const tallest = Math.max(...[[spinnerLine(), '', ...promptBox()], promptBox(), s.then ?? []].map((t) => t.reduce((n, l) => n + rowsOf(l), 0)));
+  const room = (process.stdout.rows || 50) - 1 - tallest;
+  const kept = [];
+  for (let i = s.lines.length - 1, used = 0; i >= 0 && (used += rowsOf(s.lines[i])) <= room; i--) kept.unshift(s.lines[i]);
+  return kept;
+}
+
+// From where drawAll saved the cursor (ESC 7 / ESC 8), right below the lines however they wrap.
 const drawTail = () => out(`\x1b8${ESC}J` + tail().join('\r\n'));
 
 // Full redraw: on start and whenever the terminal is resized (widths depend on the column count).
 function drawAll() {
   out('\x1b[?25l' + `${ESC}2J${ESC}3J${ESC}H` + `\x1b]0;✳ ${s.title}\x07`);
-  out(s.lines.join('\r\n') + '\r\n\x1b7');
+  out(fitting().join('\r\n') + '\r\n\x1b7');
   drawTail();
 }
 
@@ -257,9 +270,6 @@ drawAll();
 // Once the resizing stops: a redraw for each step of a resize would look like a burst of work to the app.
 let resized;
 process.stdout.on('resize', () => { clearTimeout(resized); resized = setTimeout(drawAll, 300); });
-// The resize event comes late, and a screen drawn at the old width leaves lines behind once the terminal reflows it:
-// draw it all again now and then while it works, so a tile never keeps them (and quiet stays quiet).
-setInterval(() => { if (phase === 'working') drawAll(); }, 1000);
 
 if (phase === 'working') {
   const timer = setInterval(drawTail, 120);
@@ -267,7 +277,7 @@ if (phase === 'working') {
     setTimeout(() => {
       clearInterval(timer);
       phase = 'waiting';
-      drawTail();
+      drawAll();
     }, s.workSeconds * 1000);
   }
 }

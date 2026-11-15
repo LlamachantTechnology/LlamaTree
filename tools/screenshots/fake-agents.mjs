@@ -142,12 +142,22 @@ function tail() {
   return [...s.working(secs >= 60 ? `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, '0')}s` : `${secs}s`, frame++), ...s.prompt()];
 }
 
+// As in fake-claude.mjs: the lines that fit above the tallest tail, so nothing scrolls into the scrollback.
+const rowsOf = (line) => Math.max(1, Math.ceil(visible(line).length / (process.stdout.columns || 200)));
+function fitting() {
+  const tails = [s.prompt(), s.asking ?? [], ...(s.working ? [[...s.working('1m 00s', 0), ...s.prompt()]] : [])];
+  const room = (process.stdout.rows || 50) - 1 - Math.max(...tails.map((t) => t.reduce((n, l) => n + rowsOf(l), 0)));
+  const kept = [];
+  for (let i = s.lines.length - 1, used = 0; i >= 0 && (used += rowsOf(s.lines[i])) <= room; i--) kept.unshift(s.lines[i]);
+  return kept;
+}
+
 // From where drawAll saved the cursor, as in fake-claude.mjs.
 const drawTail = () => out(`\x1b8${ESC}J` + tail().join('\r\n'));
 
 function drawAll() {
   out('\x1b[?25l' + `${ESC}2J${ESC}3J${ESC}H` + `\x1b]0;${s.title}\x07`);
-  out(s.lines.join('\r\n') + '\r\n\x1b7');
+  out(fitting().join('\r\n') + '\r\n\x1b7');
   drawTail();
 }
 
@@ -155,9 +165,6 @@ drawAll();
 // Once the resizing stops: a redraw for each step of a resize would look like a burst of work to the app.
 let resized;
 process.stdout.on('resize', () => { clearTimeout(resized); resized = setTimeout(drawAll, 300); });
-// The resize event comes late, and a screen drawn at the old width leaves lines behind once the terminal reflows it:
-// draw it all again now and then while it works, so a tile never keeps them (and quiet stays quiet).
-setInterval(() => { if (phase === 'working') drawAll(); }, 1000);
 report(phase === 'working' ? 'working' : 'idle');
 
 if (phase === 'working') {
@@ -166,7 +173,7 @@ if (phase === 'working') {
     setTimeout(() => {
       clearInterval(timer);
       phase = 'waiting';
-      drawTail();
+      drawAll();
       report('blocked');
     }, s.workSeconds * 1000);
   }

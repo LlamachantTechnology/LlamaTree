@@ -186,7 +186,31 @@ if (siteDir) {
   await js(`${reset} setNavLayout('top'); setProjectTabs(true); if (state.gitVisible) toggleGit();`);
   await sleep(3000);
   await shot('layout-project-tabs', { dir: siteDir });
-  await js(`if (!state.gitVisible) toggleGit(); setProjectTabs(false); setNavLayout('left');`);
+  await js(`if (!state.gitVisible) toggleGit(); setProjectTabs(false);`);
+  // Still across the top, with projects to tick: a side-by-side diff of payments-refactor in a tab of its own.
+  await js(`${reset}
+    const s = state.byId.get('payments');
+    expand('payments');
+    openDiff(s, { mode: 'unstaged', path: 'tests/payments.test.ts', status: 'M' }, true);
+    await new Promise((r) => setTimeout(r, 1500));
+    openDiff(s, { mode: 'unstaged', path: 'src/routes/payments.ts', status: 'M' }, true);
+    await new Promise((r) => setTimeout(r, 2500));`);
+  await shot('diff', { dir: siteDir });
+  // Only Acme Shop ticked: checkout-api's server.ts diff docked left of its terminal, and Git Changes stacked over
+  // the errors panel.
+  await js(`${reset} for (const g of ['docs', 'inv', UNKNOWN]) toggleProject(g);
+    expand('checkout');
+    state.gitWidth = 470; applyGitVisibility(); layout(true);
+    openDiff(state.byId.get('checkout'), { mode: 'unstaged', path: 'src/server.ts', status: 'M' }, true);
+    await new Promise((r) => setTimeout(r, 1500));
+    splitDoc(docs.active, 'left');
+    setFolded(panelByTab('panel:checkout/errors'), 'd:ERR-1042', true);   // before the move, which draws it
+    moveTab('panel:checkout/errors', { kind: 'below', group: dock.groups[0] });
+    dock.groups[0].size = 0.48; dock.groups[1].size = 0.52;
+    activateTab(dock.groups[0], 'changes'); activateTab(dock.groups[1], 'panel:checkout/errors');
+    await new Promise((r) => setTimeout(r, 2500));`);
+  await shot('small-docking', { dir: siteDir });
+  await js(`splitDoc(docs.active, null); showAllProjects(); setNavLayout('left');`);
   // New session's list of saved conversations, each agent's, around the one picked.
   const box = await js(`${reset} showGit('checkout');
     showAddDialog('resume');

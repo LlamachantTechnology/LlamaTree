@@ -754,6 +754,12 @@ fs.writeFileSync(path.join(profile, 'panels.json'), JSON.stringify([
       ] },
     ],
   },
+  // A Markdown panel: Claude's review of the webhook branch.
+  {
+    owner: 'checkout', id: 'review', title: 'Webhook review', subtitle: 'feature/stripe-webhooks', scope: 'session',
+    badge: { text: '2', tone: 'warning' }, updated: ago(1), version: 1,
+    markdown: "## Summary\nThe webhook route is in place and wired into the server. **2 issues** to fix before merging.\n\n| Check | Result |\n| --- | --- |\n| Signature verified | Yes |\n| Duplicate events ignored | **No** |\n| Tests | 41 passed, 1 failed |\n\n## Issues\n### 1. Retries mark an order paid twice\nStripe resends an event when it gets no 2xx in time. Keep the event id and skip ones already seen:\n```ts\nif (await seenEvents.has(event.id)) return res.sendStatus(200);\nawait seenEvents.add(event.id);\n```\n### 2. Raw body is parsed too early\n`express.json()` runs before the route, so the signature check fails on real requests. Mount the route first.\n\n## Next\n- Fix both, then run `npm test` again\n- Replay a test event with the Stripe CLI",
+  },
 ], null, 2));
 
 console.log(JSON.stringify({ root, profile, claudeConfig, codexHome, grokHome, bin }));
