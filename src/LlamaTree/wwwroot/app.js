@@ -167,6 +167,9 @@ function photinoBridge() {
 const IS_MAC = /Mac/i.test(navigator.platform || navigator.userAgent);
 const IS_LINUX = !IS_MAC && /Linux/i.test(navigator.platform || navigator.userAgent);
 const FILE_MANAGER = IS_MAC ? 'Finder' : IS_LINUX ? 'Files' : 'File Explorer';
+/** The operating system by name, for text that would otherwise say Windows to a Mac or Linux user. */
+const OS_NAME = IS_MAC ? 'macOS' : IS_LINUX ? 'Linux' : 'Windows';
+const OS_SETTINGS = IS_MAC ? 'System Settings' : IS_LINUX ? 'your system settings' : 'Windows Settings';
 
 // A Mac app gets ⌘C, ⌘V, ⌘X, ⌘A and ⌘Z in text fields from its Edit menu, which a Photino window may not have, so
 // the page does them itself (the terminal has its own, see terminalKey).
@@ -3720,7 +3723,7 @@ function sessionMenu(s, x, y, from = 'session') {
     { label: 'Move to project…', action: () => showEditDialog(s, 'project') },
     { label: s.running ? 'Restart session' : 'Start session', action: () => (s.running ? confirmRestart(s) : restartSession(s)) },
     s.running && { label: 'Stop session', action: () => confirmStop(s) },
-    { label: machine || s.server ? 'Browse the folder' : `Open folder in ${IS_MAC || IS_LINUX ? FILE_MANAGER : 'Explorer'}`, action: () => request('openFolder', { id: s.id }) },
+    { label: machine || s.server ? 'Browse the folder' : `Open folder in ${FILE_MANAGER}`, action: () => request('openFolder', { id: s.id }) },
     '-',
     { label: 'Move left', action: () => moveSession(s, -1) },
     { label: 'Move right', action: () => moveSession(s, 1) },
@@ -8957,7 +8960,7 @@ function themeMenu(x, y) {
   const named = suggested.find((a) => a.color === String(c).toLowerCase());
   showMenu(x, y, [
     { header: 'Theme' },
-    { icon: themeSwatch('system'), label: 'System (follows Windows)', checked: theme.pref === 'system', action: () => setThemePref('system') },
+    { icon: themeSwatch('system'), label: `System (follows ${OS_NAME})`, checked: theme.pref === 'system', action: () => setThemePref('system') },
     { icon: themeSwatch('light'), label: 'Light', checked: theme.pref === 'light', action: () => setThemePref('light') },
     { icon: themeSwatch('dark'), label: 'Dark', checked: theme.pref === 'dark', action: () => setThemePref('dark') },
     ...themes.list.map((t) => ({ icon: themeSwatch(t), label: t.name, checked: theme.pref === t.id, kbd: t.builtIn ? '' : 'Yours', action: () => setThemePref(t.id) })),
@@ -8973,7 +8976,7 @@ function themeMenu(x, y) {
       ? { icon: h('span', { class: 'accent-dot', style: `background:${own.accent.line}` }), label: `${own.name}'s own`,
         action: () => toast(`${own.name} has an accent colour of its own. Choose another theme to change it.`) }
       : { icon: h('span', { class: 'accent-dot', style: `background:${colour}` }),   // one the theme suggests goes by its name
-        label: named ? named.name : c === 'windows' ? 'Windows accent' : c === 'purple' ? 'Original purple' : 'Custom',
+        label: named ? named.name : c === 'windows' && accent.palette ? `${OS_NAME} accent` : c === 'windows' || c === 'purple' ? 'Original purple' : 'Custom',
         kbd: 'Change…', action: showAccentDialog },
     '-',
     { header: 'Status dots' },
@@ -9101,7 +9104,7 @@ function showDotStyleDialog() {
   let saved = false;
   openModal('Status dots', [
     h('div', { class: 'dot-style-grid' }, cards),
-    h('div', { class: 'field help' }, 'With Windows’ animation effects turned off, the dots stand still and their shapes tell the states apart.'),
+    h('div', { class: 'field help' }, `With ${IS_MAC ? 'Reduce motion turned on in macOS' : IS_LINUX ? 'your desktop’s animations turned off' : 'Windows’ animation effects turned off'}, the dots stand still and their shapes tell the states apart.`),
   ], [
     h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
     h('button', { class: 'btn primary', onclick: () => { saved = true; save(); closeModal(); } }, 'OK'),
@@ -9123,9 +9126,9 @@ function showAccentDialog() {
   const customBtn = h('button', { class: 'swatch swatch-custom', title: 'Custom colour…', onclick: () => custom.click() }, '…');
   const windowsBtn = h('button', {
     class: 'swatch-auto', disabled: !windowsColour,
-    title: windowsColour ? 'Follow the accent colour in Windows Settings, and change with it' : "Windows didn't report an accent colour",
+    title: windowsColour ? `Follow the accent colour in ${OS_SETTINGS}, and change with it` : `${OS_NAME} didn't report an accent colour`,
     onclick: () => pick('windows'),
-  }, windowsColour ? h('span', { class: 'accent-dot', style: `background:${windowsColour}` }) : null, 'Windows accent');
+  }, windowsColour ? h('span', { class: 'accent-dot', style: `background:${windowsColour}` }) : null, `${OS_NAME} accent`);
   const purpleBtn = h('button', { class: 'swatch-auto', title: "The app's own colour", onclick: () => pick('purple') },
     h('span', { class: 'accent-dot', style: 'background:#7160e8' }), 'Original purple');
   const swatches = PROJECT_COLORS.map((c) => h('button', { class: 'swatch', style: `--swatch:${c}`, title: c, onclick: () => pick(c) }));
@@ -9138,22 +9141,22 @@ function showAccentDialog() {
   function pick(c) {
     accent.choice = c;
     accentChanged();   // preview on the whole app
-    windowsBtn.classList.toggle('selected', c === 'windows');
-    purpleBtn.classList.toggle('selected', c === 'purple');
+    windowsBtn.classList.toggle('selected', c === 'windows' && !!windowsColour);
+    purpleBtn.classList.toggle('selected', c === 'purple' || (c === 'windows' && !windowsColour));   // nothing to follow: the purple is what shows
     for (const sw of swatches) sw.classList.toggle('selected', sw.title === c);
     for (const b of theirs) b.classList.toggle('selected', b.dataset.colour === String(c).toLowerCase());
     const isCustom = /^#/.test(c) && !PROJECT_COLORS.includes(c) && !theirs.some((b) => b.dataset.colour === c.toLowerCase());
     customBtn.classList.toggle('selected', isCustom);
     customBtn.style.setProperty('--swatch', isCustom ? c : 'transparent');
     if (/^#/.test(c)) custom.value = c;
-    note.textContent = c === 'windows'
-      ? 'Changes when you change the accent colour in Windows Settings.'
+    note.textContent = c === 'windows' && windowsColour
+      ? `Changes when you change the accent colour in ${OS_SETTINGS}.`
       : 'Very light or dark colours are shaded where needed, so text on them stays readable in both themes.';
   }
   let saved = false;
   openModal('Accent colour', [
     ...(theirs.length ? [h('div', { class: 'field help' }, `Suggested by ${currentTheme().name}`), h('div', { class: 'swatch-row' }, theirs)] : []),
-    h('div', { class: 'swatch-row' }, windowsBtn, purpleBtn),
+    h('div', { class: 'swatch-row' }, windowsColour || OS_NAME === 'Windows' ? windowsBtn : null, purpleBtn),   // macOS and Linux don't say theirs
     h('div', { class: 'swatch-row' }, swatches, customBtn, custom),
     note,
   ], [
