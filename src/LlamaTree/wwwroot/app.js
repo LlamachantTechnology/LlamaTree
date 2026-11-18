@@ -3813,7 +3813,8 @@ function oscLinkHandler(s) {
 /**
  * Makes the file and folder paths in a terminal's output links, once the host has said they're there (relative ones
  * are from the session's folder). Click opens one (a file is opened for viewing or editing, never run); its right-click
- * menu also opens the folder it's in. Paths wrapped onto the next row are found whole.
+ * menu also opens the folder it's in. Paths wrapped onto the next row are found whole, whether the terminal wrapped them
+ * or the program did (with a line break and an indent, as Claude Code does).
  */
 function pathLinkProvider(s) {
   const cache = new Map();   // path text -> { found, at }: what the host said, rechecked after a while
@@ -3821,59 +3822,106 @@ function pathLinkProvider(s) {
   return {
     provideLinks(y, callback) {
       const buf = s.term.buffer.active;
-      // The whole logical line this row is part of, with where each character is on screen.
-      let first = y - 1;
-      while (first > 0 && buf.getLine(first)?.isWrapped && y - 1 - first < 8) first--;
-      let text = '';
-      const at = [];
-      for (let row = first; row < first + 16; row++) {
+      const cols = s.term.cols;
+      // A row's characters, with the screen cell each one is in.
+      const rows = new Map();
+      const rowAt = (row) => {
+        if (rows.has(row)) return rows.get(row);
         const line = buf.getLine(row);
-        if (!line || (row > first && !line.isWrapped)) break;
-        for (let x = 0; x < line.length; x++) {
-          const cell = line.getCell(x);
-          if (!cell || cell.getWidth() === 0) continue;
-          const chars = cell.getChars() || ' ';
-          for (let i = 0; i < chars.length; i++) at.push({ x: x + 1, y: row + 1 });
-          text += chars;
+        let r = null;
+        if (line) {
+          r = { text: '', at: [], wrapped: line.isWrapped };
+          for (let x = 0; x < line.length; x++) {
+            const cell = line.getCell(x);
+            if (!cell || cell.getWidth() === 0) continue;
+            const chars = cell.getChars() || ' ';
+            for (let i = 0; i < chars.length; i++) r.at.push({ x: x + 1, y: row + 1 });
+            r.text += chars;
+          }
         }
-      }
-      const words = [];
-      const add = (word, start, quoted = false) => {
-        const path = termPathText(word, quoted);
-        if (!path) return;
-        const end = start + path.length - 1;
-        if (at[start]?.y > y || at[end]?.y < y) return;   // not on this row
-        words.push({ path, start, end });
+        rows.set(row, r);
+        return r;
       };
-      for (const m of text.matchAll(QUOTED_PATH)) add(m[1] ?? m[2] ?? m[3], m.index + 1, true);
-      for (const m of text.matchAll(PATH_WORD)) add(m[0], m.index);
-      for (const m of text.matchAll(ABS_PATH_START)) {
-        // The path with 1, 2, ... more words on it (single spaces only), stopping at anything a path word can't have.
-        let end = m.index;
-        for (let spaces = 0; spaces <= ABS_PATH_MAX_SPACES; spaces++) {
-          PATH_WORD.lastIndex = end;
-          const w = PATH_WORD.exec(text);
-          if (!w || w.index !== end) break;
-          end = w.index + w[0].length;
-          if (spaces > 0) add(text.slice(m.index, end), m.index);
-          if (text[end] !== ' ' || text[end + 1] === ' ') break;
-          end++;
+      // Whether a row carries on the one above: wrapped by the terminal, or by the program itself (Claude Code and other
+      // full-screen programs end the row and indent the next). That shows as the row above going on until the next
+      // row's first word wouldn't have fitted on it.
+      const continues = (row) => {
+        const prev = rowAt(row - 1), next = rowAt(row);
+        if (!prev || !next) return false;
+        if (next.wrapped) return true;
+        const end = prev.text.trimEnd().length;
+        const word = /^\S*/.exec(next.text.trimStart())[0];
+        return end > 0 && word.length > 0 && prev.at[end - 1].x + 1 + word.length > cols;
+      };
+      // The whole logical line this row is part of.
+      let first = y - 1;
+      while (first > 0 && y - 1 - first < 8 && continues(first)) first--;
+      let last = first;
+      while (last < first + 15 && continues(last + 1)) last++;
+      // Where the program wrapped a row, it either cut a word (a long path) there or broke the line at a space. A row
+      // that reaches the last column is taken as a cut word, and any other as a break at a space; in case the program
+      // wraps a little short of the edge, or a word just ended there, it's also tried with every one a cut word and with
+      // every one a space.
+      const programWrapped = Array.from({ length: last - first }, (_, i) => !rowAt(first + i + 1).wrapped).some(Boolean);
+      const words = new Map();   // path and where it is on screen -> { path, start, end }
+      const pos = (p) => p.y * 65536 + p.x;
+      for (const joins of programWrapped ? ['edge', 'cut', 'space'] : ['edge']) {
+        let text = '';
+        let at = [];
+        for (let row = first; row <= last; row++) {
+          const r = rowAt(row);
+          if (row === first || r.wrapped) {
+            text += r.text;
+            at = at.concat(r.at);
+            continue;
+          }
+          text = text.trimEnd();
+          at.length = text.length;
+          const end = at[at.length - 1];
+          if (joins === 'space' || (joins === 'edge' && end.x < cols)) { text += ' '; at.push({ x: end.x + 1, y: end.y }); }
+          const indent = r.text.length - r.text.trimStart().length;
+          text += r.text.slice(indent);
+          at = at.concat(r.at.slice(indent));
         }
+        const add = (word, start, quoted = false) => {
+          const path = termPathText(word, quoted);
+          if (!path) return;
+          const from = at[start], to = at[start + path.length - 1];
+          if (!from || !to || from.y > y || to.y < y) return;   // not on this row
+          words.set(`${pos(from)}:${pos(to)}:${path}`, { path, start: from, end: to });
+        };
+        for (const m of text.matchAll(QUOTED_PATH)) add(m[1] ?? m[2] ?? m[3], m.index + 1, true);
+        for (const m of text.matchAll(PATH_WORD)) add(m[0], m.index);
+        for (const m of text.matchAll(ABS_PATH_START)) {
+          // The path with 1, 2, ... more words on it (single spaces only), stopping at anything a path word can't have.
+          let end = m.index;
+          for (let spaces = 0; spaces <= ABS_PATH_MAX_SPACES; spaces++) {
+            PATH_WORD.lastIndex = end;
+            const w = PATH_WORD.exec(text);
+            if (!w || w.index !== end) break;
+            end = w.index + w[0].length;
+            if (spaces > 0) add(text.slice(m.index, end), m.index);
+            if (text[end] !== ' ' || text[end + 1] === ' ') break;
+            end++;
+          }
+        }
+        PATH_WORD.lastIndex = 0;
       }
-      PATH_WORD.lastIndex = 0;
-      if (!words.length) return callback(undefined);
-      const ask = [...new Set(words.map((w) => w.path).filter((p) => !fresh(cache.get(p))))];
+      if (!words.size) return callback(undefined);
+      const found = [...words.values()];
+      const ask = [...new Set(found.map((w) => w.path).filter((p) => !fresh(cache.get(p))))];
       const lookup = ask.length ? request('terminal.paths', { id: s.id, paths: ask }) : Promise.resolve([]);
-      lookup.then((found) => {
-        ask.forEach((p, i) => cache.set(p, { found: found?.[i] ?? null, at: performance.now() }));
+      lookup.then((links) => {
+        ask.forEach((p, i) => cache.set(p, { found: links?.[i] ?? null, at: performance.now() }));
         if (cache.size > 500) cache.clear();
-        const real = words.filter((w) => cache.get(w.path)?.found);
+        const real = found.filter((w) => cache.get(w.path)?.found);
         // Where a quoted path and a word inside it are both there, the longer (the quoted one) is the link.
-        const kept = real.filter((w) => !real.some((o) => o !== w && o.start <= w.start && o.end >= w.end && o.end - o.start > w.end - w.start));
+        const span = (w) => pos(w.end) - pos(w.start);
+        const kept = real.filter((w) => !real.some((o) => o !== w && pos(o.start) <= pos(w.start) && pos(o.end) >= pos(w.end) && span(o) > span(w)));
         callback(kept.map((w) => {
           const link = cache.get(w.path).found;
           return {
-            range: { start: at[w.start], end: at[w.end] },
+            range: { start: w.start, end: w.end },
             text: w.path,
             decorations: { underline: true, pointerCursor: true },
             activate: (e) => { if (e.button === 0) openTermPath(s, link); },
