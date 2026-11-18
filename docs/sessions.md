@@ -141,7 +141,7 @@ The numbers come from each agent's own files, as the conversation rail's do.
 
 ## Projects
 
-Projects group sessions, for example one product across its worktrees. Tick projects on and off in the Projects row; **All** and **None** do what they say, and <kbd>Ctrl</kbd>+click (or right-click › *Show only this project*) shows only one. Sessions with no project are grouped under **Unknown**, which you tick and untick like a project. Each session's tab and tile carry a tag in its project's colour, so two sessions with the same name in different projects can be told apart. Hidden sessions keep running, and each project's tab counts its sessions waiting for you, so a hidden project still gets noticed.
+Projects group sessions, for example one product across its worktrees. Tick projects on and off in the Projects row; **All** and **None** do what they say, and <kbd>Ctrl</kbd>+click (or right-click › *Show only this project*) shows only one. Sessions with no project are grouped under **Unknown**, which you tick and untick like a project; it's there only while it has sessions. Each session's tab and tile carry a tag in its project's colour, so two sessions with the same name in different projects can be told apart. Hidden sessions keep running, and each project's tab counts its sessions waiting for you, so a hidden project still gets noticed.
 
 ![Sessions grouped by project, with Git Changes for the selected worktree](images/overview.png)
 

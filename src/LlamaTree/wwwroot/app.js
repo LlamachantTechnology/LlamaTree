@@ -575,10 +575,12 @@ function renderProjectBar() {
 const tabbedProjects = () => state.projectTabs && state.navLayout === 'top' && state.projects.length > 0;
 const isPinned = (id) => !state.unpinnedProjects.has(id);
 const groupMembers = (id) => state.sessions.filter((s) => groupOf(s) === id);
-const allProjectsShown = () => allGroups().every((g) => !state.hiddenProjects.has(g));
+// The groups on screen: Unknown only while it has sessions (see projectGroups), so a hidden empty one doesn't count.
+const listedGroups = () => allGroups().filter((g) => g !== UNKNOWN || groupMembers(UNKNOWN).length);
+const allProjectsShown = () => listedGroups().every((g) => !state.hiddenProjects.has(g));
 /** The one project shown on its own, or null when several (or none, or all) are. */
 function onlyShownProject() {
-  const shown = allGroups().filter((g) => !state.hiddenProjects.has(g));
+  const shown = listedGroups().filter((g) => !state.hiddenProjects.has(g));
   return shown.length === 1 ? shown[0] : null;
 }
 
@@ -705,7 +707,9 @@ const pinMenuItems = (id) => (!tabbedProjects() ? [] : [isPinned(id)
   : { label: 'Pin (keep it on the tab row)', action: () => setPinned(id, true) }]);
 
 /** The groups the projects bar lists: the projects, then Unknown. With no projects there is nothing to toggle, so none. */
-const projectGroups = () => (state.projects.length ? [...state.projects, { id: UNKNOWN, name: UNKNOWN_NAME, unknown: true }] : []);
+// Unknown (sessions with no project) only while it has some: it isn't a project, so there's nothing to keep it for.
+const projectGroups = () => (!state.projects.length ? []
+  : groupMembers(UNKNOWN).length ? [...state.projects, { id: UNKNOWN, name: UNKNOWN_NAME, unknown: true }] : state.projects);
 
 /** A project's tab in the projects bar (or row down the left): its checkbox and its name, with `extra` at the end. */
 function projectTab(p, extra = null) {
