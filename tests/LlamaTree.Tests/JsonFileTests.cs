@@ -93,15 +93,17 @@ public sealed class JsonFileTests : IDisposable
     [Fact]
     public void Only_the_newest_few_corrupt_copies_are_kept()
     {
-        for (var i = 0; i < JsonFile.KeepCorrupt + 2; i++)
+        // Enough that several are set aside in the same millisecond, and numbered past -9.
+        const int Extra = 20;
+        for (var i = 0; i < JsonFile.KeepCorrupt + Extra; i++)
         {
             File.WriteAllText(Sessions, "broken " + i);
             SessionStore.Load(Sessions);
         }
 
-        var kept = SetAside(Sessions).Select(File.ReadAllText).Order().ToList();
+        var kept = SetAside(Sessions).Select(File.ReadAllText).Order(StringComparer.Ordinal).ToList();
 
-        Assert.Equal(Enumerable.Range(2, JsonFile.KeepCorrupt).Select(i => "broken " + i), kept);
+        Assert.Equal(Enumerable.Range(Extra, JsonFile.KeepCorrupt).Select(i => "broken " + i), kept);
     }
 
     [Fact]
