@@ -141,7 +141,7 @@ The numbers come from each agent's own files, as the conversation rail's do.
 
 ## Projects
 
-Projects group sessions, for example one product across its worktrees. Tick projects on and off in the Projects row; **All** and **None** do what they say, and <kbd>Ctrl</kbd>+click (or right-click › *Show only this project*) shows only one. Sessions with no project are grouped under **Unknown**, which you tick and untick like a project. Each session's tab and tile carry a tag in its project's colour, so two sessions with the same name in different projects can be told apart. Hidden sessions keep running, and each project's tab counts its sessions waiting for you, so a hidden project still gets noticed.
+Projects group sessions, for example one product across its worktrees. Tick projects on and off in the Projects row; **All** and **None** do what they say, and <kbd>Ctrl</kbd>+click (or right-click › *Show only this project*) shows only one. Sessions with no project are grouped under **Unknown**, which you tick and untick like a project; it's there only while it has sessions. Each session's tab and tile carry a tag in its project's colour, so two sessions with the same name in different projects can be told apart. Hidden sessions keep running, and each project's tab counts its sessions waiting for you, so a hidden project still gets noticed.
 
 ![Sessions grouped by project, with Git Changes for the selected worktree](images/overview.png)
 
@@ -153,6 +153,8 @@ Projects group sessions, for example one product across its worktrees. Tick proj
   - *In the same folder…* asks for the new session's name (the next free one is filled in, so Enter takes it) and adds it there, with a conversation of its own.
   - *In a new worktree…* (only in a Git repository) creates a worktree on a new branch, next to the repository by default, and opens a session there, unless you untick *Start a session in it*.
   - *A different folder…* opens New session with the project chosen.
+
+  A shown project with no sessions yet still has its group and its **+** (in the list down the left, beneath the project's name), so you can add its first one; with no session to work from, it opens New session with the project chosen, as its right-click › *New session…* does.
 
 ## Project view
 

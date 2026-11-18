@@ -575,10 +575,12 @@ function renderProjectBar() {
 const tabbedProjects = () => state.projectTabs && state.navLayout === 'top' && state.projects.length > 0;
 const isPinned = (id) => !state.unpinnedProjects.has(id);
 const groupMembers = (id) => state.sessions.filter((s) => groupOf(s) === id);
-const allProjectsShown = () => allGroups().every((g) => !state.hiddenProjects.has(g));
+// The groups on screen: Unknown only while it has sessions (see projectGroups), so a hidden empty one doesn't count.
+const listedGroups = () => allGroups().filter((g) => g !== UNKNOWN || groupMembers(UNKNOWN).length);
+const allProjectsShown = () => listedGroups().every((g) => !state.hiddenProjects.has(g));
 /** The one project shown on its own, or null when several (or none, or all) are. */
 function onlyShownProject() {
-  const shown = allGroups().filter((g) => !state.hiddenProjects.has(g));
+  const shown = listedGroups().filter((g) => !state.hiddenProjects.has(g));
   return shown.length === 1 ? shown[0] : null;
 }
 
@@ -705,7 +707,9 @@ const pinMenuItems = (id) => (!tabbedProjects() ? [] : [isPinned(id)
   : { label: 'Pin (keep it on the tab row)', action: () => setPinned(id, true) }]);
 
 /** The groups the projects bar lists: the projects, then Unknown. With no projects there is nothing to toggle, so none. */
-const projectGroups = () => (state.projects.length ? [...state.projects, { id: UNKNOWN, name: UNKNOWN_NAME, unknown: true }] : []);
+// Unknown (sessions with no project) only while it has some: it isn't a project, so there's nothing to keep it for.
+const projectGroups = () => (!state.projects.length ? []
+  : groupMembers(UNKNOWN).length ? [...state.projects, { id: UNKNOWN, name: UNKNOWN_NAME, unknown: true }] : state.projects);
 
 /** A project's tab in the projects bar (or row down the left): its checkbox and its name, with `extra` at the end. */
 function projectTab(p, extra = null) {
@@ -784,13 +788,15 @@ function renderNav() {
   };
   const rows = groups.map((p) => {
     const members = shown.filter((s) => groupOf(s) === p.id);
+    // A shown project with no sessions at all still gets its +, for the first one (Unknown, not a project, doesn't).
+    const empty = tree && !p.unknown && !state.hiddenProjects.has(p.id) && !groupMembers(p.id).length;
     return h('div', { class: 'nav-group' + (p.unknown ? ' unknown' : ''), style: p.unknown ? null : `--proj:${projectColor(p)}` },
       projectTab(p, h('button', {
         class: 'icon-btn small nav-view' + (projectViewShowing(p.id) ? ' active' : ''), 'data-project': p.id,
         title: 'Project view: its worktrees side by side (again to go back)',
         onclick: () => toggleProjectView(p.id),
       }, iconEl('list'))),
-      members.length > 0 && h('div', { class: 'nav-sessions' }, members.map(tabOf), sessionPlus(members, p.unknown ? 'with no project' : `in ${p.name}`)));
+      (members.length > 0 || empty) && h('div', { class: 'nav-sessions' }, members.map(tabOf), sessionPlus(members, p.unknown ? 'with no project' : `in ${p.name}`, p.id)));
   });
   // No projects: in Left the sessions are still listed, as one group with no name; otherwise just what projects are for.
   if (!groups.length) {
@@ -2530,9 +2536,18 @@ function sessionMarks(s) {
     }, iconEl(s.server ? 'server' : 'computer')));
 }
 
-/** The + at the end of a project's sessions (or of them all, without projects): another session like one of them. */
-function sessionPlus(sessions, where) {
+/**
+ * The + at the end of a project's sessions (or of them all, without projects): another session like one of them. A
+ * project with no sessions has nothing to be like, so its + opens New session with the project picked, as its
+ * right-click › New session… does (see projectNewSessionItems).
+ */
+function sessionPlus(sessions, where, projectId = null) {
   const like = sessions.find((s) => s.id === state.currentId) || sessions[0];
+  if (!like) return h('button', {
+    class: 'icon-btn small session-add', 'aria-label': `New session ${where}`,
+    title: `New session ${where}: it has none yet`,
+    onclick: () => showAddDialog('new', { project: projectId === UNKNOWN ? null : projectId }),
+  }, iconEl('plus'));
   return h('button', {
     class: 'icon-btn small session-add', 'aria-label': `New session ${where}`,
     title: `New session ${where}: in the same folder as ${like.name}${like.git?.isRepo ? ", in a new worktree" : ""}, or in a different folder`,
@@ -2563,6 +2578,12 @@ function renderSessionTabs() {
       groups[groups.length - 1].tabs.push(tabs[i]);
       groups[groups.length - 1].sessions.push(s);
     });
+    // A shown project with no sessions at all still gets its group, so its + is there for the first one.
+    for (const [i, p] of state.projects.entries()) {
+      if (state.hiddenProjects.has(p.id) || groupMembers(p.id).length) continue;
+      const at = groups.findIndex((g) => g.id === UNKNOWN || state.projects.findIndex((q) => q.id === g.id) > i);
+      groups.splice(at < 0 ? groups.length : at, 0, { id: p.id, name: p.name, color: projectColor(p), tabs: [], sessions: [] });
+    }
     host.replaceChildren(...groups.map((g) => h('div', {
       class: 'session-group' + (g.color ? '' : ' unknown'),
       style: g.color ? `--proj:${g.color}` : null,
@@ -2573,7 +2594,7 @@ function renderSessionTabs() {
       onclick: () => toggleProjectView(g.id),
     }, iconEl('list'), g.name),   // the Project tab's icon, so it's clear the name opens something
     g.tabs,
-    sessionPlus(g.sessions, g.color ? `in ${g.name}` : 'with no project'))));
+    sessionPlus(g.sessions, g.color ? `in ${g.name}` : 'with no project', g.id))));
   }
   if (state.navLayout !== 'left') { const v = viewTabs(); if (v) host.prepend(v); }   // the side-by-side views' tabs come first
   syncStatus(host);
@@ -4676,7 +4697,7 @@ function newSessionItems(s) {
 
 /**
  * New session items for a project's right-click menu: as its + offers, like its current session (else its first, shown
- * or not); a project with no sessions has no + and nothing to be like, so it opens New session with the project picked.
+ * or not); a project with no sessions has nothing to be like, so it opens New session with the project picked (as its + does).
  */
 function projectNewSessionItems(projectId) {
   const members = state.sessions.filter((s) => groupOf(s) === projectId);
