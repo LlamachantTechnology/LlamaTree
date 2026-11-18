@@ -154,6 +154,8 @@ Projects group sessions, for example one product across its worktrees. Tick proj
   - *In a new worktree…* (only in a Git repository) creates a worktree on a new branch, next to the repository by default, and opens a session there, unless you untick *Start a session in it*.
   - *A different folder…* opens New session with the project chosen.
 
+  A shown project with no sessions yet still has its group and its **+** (in the list down the left, beneath the project's name), so you can add its first one; with no session to work from, it opens New session with the project chosen, as its right-click › *New session…* does.
+
 ## Project view
 
 Click a project's name at the start of its tab group to see every worktree of its repositories in one table. It's also on a session's ⋯ menu, a session tab's right-click menu, and a project's right-click menu in the Projects row. It opens the way a session's tab does: no session is open, and the tab row holds just its Project tab. Click the project's name again, or a session's tab, to leave it.
