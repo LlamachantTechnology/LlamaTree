@@ -922,6 +922,11 @@ function confirmDeleteProject(p) {
 const PAD = 8, GAP = 8, HEADER_H = 30;
 const RAIL_W = 16;   // the conversation rail's gutter at the right of each terminal
 const DEFAULT_COMMAND = 'claude';   // each new session gets a conversation of its own (the host gives it one)
+// The shells a session's command box suggests after the agents: Command Prompt on Windows, zsh (macOS's own) elsewhere;
+// both for a session on a server, whose system the page doesn't know (as the agents' installers show both there).
+// Any other shell (pwsh, bash, fish...) is typed in, as any command can be.
+const shellsFor = (remote) => (remote ? ['cmd', 'zsh'] : IS_MAC || IS_LINUX ? ['zsh'] : ['cmd']);
+const SHELL_NAMES = { cmd: 'Command Prompt (Windows)', zsh: 'Z shell (macOS, Linux)' };
 const MAX_WEBGL = 12;
 const MAX_PANES = 4;          // sessions side by side
 const MIN_PANE_COLS = 40;     // narrower than this an agent's output wraps badly, so another pane isn't added
@@ -4043,7 +4048,8 @@ function showEditDialog(s, focus) {
   for (const i of [name, command, project.newName, folder]) i.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
   openModal('Edit session', [
     field('Name', name),
-    field('Command', command, 'For example: claude, claude --model opus, codex'),
+    field('Command', h('div', { class: 'combo' }, command, commandSuggestions(command, undefined, () => !!(machine || s.server))),
+      `For example: claude, claude --model opus, codex, or a shell such as ${shellsFor(machine || s.server).join(' or ')}`),
     project.el,
     field('Folder', s.server ? folder : h('div', { class: 'inline' }, folder, browse),
       !s.server && 'Change it to move the folder itself on disk, and the session with it (a worktree is moved with git). Its conversations go along.'),
@@ -4416,6 +4422,28 @@ async function resumeAsSessions(convs) {
 }
 
 /**
+ * The drop-down arrow for a Command box: each agent's plain command, then the shells (shellsFor), to pick from like a
+ * combo box's list (the arrow, or Alt+Down in the box). The box stays free to type over (e.g. "claude --model opus").
+ * remote: whether the session runs on a server, asked each time the list opens (New session's Computer can change).
+ */
+function commandSuggestions(command, onPick = () => {}, remote = () => !!machine) {
+  const item = (label, kbd) => ({
+    label, kbd, checked: command.value.trim() === label,
+    action: () => { command.value = label; onPick(); command.focus(); },
+  });
+  const show = () => {
+    const r = command.getBoundingClientRect();
+    showMenu(r.left, r.bottom + 2, [
+      ...state.agents.map((a) => item(a.programs[0], a.name)),
+      '-', { header: 'Shell' }, ...shellsFor(remote()).map((x) => item(x, SHELL_NAMES[x])),
+    ]);
+    openMenuEl.style.minWidth = r.width + 'px';
+  };
+  command.addEventListener('keydown', (e) => { if (e.altKey && e.key === 'ArrowDown') { e.preventDefault(); show(); } });
+  return h('button', { class: 'combo-btn', title: 'Suggested commands (Alt+Down)', tabindex: '-1', onclick: show }, iconEl('chevD'));
+}
+
+/**
  * from: a panel's button { directory, name, project, prompt }: the dialog opens filled in, and the session's first start
  * is a new conversation beginning with the (editable) prompt.
  */
@@ -4600,18 +4628,7 @@ function showAddDialog(mode = 'new', from = null) {
     showStarts();
   }
   command.addEventListener('input', updateNote);
-  // Each agent's plain command to pick from, dropped down from the box like a combo box's list (the arrow, or Alt+Down
-  // in the box); the box stays free to type over (e.g. "claude --model opus").
-  const suggestions = () => {
-    const r = command.getBoundingClientRect();
-    showMenu(r.left, r.bottom + 2, state.agents.map((a) => ({
-      label: a.programs[0], kbd: a.name, checked: command.value.trim() === a.programs[0],
-      action: () => { command.value = a.programs[0]; updateNote(); command.focus(); },
-    })));
-    openMenuEl.style.minWidth = r.width + 'px';
-  };
-  const suggest = h('button', { class: 'combo-btn', title: 'Suggested commands (Alt+Down)', tabindex: '-1', onclick: suggestions }, iconEl('chevD'));
-  command.addEventListener('keydown', (e) => { if (e.altKey && e.key === 'ArrowDown') { e.preventDefault(); suggestions(); } });
+  const suggest = commandSuggestions(command, updateNote, () => !!(machine || serverValue()));   // the box's drop-down arrow
   segNew.addEventListener('click', () => setMode('new'));
   segResume.addEventListener('click', () => setMode('resume'));
 
