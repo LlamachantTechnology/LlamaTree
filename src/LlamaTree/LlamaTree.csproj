@@ -5,12 +5,16 @@
       net10.0-windows  the Windows app: a WinForms window hosting WebView2 (what the installer ships).
       net10.0          macOS and Linux (and, for trying it out, Windows too): a Photino window, which hosts WKWebView on
                        macOS, WebKitGTK on Linux and WebView2 on Windows.
+      net11.0          the same, on .NET 11: built too when the SDK is .NET 11 or later, for a machine with only .NET 11.
     Everything but the window (sessions, terminals, git, panels, the page) is shared.
-    Run it from source with `dotnet run -f net10.0-windows` (Windows) or `dotnet run` (macOS, Linux).
+    Run it from source with `dotnet run -f net10.0-windows` (Windows) or `dotnet run` (macOS, Linux; with a .NET 11
+    SDK, `dotnet run -f net10.0` or `-f net11.0`). Releases are built for .NET 10.
   -->
   <PropertyGroup>
-    <TargetFrameworks Condition="'$(OS)' == 'Windows_NT'">net10.0-windows;net10.0</TargetFrameworks>
-    <TargetFrameworks Condition="'$(OS)' != 'Windows_NT'">net10.0</TargetFrameworks>
+    <!-- A .NET 10 SDK can't build net11.0 (NETSDK1045), so it's only listed for a .NET 11 SDK or later. -->
+    <Net11 Condition="$([MSBuild]::VersionGreaterThanOrEquals('$(NETCoreSdkVersion)', '11.0'))">;net11.0</Net11>
+    <TargetFrameworks Condition="'$(OS)' == 'Windows_NT'">net10.0-windows;net10.0$(Net11)</TargetFrameworks>
+    <TargetFrameworks Condition="'$(OS)' != 'Windows_NT'">net10.0$(Net11)</TargetFrameworks>
     <OutputType>WinExe</OutputType>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -37,7 +41,7 @@
     <NoWarn>$(NoWarn);MSB3277</NoWarn>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0' or '$(TargetFramework)' == 'net11.0'">
     <!-- Windows-only calls are each behind an OperatingSystem.IsWindows() check (or only reached from one). -->
     <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>
@@ -47,7 +51,7 @@
     <Compile Remove="Hosting\Photino\**" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0' or '$(TargetFramework)' == 'net11.0'">
     <PackageReference Include="Photino.NET" Version="4.0.16" />
     <!-- Part of the Windows Desktop framework; here it comes as a package (notices are signed, see NoticeService). -->
     <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />

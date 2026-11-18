@@ -11,7 +11,7 @@ LlamaTree is a desktop app that runs your AI agents side by side, shows which on
 
 LlamaTree uses your own agents, with your own plans. There's no LlamaTree account.
 
-To build LlamaTree yourself you also need the .NET 10 SDK and Node.js; see [Building](building.md).
+To build LlamaTree yourself you also need the .NET 10 or 11 SDK and Node.js; see [Building](building.md).
 
 ## Install
 
@@ -71,7 +71,7 @@ To uninstall, see [Uninstalling](troubleshooting.md#uninstalling).
 
 ### macOS
 
-LlamaTree runs on macOS, but there's no signed app bundle yet, so for now you run it from source. You need the [.NET 10 SDK](https://dotnet.microsoft.com/download) and Node.js.
+LlamaTree runs on macOS, but there's no signed app bundle yet, so for now you run it from source. You need the [.NET 10 or 11 SDK](https://dotnet.microsoft.com/download) and Node.js.
 
 ```sh
 git clone https://github.com/LlamachantTechnology/LlamaTree && cd LlamaTree
