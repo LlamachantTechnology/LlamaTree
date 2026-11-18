@@ -3993,6 +3993,25 @@ function defaultProjectId() {
 }
 
 /**
+ * The folder New session fills in for project `id`: the last one a session was added in for it on this computer, else
+ * the folder of its newest session here, else none.
+ */
+function projectFolder(id) {
+  if (!id) return '';
+  const remembered = store.get('projectDirs', {})[id];
+  if (remembered) return remembered;
+  return state.sessions.filter((s) => s.project === id && !s.server).at(-1)?.directory ?? '';
+}
+
+function rememberProjectFolder(id, dir) {
+  if (!id || !dir) return;
+  const dirs = store.get('projectDirs', {});
+  for (const k of Object.keys(dirs)) if (!state.projects.some((p) => p.id === k)) delete dirs[k];   // projects since removed
+  dirs[id] = dir;
+  store.set('projectDirs', dirs);
+}
+
+/**
  * When an agent session on this computer starts: when its terminal is first shown ("click"), or as LlamaTree
  * opens ("always", or "running": if it was running as LlamaTree closed). A project has one of these for its sessions
  * (with null for "click"), and a session has its own or '' for its project's. See SessionInfo.StartWithApp.
@@ -4441,6 +4460,7 @@ async function resumeAsSessions(convs) {
     buildWelcomeProject();   // fresh for next time: the project just made is now one to pick
     if (projectId && state.hiddenProjects.has(projectId)) toggleProject(projectId);   // on screen even if its project was hidden
     store.set('lastDir', convs[0].cwd);
+    rememberProjectFolder(projectId, convs[0].cwd);
     const added = state.sessions.filter((x) => !before.has(x.id));
     if (added.length === 1) expand(added[0].id);   // several stay side by side in the grid
   } catch (e) { toast(e.message, true); }
@@ -4500,7 +4520,7 @@ function showAddDialog(mode = 'new', from = null) {
     setPlaceholder();
     showStarts();
     if (mode === 'resume') setMode('resume');   // that computer's conversations
-    else loadWorktrees();
+    else { fillFolder(); loadWorktrees(); }
   };
   computer.addEventListener('change', computerChanged);
   newServer.addEventListener('change', computerChanged);
@@ -4517,6 +4537,16 @@ function showAddDialog(mode = 'new', from = null) {
   startsFollowProject(starts, project);
   const showStarts = () => { starts.el.hidden = !agentOf(command.value.trim() || DEFAULT_COMMAND) || !!serverValue(); };
   let picked = null;   // the saved conversation chosen in "Resume existing conversation"
+  // A new conversation's folder starts as the project's last one (projectFolder), and follows the project and computer
+  // picked until you type or browse to one of your own. Not on a server: what's remembered is this computer's folders.
+  let filled = '';
+  const fillFolder = () => {
+    if (mode !== 'new' || dir.value.trim() !== filled) return;
+    const id = project.select.value;
+    filled = machine || computer.value || !id || id === '__new__' ? '' : projectFolder(id);
+    dir.value = filled;
+  };
+  project.select.addEventListener('change', () => { fillFolder(); loadWorktrees(); });
 
   const loadWorktrees = debounce(async () => {
     const d = dir.value.trim();
@@ -4586,7 +4616,7 @@ function showAddDialog(mode = 'new', from = null) {
       if (server) store.set('servers', [server, ...store.get('servers', []).filter((x) => x !== server)].slice(0, 8));
       // Make sure the new session is on screen even if its project was hidden.
       if (projectId && state.hiddenProjects.has(projectId)) toggleProject(projectId);
-      if (!server) store.set('lastDir', d);
+      if (!server) { store.set('lastDir', d); rememberProjectFolder(projectId, d); }
       if (mode === 'new') store.set('lastCommand', cmd);
       closeModal();
       const added = state.sessions.find((x) => !before.has(x.id));
@@ -4612,7 +4642,7 @@ function showAddDialog(mode = 'new', from = null) {
     if (m === 'resume') {
       wtHost.hidden = true;
       pickerHost.hidden = false;
-      dir.value = '';
+      dir.value = filled = '';
       name.value = '';
       pickerHost.replaceChildren(h('label', {}, 'Conversation (double-click to add)'), conversationPicker({
         server: serverValue(),
@@ -4631,6 +4661,7 @@ function showAddDialog(mode = 'new', from = null) {
       pickerHost.hidden = true;
       pickerHost.replaceChildren();
       if (!command.value) command.value = lastCommand;
+      fillFolder();
       loadWorktrees();
     }
     updateNote();
