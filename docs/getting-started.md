@@ -83,7 +83,7 @@ On a Mac, <kbd>⌘</kbd> does what <kbd>Ctrl</kbd> does on Windows. A copy built
 ## Your first sessions
 
 1. Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd>, or click **New Session**.
-2. Pick where it runs (*Computer*: this one, or a [server](servers.md)) and the folder of a project. The command is `claude` by default; change it to `codex` for Codex, or to anything else (a shell, a dev server).
+2. Pick where it runs (*Computer*: this one, or a [server](servers.md)) and the folder of a project. The command is `claude` by default; change it to `codex` for Codex, or to anything else (a shell, a dev server). The ▾ beside the box (or <kbd>Alt</kbd>+<kbd>Down</kbd>) lists each AI agent's command, then the shells: `cmd` (Command Prompt) on Windows, `zsh` on macOS and Linux, and `bash` on all of them (all three for a session on a server). Any other shell, such as `pwsh`, can be typed in.
 3. Choose **New conversation**, or resume one of your saved conversations.
 4. Optionally, put the session in a **project** so it's grouped with related sessions.
 
