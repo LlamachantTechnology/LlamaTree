@@ -111,13 +111,18 @@ internal static class JsonFile
         try
         {
             var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture);
-            var target = $"{path}.corrupt-{stamp}";
-            for (var n = 2; File.Exists(target); n++) target = $"{path}.corrupt-{stamp}-{n}";
-            File.Move(path, target);
             var folder = Path.GetDirectoryName(Path.GetFullPath(path))!;
-            // The stamp sorts by when each was set aside (a move keeps the file's own times); the newest are kept.
-            foreach (var old in Directory.GetFiles(folder, Path.GetFileName(path) + ".corrupt-*")
-                         .OrderByDescending(f => f, StringComparer.Ordinal).Skip(KeepCorrupt))
+            var name = Path.GetFileName(path) + ".corrupt-";
+            // Within one millisecond the copies are numbered -2, -3…, always past the highest there: one before it
+            // may have been cleared out already, and its free name would then sort as the oldest.
+            var n = Directory.GetFiles(folder, name + stamp + "*").Select(f => CorruptOrder(f, name))
+                .Where(o => o.Stamp == stamp).Select(o => o.N).DefaultIfEmpty(0).Max() + 1;
+            var target = n == 1 ? $"{path}.corrupt-{stamp}" : $"{path}.corrupt-{stamp}-{n}";
+            File.Move(path, target);
+            // The stamp, then the number, sorts by when each was set aside (a move keeps the file's own times); the newest are kept.
+            foreach (var old in Directory.GetFiles(folder, name + "*")
+                         .OrderByDescending(f => CorruptOrder(f, name).Stamp, StringComparer.Ordinal)
+                         .ThenByDescending(f => CorruptOrder(f, name).N).Skip(KeepCorrupt))
             {
                 try { File.Delete(old); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
@@ -128,6 +133,16 @@ internal static class JsonFile
         {
             return null;
         }
+    }
+
+    /// <summary>A set-aside copy's stamp and number (1 when it has none), from its name: <paramref name="name"/> then yyyyMMdd-HHmmss-fff[-n].</summary>
+    private static (string Stamp, int N) CorruptOrder(string file, string name)
+    {
+        var rest = Path.GetFileName(file)[name.Length..];
+        var dash = rest.Length > 19 && rest[19] == '-' ? 19 : -1;
+        return dash > 0 && int.TryParse(rest[(dash + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var n)
+            ? (rest[..dash], n)
+            : (rest, 1);
     }
 
     private static T? TryRead<T>(string path, JsonSerializerOptions? options) where T : class

@@ -5,9 +5,17 @@ using LlamaTree.Sessions;
 namespace LlamaTree.Tests;
 
 /// <summary>
+/// Run with nothing else: the umask these tests set is the whole process's, so a folder another test made meanwhile
+/// would be open to everyone, and its own check that the folder is private would fail.
+/// </summary>
+[CollectionDefinition(nameof(PrivateFilesTests), DisableParallelization = true)]
+public sealed class PrivateFilesCollection;
+
+/// <summary>
 /// The data folder and the sessions' token files (mcp-*.json) are only this user's on macOS and Linux: 0700 and 0600,
 /// even under a umask that would give everyone read access, and ones made by an earlier version are narrowed.
 /// </summary>
+[Collection(nameof(PrivateFilesTests))]
 public sealed class PrivateFilesTests : IDisposable
 {
     private const UnixFileMode Open = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
