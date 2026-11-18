@@ -922,11 +922,12 @@ function confirmDeleteProject(p) {
 const PAD = 8, GAP = 8, HEADER_H = 30;
 const RAIL_W = 16;   // the conversation rail's gutter at the right of each terminal
 const DEFAULT_COMMAND = 'claude';   // each new session gets a conversation of its own (the host gives it one)
-// The shells a session's command box suggests after the agents: Command Prompt on Windows, zsh (macOS's own) elsewhere;
-// both for a session on a server, whose system the page doesn't know (as the agents' installers show both there).
-// Any other shell (pwsh, bash, fish...) is typed in, as any command can be.
-const shellsFor = (remote) => (remote ? ['cmd', 'zsh'] : IS_MAC || IS_LINUX ? ['zsh'] : ['cmd']);
-const SHELL_NAMES = { cmd: 'Command Prompt (Windows)', zsh: 'Z shell (macOS, Linux)' };
+// The shells a session's command box suggests after the agents: Command Prompt on Windows, zsh (macOS's own) elsewhere,
+// and bash everywhere (Linux's usual shell; Git Bash or WSL's on Windows); all three for a session on a server, whose
+// system the page doesn't know (as the agents' installers show every system's there). Any other shell (pwsh, fish...) is typed
+// in, as any command can be.
+const shellsFor = (remote) => (remote ? ['cmd', 'bash', 'zsh'] : IS_MAC || IS_LINUX ? ['bash', 'zsh'] : ['cmd', 'bash']);
+const SHELL_NAMES = { cmd: 'Command Prompt (Windows)', bash: 'Bash', zsh: 'Z shell (macOS, Linux)' };
 const MAX_WEBGL = 12;
 const MAX_PANES = 4;          // sessions side by side
 const MIN_PANE_COLS = 40;     // narrower than this an agent's output wraps badly, so another pane isn't added
@@ -4434,7 +4435,7 @@ function commandSuggestions(command, onPick = () => {}, remote = () => !!machine
   const show = () => {
     const r = command.getBoundingClientRect();
     showMenu(r.left, r.bottom + 2, [
-      ...state.agents.map((a) => item(a.programs[0], a.name)),
+      { header: 'AI agent' }, ...state.agents.map((a) => item(a.programs[0], a.name)),
       '-', { header: 'Shell' }, ...shellsFor(remote()).map((x) => item(x, SHELL_NAMES[x])),
     ]);
     openMenuEl.style.minWidth = r.width + 'px';

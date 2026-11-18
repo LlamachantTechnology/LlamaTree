@@ -2,7 +2,7 @@
 
 LlamaTree works with these AI agents today: Claude Code, Codex, Antigravity and Grok. Any other command runs in a session too.
 
-A session's command decides what it runs: `claude` for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), `codex` for OpenAI's [Codex CLI](https://github.com/openai/codex), `agy` for Google's Antigravity CLI, `grok` for xAI's Grok CLI (each with any options you add), or anything else, such as a shell (`cmd` on Windows, `zsh` on macOS and Linux, both suggested by the Command box; or `pwsh`, `bash` and the like, typed in) or a dev server. They can sit side by side, in the same project or even the same folder.
+A session's command decides what it runs: `claude` for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), `codex` for OpenAI's [Codex CLI](https://github.com/openai/codex), `agy` for Google's Antigravity CLI, `grok` for xAI's Grok CLI (each with any options you add), or anything else, such as a shell (`cmd` on Windows, `zsh` on macOS and Linux, and `bash` on all of them, suggested by the Command box; or `pwsh`, `fish` and the like, typed in) or a dev server. They can sit side by side, in the same project or even the same folder.
 
 ## What each gets
 
