@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>LlamaTree count</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --series: #2a78d6;
+  --series-soft: #cde2fb;
+  --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #f0efec;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255,255,255,0.10);
+    --series: #3987e5;
+    --series-soft: #184f95;
+    --critical: #e66767;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin-bottom: 20px; }
+h1 { font-size: 20px; margin: 0; flex: 1 1 auto; }
+h2 { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
+.muted { color: var(--muted); }
+.range { display: flex; max-width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.range button {
+  border: 0; background: transparent; color: var(--ink-2); font: inherit; padding: 6px 12px; cursor: pointer;
+}
+.range button + button { border-left: 1px solid var(--border); }
+.range button[aria-pressed="true"] { background: var(--surface); color: var(--ink); font-weight: 600; }
+.link { border: 0; background: none; color: var(--ink-2); font: inherit; text-decoration: underline; cursor: pointer; padding: 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); gap: 12px; margin-bottom: 12px; }
+.tile .label { color: var(--ink-2); font-size: 13px; }
+.tile .value { font-size: 28px; font-weight: 600; margin-top: 4px; }
+.tile .sub { color: var(--muted); font-size: 12px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 12px; margin-top: 12px; }
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tip {
+  position: absolute; pointer-events: none; background: var(--surface); color: var(--ink);
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15); white-space: nowrap; display: none; z-index: 1;
+}
+.tip b { font-variant-numeric: tabular-nums; }
+.bars { display: grid; grid-template-columns: minmax(0, max-content) minmax(40px, 1fr) auto; gap: 6px 10px; align-items: center; }
+.bars .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.bars .track { height: 8px; }
+.bars .fill { height: 8px; background: var(--series); border-radius: 0 4px 4px 0; min-width: 2px; }
+.bars .n { font-variant-numeric: tabular-nums; text-align: right; }
+details { margin-top: 12px; }
+summary { cursor: pointer; color: var(--ink-2); }
+table { border-collapse: collapse; width: 100%; margin-top: 8px; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--ink-2); font-weight: 600; }
+.table-wrap { overflow-x: auto; }
+form.key { max-width: 420px; margin: 48px auto; }
+form.key label { display: block; margin-bottom: 8px; }
+form.key input {
+  width: 100%; padding: 8px 10px; font: inherit; color: var(--ink); background: var(--page);
+  border: 1px solid var(--axis); border-radius: 8px;
+}
+form.key button {
+  margin-top: 12px; padding: 8px 14px; font: inherit; border: 0; border-radius: 8px;
+  background: var(--series); color: #fff; cursor: pointer;
+}
+.error { color: var(--critical); margin-top: 8px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>LlamaTree count</h1>
+    <div class="range" role="group" aria-label="Period">
+      <button type="button" data-days="1">Today</button>
+      <button type="button" data-days="7">7 days</button>
+      <button type="button" data-days="30">30 days</button>
+      <button type="button" data-days="90">90 days</button>
+      <button type="button" data-days="400">400 days</button>
+    </div>
+    <button type="button" class="link" id="forget" hidden>Forget key</button>
+  </header>
+
+  <form class="key card" id="keyForm" hidden>
+    <h2>Stats key</h2>
+    <label for="key" class="muted">The <code>count-stats</code> function key. It stays in this browser.</label>
+    <input id="key" type="password" autocomplete="off" spellcheck="false" required>
+    <button type="submit">Show the numbers</button>
+    <div class="error" id="keyError" hidden>That key wasn't accepted.</div>
+  </form>
+
+  <div id="loading" class="muted">Loading…</div>
+  <div class="error" id="error" hidden></div>
+
+  <section id="stats" hidden>
+    <div class="tiles">
+      <div class="card tile"><div class="label">Users</div><div class="value" id="tUsers"></div><div class="sub" id="tUsersSub"></div></div>
+      <div class="card tile"><div class="label">Users today</div><div class="value" id="tToday"></div><div class="sub" id="tTodaySub"></div></div>
+      <div class="card tile"><div class="label">Average projects open</div><div class="value" id="tProjects"></div><div class="sub">most at once, per user per day</div></div>
+      <div class="card tile"><div class="label">Average sessions open</div><div class="value" id="tSessions"></div><div class="sub">most at once, per user per day</div></div>
+    </div>
+
+    <div class="card">
+      <h2 id="mainTitle">Users per day</h2>
+      <div class="chart" id="mainChart"></div>
+      <details>
+        <summary>As a table</summary>
+        <div class="table-wrap"><table id="mainTable"></table></div>
+      </details>
+    </div>
+
+    <div class="grid2">
+      <div class="card"><h2>App versions</h2><div class="bars" id="versions"></div></div>
+      <div class="card"><h2>Systems</h2><div class="bars" id="systems"></div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const KEY = "llamatree-count-key", DAYS = "llamatree-count-days";
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+    del(k) { try { localStorage.removeItem(k); } catch {} },
+  };
+  const $ = id => document.getElementById(id);
+  const fmt = n => n.toLocaleString();
+  const svgNs = "http://www.w3.org/2000/svg";
+  const el = (tag, attrs = {}, parent) => {
+    const e = document.createElementNS(svgNs, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    if (parent) parent.appendChild(e);
+    return e;
+  };
+
+  let days = Number(new URLSearchParams(location.search).get("days")) || Number(store.get(DAYS)) || 30;
+  let data = null;
+
+  function show(which) {
+    $("keyForm").hidden = which !== "key";
+    $("loading").hidden = which !== "loading";
+    $("stats").hidden = which !== "stats";
+    $("error").hidden = which !== "error";
+  }
+
+  async function load() {
+    for (const b of document.querySelectorAll(".range button"))
+      b.setAttribute("aria-pressed", String(Number(b.dataset.days) === days));
+    show("loading");
+    const key = store.get(KEY);
+    let res;
+    try {
+      res = await fetch(`/count/stats?days=${days}`, { headers: key ? { "x-functions-key": key } : {}, cache: "no-store" });
+    } catch (e) {
+      $("error").textContent = "Couldn't reach the stats: " + e.message;
+      return show("error");
+    }
+    // Locally the stats need no key; deployed, a missing or wrong one is a 401.
+    $("forget").hidden = !key;
+    if (res.status === 401 || res.status === 403) {
+      $("keyError").hidden = !key;
+      store.del(KEY);
+      $("forget").hidden = true;
+      show("key");
+      return $("key").focus();
+    }
+    if (!res.ok) {
+      $("error").textContent = `The stats answered ${res.status}.`;
+      return show("error");
+    }
+    data = await res.json();
+    render();
+  }
+
+  function render() {
+    show("stats");
+    const d = data, list = d.days, today = list[list.length - 1];
+    $("tUsers").textContent = fmt(d.users);
+    $("tUsersSub").textContent = list.length === 1 ? d.from : `${d.from} to ${d.to}`;
+    $("tToday").textContent = fmt(today.users);
+    $("tTodaySub").textContent = `${fmt(today.userHours)} user-hours so far`;
+    const active = list.filter(x => x.users > 0);
+    const avg = f => active.length ? (active.reduce((s, x) => s + x[f] * x.users, 0) / active.reduce((s, x) => s + x.users, 0)).toFixed(1) : "–";
+    $("tProjects").textContent = avg("averageProjects");
+    $("tSessions").textContent = avg("averageSessions");
+
+    const hourly = d.hours && list.length <= 7;
+    if (hourly) {
+      $("mainTitle").textContent = "Users per hour (UTC)";
+      const pts = d.hours.map(h => ({ x: h.hour, y: h.users, rows: [["Users", h.users], ["Projects open", h.projects], ["Sessions open", h.sessions]] }));
+      chart($("mainChart"), pts, "line", h => h.slice(11) + ":00", h => h.slice(5, 10));
+      table(["Hour (UTC)", "Users", "Projects", "Sessions"], d.hours.map(h => [h.hour.replace("T", " ") + ":00", h.users, h.projects, h.sessions]));
+    } else {
+      $("mainTitle").textContent = "Users per day";
+      const pts = list.map(x => ({ x: x.day, y: x.users, rows: [["Users", x.users], ["User-hours", x.userHours], ["Avg projects", x.averageProjects], ["Avg sessions", x.averageSessions]] }));
+      chart($("mainChart"), pts, list.length > 60 ? "line" : "bar", null, x => x.slice(5));
+      table(["Day", "Users", "User-hours", "Avg projects", "Avg sessions"], list.slice().reverse().map(x => [x.day, x.users, x.userHours, x.averageProjects, x.averageSessions]));
+    }
+    bars($("versions"), d.versions);
+    const sys = d.systems || {};
+    bars($("systems"), { Windows: sys.windows || 0, Mac: sys.macos || 0, Linux: sys.linux || 0 });
+  }
+
+  function niceMax(v) {
+    if (v <= 4) return 4;
+    const p = Math.pow(10, Math.floor(Math.log10(v))), m = v / p;
+    return (m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
+  }
+
+  // One series over time: bars for up to 60 points, a 2px line beyond. Hover shows the point's numbers.
+  function chart(host, pts, kind, subLabel, label) {
+    host.textContent = "";
+    const W = Math.max(280, host.clientWidth), H = W < 600 ? 200 : 260, L = 36, R = 8, T = 8, B = 28;
+    const iw = W - L - R, ih = H - T - B;
+    const max = niceMax(Math.max(...pts.map(p => p.y), 1));
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": $("mainTitle").textContent }, host);
+    const y = v => T + ih - (v / max) * ih;
+    const step = iw / pts.length;
+    const cx = i => L + step * (i + 0.5);
+
+    for (let i = 0; i <= 4; i++) {
+      const v = (max / 4) * i;
+      el("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: i ? "var(--grid)" : "var(--axis)", "stroke-width": 1 }, svg);
+      el("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, svg).textContent = fmt(v);
+    }
+    const every = Math.ceil(pts.length / Math.max(3, Math.floor(iw / 90)));
+    pts.forEach((p, i) => {
+      if (i % every) return;
+      const t = el("text", { x: cx(i), y: H - 8, "text-anchor": "middle" }, svg);
+      t.textContent = subLabel && !p.x.endsWith("T00") ? subLabel(p.x) : label(p.x);
+    });
+
+    if (kind === "bar") {
+      const bw = Math.max(2, Math.min(step - 2, 28));
+      pts.forEach((p, i) => {
+        if (!p.y) return;
+        const h = ih - (y(p.y) - T), r = Math.min(4, bw / 2, h);
+        const x0 = cx(i) - bw / 2, y0 = y(p.y), base = T + ih;
+        el("path", { fill: "var(--series)", d:
+          `M${x0},${base}V${y0 + r}Q${x0},${y0} ${x0 + r},${y0}H${x0 + bw - r}Q${x0 + bw},${y0} ${x0 + bw},${y0 + r}V${base}Z` }, svg);
+      });
+    } else {
+      const d = pts.map((p, i) => `${i ? "L" : "M"}${cx(i)},${y(p.y)}`).join("");
+      el("path", { d: d + `L${cx(pts.length - 1)},${T + ih}L${cx(0)},${T + ih}Z`, fill: "var(--series-soft)", opacity: 0.5 }, svg);
+      el("path", { d, fill: "none", stroke: "var(--series)", "stroke-width": 2, "stroke-linejoin": "round", "vector-effect": "non-scaling-stroke" }, svg);
+    }
+
+    const cross = el("line", { y1: T, y2: T + ih, stroke: "var(--axis)", "stroke-width": 1, visibility: "hidden" }, svg);
+    const dot = el("circle", { r: 5, fill: "var(--series)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" }, svg);
+    const tip = document.createElement("div");
+    tip.className = "tip";
+    host.appendChild(tip);
+    const hit = el("rect", { x: L, y: T, width: iw, height: ih, fill: "transparent" }, svg);
+    const move = e => {
+      const box = svg.getBoundingClientRect(), sx = (e.clientX - box.left) * (W / box.width);
+      const i = Math.max(0, Math.min(pts.length - 1, Math.floor((sx - L) / step)));
+      const p = pts[i];
+      cross.setAttribute("x1", cx(i)); cross.setAttribute("x2", cx(i)); cross.setAttribute("visibility", "visible");
+      if (kind !== "bar") { dot.setAttribute("cx", cx(i)); dot.setAttribute("cy", y(p.y)); dot.setAttribute("visibility", "visible"); }
+      tip.textContent = "";
+      const head = document.createElement("div");
+      head.textContent = p.x.replace("T", " ") + (p.x.includes("T") ? ":00 UTC" : "");
+      head.className = "muted";
+      tip.appendChild(head);
+      for (const [k, v] of p.rows) {
+        const row = document.createElement("div");
+        row.append(k + ": ");
+        const b = document.createElement("b"); b.textContent = fmt(v); row.appendChild(b);
+        tip.appendChild(row);
+      }
+      tip.style.display = "block";
+      const px = (cx(i) / W) * box.width, hw = tip.offsetWidth;
+      tip.style.left = Math.max(0, Math.min(box.width - hw, px + 12 + hw > box.width ? px - hw - 12 : px + 12)) + "px";
+      tip.style.top = "8px";
+    };
+    hit.addEventListener("pointermove", move);
+    hit.addEventListener("pointerleave", () => {
+      tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden");
+    });
+  }
+
+  function table(head, rows) {
+    const t = $("mainTable");
+    t.textContent = "";
+    const tr = t.insertRow();
+    for (const h of head) { const th = document.createElement("th"); th.textContent = h; tr.appendChild(th); }
+    for (const r of rows) {
+      const row = t.insertRow();
+      r.forEach((v, i) => { row.insertCell().textContent = i ? fmt(v) : v; });
+    }
+  }
+
+  function bars(host, counts) {
+    host.textContent = "";
+    const entries = Object.entries(counts);
+    if (!entries.length) { host.textContent = "Nobody yet."; host.className = "muted"; return; }
+    host.className = "bars";
+    const max = Math.max(1, ...entries.map(e => e[1]));
+    for (const [name, n] of entries) {
+      const a = document.createElement("div"); a.className = "name"; a.textContent = name; a.title = name;
+      const track = document.createElement("div"); track.className = "track";
+      const fill = document.createElement("div"); fill.className = "fill"; fill.style.width = (n / max) * 100 + "%";
+      if (!n) fill.style.minWidth = "0";
+      track.appendChild(fill);
+      const c = document.createElement("div"); c.className = "n"; c.textContent = fmt(n);
+      host.append(a, track, c);
+    }
+  }
+
+  document.querySelector(".range").addEventListener("click", e => {
+    const b = e.target.closest("button[data-days]");
+    if (!b) return;
+    days = Number(b.dataset.days);
+    store.set(DAYS, String(days));
+    load();
+  });
+  $("keyForm").addEventListener("submit", e => {
+    e.preventDefault();
+    store.set(KEY, $("key").value.trim());
+    $("key").value = "";
+    load();
+  });
+  $("forget").addEventListener("click", () => { store.del(KEY); $("keyError").hidden = true; load(); });
+  let resized;
+  addEventListener("resize", () => {
+    clearTimeout(resized);
+    resized = setTimeout(() => { if (data && !$("stats").hidden) render(); }, 150);
+  });
+  load();
+})();
+</script>
+</body>
+</html>

@@ -31,8 +31,24 @@ The id is random, made when the user said yes and forgotten when they say no, so
 - `versions`, `systems`, `systemVersions`: the period's users by app version, by system (`windows`) and by system
   and version (`windows 10.0.26300`).
 
-`days` goes up to 400. The key is the function app's default host key:
-`az functionapp keys list -g <resource group> -n <app> --query functionKeys.default -o tsv`.
+`days` goes up to 400. The key can also go in an `x-functions-key` header instead of `code`.
+
+### The dashboard
+
+[`https://api.llamatree.dev/count/dashboard`](https://api.llamatree.dev/count/dashboard) charts the same numbers:
+users per day (per hour for 7 days or fewer), averages, versions and systems, with a table under the chart. The
+page holds no numbers, so it loads for anyone; it asks for a key, keeps it in that browser's local storage and sends
+it as `x-functions-key`. **Forget key** removes it. `?days=7` opens a given period.
+
+Give it a key that opens **only the stats**, not the host key (which opens every function in the app):
+
+```powershell
+az functionapp function keys set -g <resource group> -n <app> --function-name count-stats --key-name dashboard
+az functionapp function keys list -g <resource group> -n <app> --function-name count-stats --query dashboard -o tsv
+```
+
+To shut a browser out, set the key again with a new value (`--key-value`) or delete it
+(`az functionapp function keys delete … --key-name dashboard`).
 
 ## Deploying
 
@@ -53,6 +69,7 @@ cd server\Count
 func start                                            # Azure Functions Core Tools
 # http://localhost:7071/count/ping?id=1868c4d72ca345de80adb48806e14052&v=1.2.0&os=windows&osv=10.0.26300&projects=1&sessions=2
 # http://localhost:7071/count/stats?days=7   (no key needed locally)
+# http://localhost:7071/count/dashboard      (doesn't ask for one either)
 ```
 
 `dotnet test server\Count.Tests` runs the tests; the storage ones run only while Azurite is.
