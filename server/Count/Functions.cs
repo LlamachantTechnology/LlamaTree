@@ -52,6 +52,25 @@ internal sealed class Functions(CountStore store, TimeProvider clock, ILogger<Fu
         return response;
     }
 
+    /// <summary>
+    /// GET /dashboard: a page that charts <c>/stats</c>. The page itself holds no numbers, so anyone may load it; it asks
+    /// for the stats key, keeps it in that browser and sends it as <c>x-functions-key</c>.
+    /// </summary>
+    [Function("count-dashboard")]
+    public async Task<HttpResponseData> DashboardAsync(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "count/dashboard")] HttpRequestData request, CancellationToken ct)
+    {
+        var response = request.CreateResponse(HttpStatusCode.OK);
+        response.Headers.Add("Content-Type", "text/html; charset=utf-8");
+        response.Headers.Add("Content-Security-Policy", Dashboard.ContentSecurityPolicy);
+        response.Headers.Add("X-Content-Type-Options", "nosniff");
+        response.Headers.Add("Referrer-Policy", "no-referrer");
+        response.Headers.Add("X-Robots-Tag", "noindex, nofollow");
+        response.Headers.Add("Cache-Control", "no-cache");
+        await response.WriteStringAsync(Dashboard.Html, ct);
+        return response;
+    }
+
     /// <summary>Every day at 03:30 UTC, deletes the days older than <see cref="CountStore.KeepDays"/>.</summary>
     [Function("count-forget")]
     public async Task ForgetAsync([TimerTrigger("0 30 3 * * *")] TimerInfo timer, CancellationToken ct)
