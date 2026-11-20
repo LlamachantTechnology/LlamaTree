@@ -486,7 +486,7 @@ internal sealed class PanelMcp(PanelStore store, Relay.RelayHub? relay = null, R
     private const string ControlToolsJson = """
           {
             "name": "start_session",
-            "description": "Starts a new session in LlamaTree: another agent like this one (same agent and options), working on its own, which this session can then drive with send_prompt, get_session, wait_for_session, answer_prompt, interrupt_session, stop_session and close_session. Use it to hand off a separate piece of work to run in parallel. The person may be asked first (the call then waits up to 110 seconds for their answer). Limits: 5 running sessions started by one session, 10 in all.",
+            "description": "Starts a new session in LlamaTree: another agent like this one (same agent and options), working on its own, which this session can then drive with send_prompt, get_session, wait_for_session, answer_prompt, interrupt_session, stop_session and close_session. Use it to hand off a separate piece of work to run in parallel. The person may be asked first (the call then waits up to 110 seconds for their answer). Limits: 20 running sessions started by one session, 50 in all.",
             "inputSchema": {
               "type": "object",
               "properties": {

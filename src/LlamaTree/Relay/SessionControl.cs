@@ -60,12 +60,12 @@ internal sealed class ControlException(string message) : Exception(message);
 /// </summary>
 internal sealed class SessionControl
 {
-    public const int MaxChildren = 5;
-    public const int MaxStarted = 10;
+    public const int MaxChildren = 20;
+    public const int MaxStarted = 50;
     public const int MaxPrompt = 8000;
     public const int MaxName = 60;
     public const int PromptsPerMinute = 10;
-    public const int SpawnsPerMinute = 3;
+    public const int SpawnsPerMinute = MaxChildren;
     public const int MaxLog = 300;
     public const int MaxReply = 6000;
     public static readonly TimeSpan AskTimeout = TimeSpan.FromSeconds(110);

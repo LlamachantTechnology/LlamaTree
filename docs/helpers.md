@@ -42,6 +42,6 @@ Permissions › **Agents** sets three abilities for every session, project or al
 ## Limits and safety
 
 - **Held to its folder.** A helper starts only in a folder it was allowed (this session's, one the project uses, or a worktree made for it), checked with links resolved, and held as its process starts, so it can't be moved elsewhere on the way.
-- **Five at a time** from one session, ten in all.
+- **Twenty at a time** from one session, fifty in all. A session can start all twenty at once, and up to twenty a minute.
 - **Nothing is hidden:** each helper has a tile and tab like any other session, so you can watch it or step in at any point, and each close is logged.
 - **On servers too:** a session on a [server](servers.md) can start helpers there, under the same rules.

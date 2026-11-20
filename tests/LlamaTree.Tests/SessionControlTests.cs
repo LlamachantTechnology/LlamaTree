@@ -305,6 +305,17 @@ public class SessionControlTests
     }
 
     [Fact]
+    public async Task A_session_can_start_all_its_helpers_at_once()
+    {
+        policy.Set(ControlAbility.Spawn, ControlPolicy.Everyone, RelayDecision.Allow);
+        for (var i = 0; i < SessionControl.MaxChildren; i++)
+            await control.StartAsync("a", "Helper " + i, "go", null, null);
+
+        Assert.Equal(SessionControl.MaxChildren, host.List.Count(s => s.StartedBy == "a"));
+        await Assert.ThrowsAsync<ControlException>(() => control.StartAsync("a", "One more", "go", null, null));
+    }
+
+    [Fact]
     public async Task Pausing_agents_stops_everything()
     {
         var id = await StartAllowed();
