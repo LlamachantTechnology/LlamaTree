@@ -5,11 +5,11 @@
   </picture>
 </h1>
 
-**[llamatree.dev](https://llamatree.dev)** · *Formerly Claude Terminals.*
+**[llamatree.dev](https://llamatree.dev)**
 
-One window for all your AI agents, on this computer and on your servers, with a Visual Studio–style Git Changes / Git Repository view and diff viewer for each session's worktree.
+LlamaTree is a free, open-source desktop app for Windows and Linux that runs your AI agents side by side in one window: Claude Code, Codex, Antigravity, Grok, or any command-line program. It shows which session needs you, and gives each one a Visual Studio–style Git Changes / Git Repository view and diff viewer for its worktree. Sessions run on this computer or on your servers.
 
-Works with Claude Code, Codex, Antigravity and Grok: see [AI agents](docs/agents.md) for what each gets.
+It runs the agents you already have, unchanged, in real terminals, with your own plans: there's no account and nothing to pay. See [AI agents](docs/agents.md) for what each agent gets. *Formerly Claude Terminals.*
 
 **[Read the guide on llamatree.dev](https://llamatree.dev/docs/)** · [Install](#install) · [Guide in this repository](docs/README.md)
 
@@ -30,11 +30,12 @@ Works with Claude Code, Codex, Antigravity and Grok: see [AI agents](docs/agents
 
 ## What it does
 
-- **All your sessions in one window.** Every agent session runs in its own real terminal, shown side by side as live tiles. Status dots show which are working, which are waiting for you and which need an answer. Group them into [projects](docs/sessions.md), and keep them running when the window closes.
-- **Sessions on your servers, among your own.** Run a session on a Linux server over SSH and work with it beside your local ones: typing, Git, files and panels all work as they do locally, and it keeps running there when the connection drops. [Sessions on a server](docs/servers.md)
+- **All your sessions in one window.** Every agent session runs in its own real terminal, shown side by side as live tiles, or up to four at full size, kept together as a view. Status dots show which are working, which are waiting for you and which need an answer. Group them into [projects](docs/sessions.md), and keep them running when the window closes.
+- **Sessions on your servers, among your own.** Run a session on a Linux server, or another of your Windows PCs, over SSH and work with it beside your local ones: typing, Git, files and panels all work as they do locally, and it keeps running there when the connection drops. [Sessions on a server](docs/servers.md)
 - **Git, Visual Studio style.** Each session's worktree gets Git Changes (stage, commit, Undo Changes, fetch, pull, push), Git Repository (history, outgoing commits), a branch picker and side-by-side diffs that update as the agent edits. **Suggest** writes the commit message. [Git](docs/git.md)
 - **Agents that work together.** Sessions can message each other, and an agent can start sessions of its own, drive them and close them, with you deciding what each may do. [Panels and messages](docs/panels.md) · [Helper sessions](docs/helpers.md)
 - **Panels from your agents.** An agent can show your task list, an error summary or notes as a tab beside the Git panel, through an MCP server built into the app. [Panels](docs/panels.md)
+- **See how full each conversation is.** A context meter on every session's tile, amber at 50% and red at 80%, with one-click Compact. [Context meter](docs/sessions.md#context-meter)
 - **Mix your AI agents.** Run different agents side by side, even in the same folder. Each session keeps a conversation of its own and picks it up again when the app restarts. [AI agents](docs/agents.md)
 - **Your colours, your plugins.** Light or dark in your accent colour, and plugins that add tabs of their own. [Customize](docs/customize.md)
 - **Keeps itself up to date.** Tells you when a new version is out and installs it in a click; your sessions carry on afterwards.
@@ -55,7 +56,7 @@ curl -fsSL https://github.com/LlamachantTechnology/LlamaTree/releases/latest/dow
 
 Each downloads the latest release, checks it against the checksums we sign for every release with our code signing certificate (and, on Windows, the installer's own signature), and installs it. Both scripts are in [tools/install](tools/install) if you'd like to read them first. You can also download the Windows setup, or the `.deb`, `.rpm` or `.tar.gz`, from the [latest release](https://github.com/LlamachantTechnology/LlamaTree/releases/latest).
 
-You need [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and/or the [Codex CLI](https://github.com/openai/codex), plus Git. LlamaTree runs on Windows 10 1809+ and Windows 11 (x64) and on 64-bit Linux; on macOS it runs built from source for now. See [Getting started](docs/getting-started.md) for the details.
+You need at least one [supported AI agent](docs/agents.md) (Claude Code, Codex, Antigravity or Grok), installed and signed in, plus Git. LlamaTree runs on Windows 10 1809+ and Windows 11 (x64) and on 64-bit Linux; on macOS it runs built from source for now. See [Getting started](docs/getting-started.md) for the details.
 
 ## Documentation
 
