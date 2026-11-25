@@ -133,11 +133,12 @@ public sealed class CommitMessageServiceTests : IDisposable
     [Fact]
     public void Writers_go_tool_less_first_then_those_that_save_nothing()
     {
-        Assert.Equal([Sessions.Agents.Claude, Sessions.Agents.Codex, Sessions.Agents.Antigravity, Sessions.Agents.Grok], Sessions.HeadlessAgent.Writers);
+        Assert.Equal([Sessions.Agents.Claude, Sessions.Agents.Codex, Sessions.Agents.Antigravity, Sessions.Agents.Grok, Sessions.Agents.OpenCode], Sessions.HeadlessAgent.Writers);
         Assert.False(Sessions.Agents.Claude.HeadlessSavesConversation);
         Assert.False(Sessions.Agents.Codex.HeadlessSavesConversation);
         Assert.True(Sessions.Agents.Antigravity.HeadlessSavesConversation);   // run in the app's own folder, so no session adopts it
         Assert.True(Sessions.Agents.Grok.HeadlessSavesConversation);
+        Assert.True(Sessions.Agents.OpenCode.HeadlessSavesConversation);
     }
 
     [Fact]

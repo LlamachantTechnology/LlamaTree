@@ -52,6 +52,22 @@ internal abstract class PanelConnection
     }
 
     /// <summary>
+    /// Config for the agent written into an environment variable it merges with its own config files (OpenCode's
+    /// OPENCODE_CONFIG_CONTENT), naming the server's address, with the token in <see cref="TokenVariable"/>.
+    /// </summary>
+    /// <param name="variable">The variable the agent reads.</param>
+    /// <param name="content">The variable's value from what it already holds (null when unset) and the server's address.</param>
+    public sealed class ConfigVariable(string variable, Func<string?, string, string> content) : PanelConnection
+    {
+        public override void AddEnvironment(IDictionary<string, string> env, PanelLink? link)
+        {
+            if (link == null) return;
+            env[variable] = content(env.TryGetValue(variable, out var own) ? own : null, link.Url);
+            env[TokenVariable] = link.Token;
+        }
+    }
+
+    /// <summary>
     /// For an agent that can't be given an MCP server for one start (agy, Grok): the panel bridge
     /// (<see cref="LlamaTree.Panels.PanelBridge"/>, this app run as "mcp-bridge") registered once in the agent's own
     /// settings, with the session's environment naming this run's panel server and the session's token.

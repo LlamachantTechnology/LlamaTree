@@ -43,7 +43,7 @@ internal static class SessionAssistant
     /// <summary>
     /// The agents that may answer, best first: those whose headless command has no tools (<see cref="AgentProfile.HeadlessHasNoTools"/>:
     /// Claude), then the rest (Codex), each group in <see cref="Agents.All"/> order. Not one that keeps what it's asked
-    /// (<see cref="AgentProfile.HeadlessSavesConversation"/>: Antigravity, Grok), which would keep the sessions' conversations
+    /// (<see cref="AgentProfile.HeadlessSavesConversation"/>: Antigravity, Grok, OpenCode), which would keep the sessions' conversations
     /// in its own history. Not the sessions' own agent: a plugin names the sessions, so it would be choosing the agent too.
     /// </summary>
     internal static IReadOnlyList<AgentProfile> Writers { get; } =
@@ -62,7 +62,7 @@ internal static class SessionAssistant
     internal static string BuildPrompt(string question, IReadOnlyList<AssistantExchange> history, IReadOnlyList<SessionBrief> sessions, DateTime now)
     {
         var p = new StringBuilder();
-        p.AppendLine("You are the assistant in LlamaTree, a desktop app in which each tab is an AI agent session (Claude Code, Codex, Antigravity, Grok or another command-line agent) in a folder.");
+        p.AppendLine("You are the assistant in LlamaTree, a desktop app in which each tab is an AI agent session (Claude Code, Codex, Antigravity, Grok, OpenCode or another command-line agent) in a folder.");
         p.AppendLine("The person using it asks you about their sessions. Below are the sessions you may speak about, each with its conversation so far:");
         p.AppendLine("the prompts the person sent, what the agent answered and the tools it used. Answer from that and nothing else.");
         p.AppendLine();

@@ -7,7 +7,7 @@
 
 **[llamatree.dev](https://llamatree.dev)**
 
-LlamaTree is a free, open-source desktop app for Windows and Linux that runs your AI agents side by side in one window: Claude Code, Codex, Antigravity, Grok, or any command-line program. It shows which session needs you, and gives each one a Visual Studio–style Git Changes / Git Repository view and diff viewer for its worktree. Sessions run on this computer or on your servers.
+LlamaTree is a free, open-source desktop app for Windows and Linux that runs your AI agents side by side in one window: Claude Code, Codex, Antigravity, Grok, OpenCode, or any command-line program. It shows which session needs you, and gives each one a Visual Studio–style Git Changes / Git Repository view and diff viewer for its worktree. Sessions run on this computer or on your servers.
 
 It runs the agents you already have, unchanged, in real terminals, with your own plans: there's no account and nothing to pay. See [AI agents](docs/agents.md) for what each agent gets. *Formerly Claude Terminals.*
 
@@ -56,7 +56,7 @@ curl -fsSL https://github.com/LlamachantTechnology/LlamaTree/releases/latest/dow
 
 Each downloads the latest release, checks it against the checksums we sign for every release with our code signing certificate (and, on Windows, the installer's own signature), and installs it. Both scripts are in [tools/install](tools/install) if you'd like to read them first. You can also download the Windows setup, or the `.deb`, `.rpm` or `.tar.gz`, from the [latest release](https://github.com/LlamachantTechnology/LlamaTree/releases/latest).
 
-You need at least one [supported AI agent](docs/agents.md) (Claude Code, Codex, Antigravity or Grok), installed and signed in, plus Git. LlamaTree runs on Windows 10 1809+ and Windows 11 (x64) and on 64-bit Linux; on macOS it runs built from source for now. See [Getting started](docs/getting-started.md) for the details.
+You need at least one [supported AI agent](docs/agents.md) (Claude Code, Codex, Antigravity, Grok or OpenCode), installed and signed in, plus Git. LlamaTree runs on Windows 10 1809+ and Windows 11 (x64) and on 64-bit Linux; on macOS it runs built from source for now. See [Getting started](docs/getting-started.md) for the details.
 
 ## Documentation
 

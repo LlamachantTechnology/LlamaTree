@@ -6,7 +6,7 @@ namespace LlamaTree.Sessions;
 
 /// <summary>
 /// Runs an agent once, headless, with a prompt on its standard input and its answer on standard output
-/// (<see cref="AgentProfile.HeadlessCommand"/>: claude -p with no tools, codex exec read-only, agy -p or grok -p). It
+/// (<see cref="AgentProfile.HeadlessCommand"/>: claude -p with no tools, codex exec read-only, agy -p, grok -p or opencode run). It
 /// runs with the user's own sign-in, in the same clean environment sessions get. The commit message suggester and the
 /// plugins' ask request use it (ask with a tool-less agent when one is installed, see <see cref="SessionAssistant.WriterFor"/>).
 /// </summary>
@@ -16,7 +16,7 @@ internal static class HeadlessAgent
 
     /// <summary>
     /// The agents that can answer, best first: those with no tools (Claude), then those that save no conversation (Codex),
-    /// then the rest (Antigravity, Grok), each group in <see cref="Agents.All"/> order.
+    /// then the rest (Antigravity, Grok, OpenCode), each group in <see cref="Agents.All"/> order.
     /// </summary>
     internal static IReadOnlyList<AgentProfile> Writers { get; } = Agents.All.Where(a => a.HeadlessCommand != null)
         .OrderByDescending(a => a.HeadlessHasNoTools).ThenBy(a => a.HeadlessSavesConversation).ToList();
