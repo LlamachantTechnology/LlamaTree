@@ -10,6 +10,7 @@ var builder = FunctionsApplication.CreateBuilder(args);
 var connection = Environment.GetEnvironmentVariable("COUNT_STORAGE")
     ?? throw new InvalidOperationException("COUNT_STORAGE isn't set.");
 builder.Services.AddSingleton(new CountStore(new TableClient(connection, CountStore.TableName)));
+builder.Services.AddSingleton(SignIn.FromEnvironment());
 builder.Services.AddSingleton(TimeProvider.System);
 
 builder.Build().Run();

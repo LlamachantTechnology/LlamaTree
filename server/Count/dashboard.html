@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-tenant="{{TENANT_ID}}" data-client="{{CLIENT_ID}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -80,13 +80,9 @@ th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--gri
 th:first-child, td:first-child { text-align: left; }
 th { color: var(--ink-2); font-weight: 600; }
 .table-wrap { overflow-x: auto; }
-form.key { max-width: 420px; margin: 48px auto; }
-form.key label { display: block; margin-bottom: 8px; }
-form.key input {
-  width: 100%; padding: 8px 10px; font: inherit; color: var(--ink); background: var(--page);
-  border: 1px solid var(--axis); border-radius: 8px;
-}
-form.key button {
+.signin { max-width: 420px; margin: 48px auto; }
+.signin p { margin: 0 0 4px; }
+.signin button {
   margin-top: 12px; padding: 8px 14px; font: inherit; border: 0; border-radius: 8px;
   background: var(--series); color: #fff; cursor: pointer;
 }
@@ -105,16 +101,23 @@ form.key button {
       <button type="button" data-days="90">90 days</button>
       <button type="button" data-days="400">400 days</button>
     </div>
-    <button type="button" class="link" id="forget" hidden>Forget key</button>
+    <span class="muted" id="who" hidden></span>
+    <button type="button" class="link" id="signOut" hidden>Sign out</button>
   </header>
 
-  <form class="key card" id="keyForm" hidden>
-    <h2>Stats key</h2>
-    <label for="key" class="muted">The <code>count-stats</code> function key. It stays in this browser.</label>
-    <input id="key" type="password" autocomplete="off" spellcheck="false" required>
-    <button type="submit">Show the numbers</button>
-    <div class="error" id="keyError" hidden>That key wasn't accepted.</div>
-  </form>
+  <div class="signin card" id="signInCard" hidden>
+    <h2>Sign in</h2>
+    <p class="muted">With your Microsoft work account. Only the people on the readers list see the numbers.</p>
+    <button type="button" id="signIn">Sign in with Microsoft</button>
+    <div class="error" id="signInError" hidden></div>
+  </div>
+
+  <div class="signin card" id="notReader" hidden>
+    <h2>Not on the list</h2>
+    <p class="muted"><span id="notReaderName"></span> is signed in, but isn't on the readers list
+      (<code>COUNT_READERS</code> in the function app's settings).</p>
+    <button type="button" id="other">Sign in as someone else</button>
+  </div>
 
   <div id="loading" class="muted">Loading…</div>
   <div class="error" id="error" hidden></div>
@@ -145,12 +148,86 @@ form.key button {
 
 <script>
 (() => {
-  const KEY = "llamatree-count-key", DAYS = "llamatree-count-days";
-  const store = {
-    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
-    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
-    del(k) { try { localStorage.removeItem(k); } catch {} },
+  const DAYS = "llamatree-count-days", SIGNED_IN = "llamatree-count-signed-in";
+  const TOKEN = "llamatree-count-token", PENDING = "llamatree-count-pending";
+  const storage = area => ({
+    get(k) { try { return area().getItem(k); } catch { return null; } },
+    set(k, v) { try { area().setItem(k, v); } catch {} },
+    del(k) { try { area().removeItem(k); } catch {} },
+  });
+  // The ID token lives only as long as the tab; "signed in before" lasts, so a later visit signs in without a click.
+  const store = storage(() => localStorage), tab = storage(() => sessionStorage);
+
+  // Sign-in with Microsoft (Entra ID): the authorization code flow with PKCE, as a single-page app, no secret. The
+  // tenant and client IDs are filled in by the function; empty means a local run, where the stats need no sign-in.
+  const TENANT = document.documentElement.dataset.tenant, CLIENT = document.documentElement.dataset.client;
+  const signInNeeded = Boolean(TENANT && CLIENT && !TENANT.startsWith("{{"));
+  const authority = `https://login.microsoftonline.com/${encodeURIComponent(TENANT)}/oauth2/v2.0`;
+  const here = location.origin + location.pathname;
+  const b64url = bytes => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const random = n => b64url(crypto.getRandomValues(new Uint8Array(n)));
+  const claims = jwt => {
+    try {
+      const b = atob(jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"));
+      return JSON.parse(new TextDecoder().decode(Uint8Array.from(b, c => c.charCodeAt(0))));
+    } catch { return null; }
   };
+
+  async function signIn({ silent = false, pick = false } = {}) {
+    const verifier = random(32), state = random(16), nonce = random(16);
+    const challenge = b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
+    tab.set(PENDING, JSON.stringify({ verifier, state, nonce }));
+    store.set(DAYS, String(days));
+    const q = new URLSearchParams({
+      client_id: CLIENT, response_type: "code", response_mode: "query", redirect_uri: here, scope: "openid profile",
+      code_challenge: challenge, code_challenge_method: "S256", state, nonce,
+    });
+    if (silent) q.set("prompt", "none");
+    else if (pick) q.set("prompt", "select_account");
+    location.assign(`${authority}/authorize?${q}`);
+  }
+
+  // Back from Microsoft with a code (or an error) in the address: trades the code for an ID token. Returns null when signed in (or
+  // nothing came back), else the error to show ("" for none: a silent sign-in that needs a click).
+  async function finishSignIn() {
+    const q = new URLSearchParams(location.search);
+    if (!q.has("code") && !q.has("error")) return null;
+    const pending = JSON.parse(tab.get(PENDING) || "null");
+    tab.del(PENDING);
+    history.replaceState(null, "", here);
+    if (["login_required", "interaction_required", "consent_required"].includes(q.get("error"))) return "";
+    if (q.has("error")) return q.get("error_description") || q.get("error");
+    if (!pending || q.get("state") !== pending.state) return "That sign-in didn't start here. Try again.";
+    try {
+      const res = await fetch(`${authority}/token`, {
+        method: "POST",
+        body: new URLSearchParams({
+          client_id: CLIENT, grant_type: "authorization_code", code: q.get("code"), redirect_uri: here,
+          code_verifier: pending.verifier, scope: "openid profile",
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.id_token) return body.error_description || `Microsoft's sign-in answered ${res.status}.`;
+      if (claims(body.id_token)?.nonce !== pending.nonce) return "That sign-in didn't match. Try again.";
+      tab.set(TOKEN, body.id_token);
+      store.set(SIGNED_IN, "1");
+      return null;
+    } catch (e) {
+      return "Couldn't finish signing in: " + e.message;
+    }
+  }
+
+  // The ID token, while it has more than a minute left.
+  function token() {
+    const t = tab.get(TOKEN), c = t && claims(t);
+    return c && c.exp * 1000 > Date.now() + 60_000 ? t : null;
+  }
+
+  function signOut() {
+    tab.del(TOKEN);
+    store.del(SIGNED_IN);
+    location.assign(`${authority}/logout?${new URLSearchParams({ post_logout_redirect_uri: here })}`);
+  }
   const $ = id => document.getElementById(id);
   const fmt = n => n.toLocaleString();
   const svgNs = "http://www.w3.org/2000/svg";
@@ -165,7 +242,8 @@ form.key button {
   let data = null;
 
   function show(which) {
-    $("keyForm").hidden = which !== "key";
+    $("signInCard").hidden = which !== "signin";
+    $("notReader").hidden = which !== "notReader";
     $("loading").hidden = which !== "loading";
     $("stats").hidden = which !== "stats";
     $("error").hidden = which !== "error";
@@ -175,22 +253,33 @@ form.key button {
     for (const b of document.querySelectorAll(".range button"))
       b.setAttribute("aria-pressed", String(Number(b.dataset.days) === days));
     show("loading");
-    const key = store.get(KEY);
+    const t = signInNeeded ? token() : null;
+    const name = t && (claims(t).preferred_username || claims(t).name);
+    $("who").textContent = name || "";
+    $("who").hidden = $("signOut").hidden = !t;
+    if (signInNeeded && !t) {
+      // Signed in before: Microsoft usually still knows them, so go without a click.
+      if (store.get(SIGNED_IN) && !failed) return signIn({ silent: true });
+      return show("signin");
+    }
     let res;
     try {
-      res = await fetch(`/count/stats?days=${days}`, { headers: key ? { "x-functions-key": key } : {}, cache: "no-store" });
+      res = await fetch(`/count/stats?days=${days}`, { headers: t ? { Authorization: `Bearer ${t}` } : {}, cache: "no-store" });
     } catch (e) {
       $("error").textContent = "Couldn't reach the stats: " + e.message;
       return show("error");
     }
-    // Locally the stats need no key; deployed, a missing or wrong one is a 401.
-    $("forget").hidden = !key;
-    if (res.status === 401 || res.status === 403) {
-      $("keyError").hidden = !key;
-      store.del(KEY);
-      $("forget").hidden = true;
-      show("key");
-      return $("key").focus();
+    if (res.status === 401) {
+      tab.del(TOKEN);
+      failed = true;
+      $("who").hidden = $("signOut").hidden = true;
+      $("signInError").textContent = "That sign-in wasn't accepted. Sign in again.";
+      $("signInError").hidden = false;
+      return show("signin");
+    }
+    if (res.status === 403) {
+      $("notReaderName").textContent = name || "That account";
+      return show("notReader");
     }
     if (!res.ok) {
       $("error").textContent = `The stats answered ${res.status}.`;
@@ -342,19 +431,24 @@ form.key button {
     store.set(DAYS, String(days));
     load();
   });
-  $("keyForm").addEventListener("submit", e => {
-    e.preventDefault();
-    store.set(KEY, $("key").value.trim());
-    $("key").value = "";
-    load();
-  });
-  $("forget").addEventListener("click", () => { store.del(KEY); $("keyError").hidden = true; load(); });
+  $("signIn").addEventListener("click", () => signIn());
+  $("other").addEventListener("click", () => { tab.del(TOKEN); signIn({ pick: true }); });
+  $("signOut").addEventListener("click", signOut);
   let resized;
   addEventListener("resize", () => {
     clearTimeout(resized);
     resized = setTimeout(() => { if (data && !$("stats").hidden) render(); }, 150);
   });
-  load();
+  // A failed sign-in shows its error and the button, rather than trying again by itself.
+  let failed = false;
+  (signInNeeded ? finishSignIn() : Promise.resolve(null)).then(error => {
+    if (error !== null) {
+      failed = true;
+      $("signInError").textContent = error;
+      $("signInError").hidden = !error;
+    }
+    load();
+  });
 })();
 </script>
 </body>

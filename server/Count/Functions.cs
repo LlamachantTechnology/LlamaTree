@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Llamachant.Count;
 
-internal sealed class Functions(CountStore store, TimeProvider clock, ILogger<Functions> log)
+internal sealed class Functions(CountStore store, SignIn signIn, TimeProvider clock, ILogger<Functions> log)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -31,14 +31,22 @@ internal sealed class Functions(CountStore store, TimeProvider clock, ILogger<Fu
     }
 
     /// <summary>
-    /// GET /stats?days=30 (with the function key), as JSON: users in the whole period and per day (and per hour for a
-    /// week or less), the projects and sessions they had open, and their versions and systems. Up to
-    /// <see cref="CountStore.KeepDays"/> days, ending today.
+    /// GET /stats?days=30, signed in (<see cref="SignIn"/>), as JSON: users in the whole period and per day (and per hour
+    /// for a week or less), the projects and sessions they had open, and their versions and systems. Up to
+    /// <see cref="CountStore.KeepDays"/> days, ending today. Without a valid sign-in it's a 401; signed in by someone
+    /// who isn't a reader, a 403.
     /// </summary>
     [Function("count-stats")]
     public async Task<HttpResponseData> StatsAsync(
-        [HttpTrigger(AuthorizationLevel.Function, "get", Route = "count/stats")] HttpRequestData request, CancellationToken ct)
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "count/stats")] HttpRequestData request, CancellationToken ct)
     {
+        var authorization = request.Headers.TryGetValues("Authorization", out var values) ? values.FirstOrDefault() : null;
+        switch (await signIn.CheckAsync(authorization, ct))
+        {
+            case Access.SignInNeeded: return request.CreateResponse(HttpStatusCode.Unauthorized);
+            case Access.NotAReader: return request.CreateResponse(HttpStatusCode.Forbidden);
+        }
+
         var q = System.Web.HttpUtility.ParseQueryString(request.Url.Query);
         var days = int.TryParse(q["days"], out var n) ? Math.Clamp(n, 1, CountStore.KeepDays) : 30;
         var to = Today;
@@ -53,8 +61,8 @@ internal sealed class Functions(CountStore store, TimeProvider clock, ILogger<Fu
     }
 
     /// <summary>
-    /// GET /dashboard: a page that charts <c>/stats</c>. The page itself holds no numbers, so anyone may load it; it asks
-    /// for the stats key, keeps it in that browser and sends it as <c>x-functions-key</c>.
+    /// GET /dashboard: a page that charts <c>/stats</c>. The page itself holds no numbers, so anyone may load it; it signs
+    /// the reader in with Microsoft and sends the stats their ID token.
     /// </summary>
     [Function("count-dashboard")]
     public async Task<HttpResponseData> DashboardAsync(
@@ -67,7 +75,7 @@ internal sealed class Functions(CountStore store, TimeProvider clock, ILogger<Fu
         response.Headers.Add("Referrer-Policy", "no-referrer");
         response.Headers.Add("X-Robots-Tag", "noindex, nofollow");
         response.Headers.Add("Cache-Control", "no-cache");
-        await response.WriteStringAsync(Dashboard.Html, ct);
+        await response.WriteStringAsync(Dashboard.For(signIn), ct);
         return response;
     }
 
