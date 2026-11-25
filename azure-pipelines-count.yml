@@ -11,6 +11,9 @@
 #       CountResourceGroup   the existing resource group to deploy into
 #       CountAppName         the function app's name (globally unique)
 #       CountStorageAccount  a new storage account's name for it (3-24 lower-case letters and digits, globally unique)
+#       CountClientId        the Application (client) ID of the app registration readers sign in with
+#       CountReaders         who may read the stats: Microsoft sign-in names, separated by commas
+#     (server/README.md, "Reading the numbers", sets up the app registration.)
 #   - The Azure Resource Manager service connection named in azureConnection below, permitted for this pipeline, whose
 #     identity has Contributor on that resource group.
 # The agent needs the .NET 10 SDK and the Azure CLI.
@@ -70,7 +73,8 @@ steps:
         scriptLocation: inlineScript
         inlineScript: |
           az deployment group create --resource-group "$(CountResourceGroup)" --template-file server/count.bicep `
-            --parameters appName="$(CountAppName)" storageName="$(CountStorageAccount)" --query properties.outputs.hostName.value -o tsv
+            --parameters appName="$(CountAppName)" storageName="$(CountStorageAccount)" `
+              signInClientId="$(CountClientId)" readers="$(CountReaders)" --query properties.outputs.hostName.value -o tsv
           if ($LASTEXITCODE) { throw 'Deploying count.bicep failed.' }
 
     - task: AzureFunctionApp@2

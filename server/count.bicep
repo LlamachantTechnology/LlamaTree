@@ -18,6 +18,15 @@ param location string = resourceGroup().location
 @description('The most instances the app may scale to: a ceiling on cost if the address is flooded.')
 param maximumInstanceCount int = 40
 
+@description('The Entra ID tenant whose people sign in to read the stats.')
+param signInTenantId string = tenant().tenantId
+
+@description('The Application (client) ID of the app registration the dashboard signs in with. Empty: no one can read the stats.')
+param signInClientId string = ''
+
+@description('Who may read the stats: their Microsoft sign-in names, separated by commas.')
+param readers string = ''
+
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageName
   location: location
@@ -75,6 +84,9 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'AzureWebJobsStorage', value: connection }
         { name: 'DEPLOYMENT_STORAGE_CONNECTION_STRING', value: connection }
         { name: 'COUNT_STORAGE', value: connection }
+        { name: 'COUNT_TENANT_ID', value: signInTenantId }
+        { name: 'COUNT_CLIENT_ID', value: signInClientId }
+        { name: 'COUNT_READERS', value: readers }
       ]
     }
     functionAppConfig: {
