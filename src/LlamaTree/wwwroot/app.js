@@ -1848,7 +1848,7 @@ function syncSessions(list, projects) {
 function createSession(info) {
   const s = {
     ...info, running: false, started: false, exitCode: null, title: '', git: null,
-    attention: false, asking: false, act: { lastOut: 0, lastIn: 0, burstStart: 0, state: 'idle', workingSince: 0, drawnAt: 0, readAt: 0 },
+    attention: false, asking: false, act: { lastOut: 0, lastIn: 0, burstStart: 0, state: 'idle', workingSince: 0, drawnAt: 0, readAt: 0, resizedAt: -1e9, typed: '', compacting: false, forMessages: false, waitingBefore: false },
     log: null, selectedCommit: null, commitInfo: null, commitDraft: '', info: null, collapsed: new Set(),
   };
 
@@ -1932,7 +1932,9 @@ function createSession(info) {
     s.act.lastIn = performance.now();
     // Enter gives it something to do. Not just any input: xterm answers the terminal's own queries (which Claude sends
     // as it starts) through here too.
-    if (data.includes('\r')) s.act.starting = false;
+    // A prompt of yours makes the turn yours, even one LlamaTree started for messages from another session.
+    if (data.includes('\r')) { s.act.starting = false; s.act.forMessages = false; }
+    noteTyped(s, data);
     post({ type: 'input', id: s.id, data });
   });
   term.onResize(() => syncPtySize(s));
@@ -2020,6 +2022,7 @@ function syncPtySize(s) {
   const { cols, rows } = s.term;
   if (s.ptySize?.cols === cols && s.ptySize?.rows === rows) return;
   s.ptySize = { cols, rows };
+  s.act.resizedAt = performance.now();
   post({ type: 'resize', id: s.id, cols, rows });
 }
 
@@ -2120,7 +2123,7 @@ function reportState(s, reported) {
   } else a.state = 'idle';
   setAsking(s, reported === 'blocked');
   if (reported === 'working' && s.attention) setAttention(s, false);
-  else if (reported === 'done' && was === 'working' && !s.replaying && !isOpen(s)) setAttention(s, true);
+  else if (reported === 'done' && was === 'working' && !s.replaying && turnEnded(s)) setAttention(s, true);
   else if (a.state !== was) renderTileState(s);
 }
 
@@ -2131,6 +2134,10 @@ function noteActivity(s) {
   const now = performance.now();
   const a = s.act;
   if (now - a.lastIn < 400 || s.reportsState) { a.lastOut = now; return; }   // echo of our own typing
+  // Output straight after a resize is the program redrawing its screen at the new size (Claude reprints its
+  // conversation; the host has every session redraw when a window opens), not work. It's taken as that while it keeps
+  // coming, for a few seconds at most, so work that starts then still shows.
+  if (now - a.resizedAt < REDRAW_MAX_MS && now - Math.max(a.lastOut, a.resizedAt) < REDRAW_GAP_MS) { a.lastOut = now; return; }
   if (a.state !== 'working') {
     if (now - a.lastOut > 1500) a.burstStart = now;
     if (now - a.burstStart > 1200) {
@@ -2155,10 +2162,12 @@ setInterval(() => {
     if (a.state === 'working' && !s.reportsState && now - a.lastOut > 2500) {
       a.state = 'idle';
       // The output a program writes as it starts (Claude's start-up, a dev server's build) isn't a turn finished: it's
-      // ready, not waiting for you. Once it's been given something to do (see term.onData), quiet means your turn.
-      const startUp = a.starting;
-      a.starting = false;
-      if (!startUp && now - a.workingSince > 4000 && !isOpen(s)) setAttention(s, true);
+      // ready, not waiting for you. Once it's been given something to do (see term.onData), quiet means your turn. An
+      // agent can start in more than one burst (drawn, then again once its tools have loaded), so it's starting until
+      // it's given something; any other program, only until it first goes quiet.
+      const startUp = a.starting, ends = turnEnded(s);
+      if (!agentOf(s.command)) a.starting = false;
+      if (ends === 'still' || (ends && !startUp && now - a.workingSince > 4000)) setAttention(s, true);
       else renderTileState(s);
     }
     // Once the screen has settled after new output has been drawn (mid-redraw it can be half drawn), see whether the
@@ -2180,7 +2189,51 @@ setInterval(() => {
 /** Presses Enter in the session for LlamaTree (sending a prompt or a notice typed into it): it now has something to do. */
 function pressEnter(s) {
   s.act.starting = false;
+  noteTyped(s, '\r');
   post({ type: 'input', id: s.id, data: '\r' });
+}
+
+/**
+ * A turn has just ended: whether that leaves the session waiting for you. Not while you're looking at it; not after
+ * a compaction (it leaves nothing to answer); and not after a turn LlamaTree started by telling it of messages from
+ * another session (see relayNotify), as that was for the other session, which got its reply through send_message.
+ * If it was waiting for you before those messages came, it still is ('still').
+ */
+function turnEnded(s) {
+  const a = s.act, compacted = a.compacting, messages = a.forMessages;
+  a.compacting = false;
+  a.forMessages = false;
+  if (isOpen(s)) return false;
+  if (messages) return a.waitingBefore ? 'still' : false;
+  return !compacted;
+}
+
+// How long output after a resize can be taken as a redraw (see noteActivity): in all, and the gap that ends it.
+const REDRAW_MAX_MS = 4000;
+const REDRAW_GAP_MS = 1000;
+
+/**
+ * Follows the line typed at an agent's prompt (by you, or pasted by LlamaTree), so that when Enter sends its compact
+ * command (/compact, with or without instructions, or enough of it for its menu to pick it) the quiet after isn't taken
+ * for a turn that wants your answer.
+ */
+function noteTyped(s, data) {
+  const a = s.act;
+  // Paste brackets and other escape sequences (arrow keys, focus reports) aren't typed text.
+  const text = data.replace(/\x1b(?:\[[0-9;?]*[ -/]*[@-~]|O.|.)/g, '');
+  for (const ch of text) {
+    if (ch === '\r') { a.compacting = isCompactLine(s, a.typed); a.typed = ''; }
+    else if (ch === '\x7f' || ch === '\b') a.typed = a.typed.slice(0, -1);
+    else if (ch === '\x03' || ch === '\x15') a.typed = '';   // Ctrl+C, Ctrl+U
+    else if (ch >= ' ') a.typed += ch;
+  }
+  if (a.typed.length > 200) a.typed = a.typed.slice(-200);
+}
+
+function isCompactLine(s, line) {
+  const compact = agentOf(s.command)?.compact;
+  const t = line.trim();
+  return !!compact && (t === compact || t.startsWith(compact + ' ') || (t.length >= 5 && compact.startsWith(t)));
 }
 
 function setAttention(s, on) {
@@ -10776,6 +10829,9 @@ function relayNotify(s) {
   const names = [...(relay.from[s.id] ?? [])].map((id) => `"${relayName(id)}"`);
   const text = `[LlamaTree] ${n === 1 ? 'A message has' : `${n} messages have`} come from ${names.length ? names.join(' and ') : 'another session'}. Read ${n === 1 ? 'it' : 'them'} with the read_messages tool, and answer with send_message: the sender doesn't see what you write here.`;
   s.term.paste(text);
+  // The turn this starts answers the other session, so its end doesn't flag this one (see turnEnded).
+  s.act.forMessages = true;
+  s.act.waitingBefore = s.attention;
   enterAfterTyping(s, () => noticeInPrompt(s));
 }
 
