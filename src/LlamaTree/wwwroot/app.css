@@ -880,20 +880,134 @@ textarea.commit-msg { resize: vertical; min-height: 54px; height: 54px; user-sel
 /* repository view */
 .repo-split { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .repo-log { flex: 1 1 55%; overflow: auto; min-height: 60px; }
+/* The commit graph's lanes: the first is the theme's graph colour, the rest a fixed set that reads on dark, or on light. */
+.repo-log { --lane-0: var(--graph); --lane-1: #d08bd9; --lane-2: #5fb88a; --lane-3: #e0a458; --lane-4: #4fb6c9; --lane-5: #e07a7a; --lane-6: #a3b85c; --lane-7: #9a8cf0; }
+:root[data-theme="light"] .repo-log { --lane-1: #a64fb3; --lane-2: #2e8a5a; --lane-3: #b87418; --lane-4: #1f8799; --lane-5: #c04545; --lane-6: #6b8020; --lane-7: #5b4bd6; }
 .repo-details { flex: 1 1 45%; overflow: auto; border-top: 1px solid var(--border); min-height: 60px; user-select: text; }
-.commit-row { display: flex; align-items: center; gap: 6px; height: 24px; padding-right: 8px; cursor: pointer; white-space: nowrap; border: 1px solid transparent; }
+/* No border on the rows: the graph's lines run edge to edge, so a selected row is outlined with an inset shadow. */
+.commit-row { display: flex; align-items: center; gap: 6px; height: 24px; padding-right: 8px; cursor: pointer; white-space: nowrap; }
 .commit-row:hover { background: var(--hover); }
-.commit-row.selected { background: var(--select); border-color: var(--focus); }
-.graph { width: 22px; align-self: stretch; position: relative; flex: none; }
-.graph::before { content: ""; position: absolute; left: 10px; top: 0; bottom: 0; width: 2px; background: var(--graph); }
-.graph::after { content: ""; position: absolute; left: 6px; top: 7px; width: 10px; height: 10px; border-radius: 50%; background: var(--panel); border: 2px solid var(--graph); box-sizing: border-box; }
-.commit-row.outgoing .graph::after { border-color: var(--accent); background: var(--accent); }
-.commit-row:first-of-type .graph::before { top: 12px; }
+.commit-row.selected { background: var(--select); box-shadow: inset 0 0 0 1px var(--focus); }
+.graph { align-self: stretch; flex: none; overflow: hidden; }
+.graph svg { display: block; }
+.graph path { fill: none; stroke-width: 2; }
+.graph circle { stroke-width: 2; }
+.repo-scope { display: flex; align-items: center; gap: 8px; position: sticky; top: 0; z-index: 1; background: var(--panel); padding-bottom: 4px; }
+.repo-scope-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A merge, as the branch it brought in (in its line's colour) and its pull request's number; a merged branch's name. */
+/* Not a pill: pills are branches and tags at a commit, and a merge says what came in. */
+.merge-chip { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--text-dim); max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.merge-chip b { font-weight: 600; color: var(--c); }
+.merge-chip svg.ic { width: 13px; height: 13px; color: var(--c); flex: none; }
+.pr-num { font-size: 11px; color: var(--text-dim); flex: none; }
+.ref-gone { font-size: 11px; font-style: italic; flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+
+/* Finding and opening branches; an open branch's rows and summary in the Main graph */
+.focusable { cursor: pointer; }
+.ref.focusable:hover, .ref-gone.focusable:hover, .merge-chip.focusable:hover b, .if-name.focusable:hover { text-decoration: underline; }
+.branch-find { display: flex; align-items: center; gap: 6px; margin: 0 8px 4px; padding: 0 8px; height: 26px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-2); color: var(--text-dim); }
+.branch-find:focus-within { border-color: var(--focus); }
+.branch-find svg.ic { width: 13px; height: 13px; flex: none; }
+.branch-finder { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--text); font: inherit; font-size: 12.5px; }
+.focus-title { color: var(--text); font-weight: 600; font-size: 13px; box-shadow: inset 3px 0 0 var(--c); padding-left: 8px; margin-bottom: 2px; }
+.focus-head { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; font-size: 12.5px; }
+.focus-head svg.ic { width: 13px; height: 13px; margin-right: 5px; vertical-align: -2px; }
+.focus-took { color: var(--text-dim); font-style: italic; }
+.repo-log.drill .chev { display: inline-flex; flex: none; width: 14px; justify-content: center; color: var(--text-dim); }
+.repo-log.drill .chev svg { width: 12px; height: 12px; }
+.focus-fold { color: var(--text-dim); }
+.focus-fold:hover { color: var(--text); }
+.focus-main .commit-subject { color: var(--text-dim); }
+.focus-mine .commit-subject { color: var(--text); }
+.focus-note { flex: none; font-size: 11px; font-style: italic; color: var(--text-dim); }
+.focus-overlap { flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--attention); }
+.focus-overlap svg.ic { width: 12px; height: 12px; }
+.focus-refold { flex: none; display: inline-flex; align-items: center; gap: 2px; font: inherit; font-size: 10.5px; padding: 0 5px 0 2px; border-radius: 8px; border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; }
+.focus-refold svg.ic { width: 10px; height: 10px; }
+.focus-refold:hover { color: var(--text); background: var(--hover); }
+button.if-name { font: inherit; font-size: 12.5px; background: none; border: none; padding: 0; color: var(--text); text-align: left; }
+
+/* The Main graph */
+.drill-dot { cursor: pointer; }
+.graph svg .dot-sign { stroke-width: 1.6; stroke-linecap: round; fill: none; }
+.drill-dot:hover svg .dot-expand { stroke-width: 2.5; }
+.drill-dot:hover svg .dot-sign { stroke-width: 2.2; }
+.drill-open { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 0 8px 6px; }
+.drill-tools { display: flex; align-items: center; gap: 8px; padding: 0 8px 6px; min-height: 22px; }
+.drill-tools-gap { flex: 1; }
+.drill-open-toggle { display: inline-flex; align-items: center; gap: 3px; min-width: 0; font: inherit; font-size: 12px; padding: 1px 6px 1px 2px; border: none; border-radius: 4px; background: none; color: var(--text); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.drill-open-toggle:hover { background: var(--hover); }
+.drill-open-toggle svg.ic { width: 12px; height: 12px; flex: none; color: var(--text-dim); }
+.drill-open { max-height: 76px; overflow-y: auto; }
+.drill-chip { font: inherit; font-size: 11.5px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.drill-chip:hover { color: var(--text); background: var(--hover); }
+.drill-chip.on { color: var(--text); border-color: var(--c); background: color-mix(in srgb, var(--c) 22%, transparent); }
+.drill-chip.small { flex: none; font-size: 10.5px; padding: 0 6px; }
+.drill-starts { flex: none; font-size: 11px; }
+.drill-more { padding: 8px 10px; }
+.ref .ref-close { display: inline-flex; vertical-align: -2px; margin-left: 4px; padding: 0; border: none; background: none; color: inherit; opacity: .6; cursor: pointer; }
+.ref .ref-close:hover { opacity: 1; }
+.ref .ref-close svg.ic { width: 10px; height: 10px; }
+.ref.selected-branch { outline: 1px solid var(--focus); }
+
+/* In flight */
+.inflight, .repo-log.inflight { padding-bottom: 12px; }
+.repo-log { --kind-feature: #c58af0; --kind-fix: #e0a458; --kind-docs: #4fb6c9; --kind-chore: #5fb88a; --kind-release: #e6c86e; --kind-other: var(--graph); }
+:root[data-theme="light"] .repo-log { --kind-feature: #8a46b8; --kind-fix: #b06a10; --kind-docs: #1f8799; --kind-chore: #2e8a5a; --kind-release: #96700e; }
+.inflight-busy { display: inline-flex; opacity: 0; color: var(--text-dim); }
+.inflight-busy.on { opacity: 1; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.if-head { display: flex; gap: 4px; padding: 10px 10px 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; color: var(--text-dim); }
+.if-head .count { font-weight: 400; }
+.if-landed { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; white-space: nowrap; }
+.if-more { padding: 2px 10px; color: var(--text-dim); font-size: 12px; }
+.if-actions { padding: 4px 10px 0; }
+.if-note { margin: 8px 10px 0; padding: 6px 8px; border-radius: 4px; background: var(--info-bg); border: 1px solid var(--info-border); font-size: 12px; }
+.if-clash, .if-step { display: flex; align-items: center; gap: 5px; padding: 3px 10px; min-height: 22px; font-size: 12.5px; white-space: nowrap; overflow: hidden; }
+.if-clash svg.ic { width: 13px; height: 13px; flex: none; color: var(--text-dim); }
+.if-clash.bad svg.ic, .if-bad, .if-bad svg.ic { color: var(--attention); }
+.if-clash b, .if-step b, .if-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.if-files { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; }
+.if-n { flex: none; width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 600; background: var(--hover-strong); }
+.if-n.bad { background: var(--attention); color: var(--panel); }
+.if-card { margin: 0 8px 6px; padding: 6px 8px 6px 10px; border-radius: 5px; background: var(--panel-2); border-left: 3px solid var(--kind-other); display: flex; flex-direction: column; gap: 3px; }
+.if-card.kind-feature { border-left-color: var(--kind-feature); }
+.if-card.kind-fix { border-left-color: var(--kind-fix); }
+.if-card.kind-docs { border-left-color: var(--kind-docs); }
+.if-card.kind-chore { border-left-color: var(--kind-chore); }
+.if-card.kind-release { border-left-color: var(--kind-release); }
+.if-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; min-width: 0; }
+.if-line svg.ic { width: 12px; height: 12px; margin-right: 3px; vertical-align: -2px; }
+.if-meta { color: var(--text-dim); }
+.if-dim { color: var(--text-dim); }
+.if-ok, .if-ok svg.ic { color: var(--ok); }
+.if-warnish { color: var(--working); }
+.if-spacer { flex: 1; }
+.if-more-btn { width: 20px; height: 20px; padding: 0; }
+.if-next { flex-wrap: nowrap; gap: 8px; }
+.if-status { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text); }
+.if-status.bad { color: var(--attention); }
+.if-status.warn { color: var(--working); }
+.if-status.ok { color: var(--ok); }
+.if-action { flex: none; font-size: 12px; padding: 2px 10px; }
+.if-session { display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 11.5px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; }
+.if-session:hover { background: var(--hover); }
+.scope-switch { display: inline-flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; flex: none; }
+.scope-btn { background: none; border: none; color: var(--text-dim); font: inherit; text-transform: none; letter-spacing: 0; font-weight: 500; padding: 1px 8px; cursor: pointer; }
+.scope-btn:hover { color: var(--text); background: var(--hover); }
+.scope-btn.active { color: var(--text); background: var(--select); }
+.scope-btn:disabled { opacity: .45; cursor: default; background: none; color: var(--text-dim); }
+.scope-actions .scope-btn + .scope-btn { border-left: 1px solid var(--border); }
 .commit-subject { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
 .commit-meta { color: var(--text-dim); flex: none; }
 .ref { font-size: 10.5px; padding: 0 5px; border-radius: 3px; background: var(--ref-bg); color: var(--ref-fg); flex: none; }
 .ref.head { background: var(--ref-head-bg); color: var(--ref-head-fg); }
 .ref.tag { background: var(--ref-tag-bg); color: var(--ref-tag-fg); }
+/* In the graph: the branch that owns the line, tinted with its colour; any other at the same commit, outlined only. */
+.ref.own { background: color-mix(in srgb, var(--c) 26%, transparent); color: var(--text); box-shadow: inset 3px 0 0 var(--c); padding-left: 7px; }
+.ref.plain { background: transparent; color: var(--text-dim); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.ref.head::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: var(--ref-head-fg); vertical-align: 1px; }
+.ref-remote svg.ic { width: 11px; height: 11px; margin-left: 4px; vertical-align: -2px; opacity: .8; }
 .group-label { padding: 6px 8px 2px; color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .3px; }
 .details-head { padding: 8px 10px; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
 .details-head .k { color: var(--text-dim); }

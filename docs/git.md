@@ -64,9 +64,16 @@ Repositories without such settings, such as a plain clone, never ask.
 
 ## Git Repository
 
-Outgoing commits and history, with each commit's files. Click a file for that commit's diff.
+The history as a commit graph, with each commit's files. Click a file for that commit's diff.
 
 ![Git Repository with outgoing commits and history](images/history.png)
+
+The switch above the list chooses what it shows (remembered):
+
+- **main** (the default, named after the repository's main branch: *main*, *master* or whatever `origin/HEAD` points at): that branch's own line, one row per merge. A merge whose dot shows **+** opens the branch it brought in as a line beside main (**−** hides it again), and so do the branches not merged yet, under **Open branches**, or any branch by name in **Find a branch**. **Expand all** opens every branch not merged yet; **Collapse all** hides them all. Once a branch is open, the stretches of main in between fold into one row each; click one to unfold it. The current branch starts open. Without a main or master branch, this is the current branch's history instead.
+- **Everything**: every local and remote branch and tag, newest first. Each branch has its own coloured line from where it forks off to where it's merged. A merge is a small dot where two lines meet.
+
+Branch and tag badges sit on the commit they point at, edged in the colour of their line. A branch that matches its remote branch shows one badge with a cloud. Outgoing commits, not pushed yet, have hollow dots, and their count shows beside the heading.
 
 ## Pull requests
 

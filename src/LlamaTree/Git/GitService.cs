@@ -38,7 +38,8 @@ internal sealed record GitStatus(
     public RepoTrustInfo? Trust { get; init; }
 }
 
-internal sealed record CommitInfo(string Sha, string ShortSha, string Author, string Date, string Subject, string Refs, bool Outgoing);
+internal sealed record CommitInfo(string Sha, string ShortSha, string Author, string Date, string Subject, string Refs, bool Outgoing,
+    IReadOnlyList<string> Parents);
 
 /// <param name="Prunable">Git still lists the worktree but its folder is gone.</param>
 internal sealed record WorktreeInfo(string Path, string? Branch, bool Bare, bool Prunable = false);
@@ -387,21 +388,33 @@ internal static class GitService
         _ => c.ToString(),
     };
 
-    public static async Task<List<CommitInfo>> GetLogAsync(string dir, int max = 300)
+    /// <summary>
+    /// The history, newest first, with each commit's parents so the client can draw the graph. With
+    /// <paramref name="allBranches"/>, every local and remote branch and every tag is followed as well as HEAD, in date
+    /// order (a child always before its parents), so branches not merged yet show beside the current one.
+    /// </summary>
+    public static async Task<List<CommitInfo>> GetLogAsync(string dir, bool allBranches = false, int max = 300)
     {
         var outgoing = new HashSet<string>();
         var up = await RunAsync(dir, ["rev-list", "@{upstream}..HEAD"]);
         if (up.Ok)
             foreach (var sha in up.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries)) outgoing.Add(sha.Trim());
 
-        var r = await RunAsync(dir, ["log", $"-n{max}", "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%D%x1e", "HEAD"]);
+        // Full ref names (refs/heads/…, refs/remotes/…, refs/tags/…) tell a local branch from a remote one, which a short
+        // name can't (a local branch may be called origin/x).
+        List<string> args = ["log", $"-n{max}", "--decorate=full", "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%D%x1f%P%x1e"];
+        // A remote's HEAD only names another of its branches: leaving it out keeps it from doubling that branch's badge.
+        if (allBranches) args.AddRange(["--date-order", "--decorate-refs-exclude=refs/remotes/*/HEAD", "--branches", "--remotes", "--tags"]);
+        args.Add("HEAD");
+        var r = await RunAsync(dir, args);
         var list = new List<CommitInfo>();
         if (!r.Ok) return list;
         foreach (var rec in r.Text.Split('\x1e', StringSplitOptions.RemoveEmptyEntries))
         {
             var f = rec.Trim('\n', '\r').Split('\x1f');
-            if (f.Length < 6) continue;
-            list.Add(new CommitInfo(f[0], f[1], f[2], f[3], f[4], f[5], outgoing.Contains(f[0])));
+            if (f.Length < 7) continue;
+            list.Add(new CommitInfo(f[0], f[1], f[2], f[3], f[4], f[5], outgoing.Contains(f[0]),
+                f[6].Split(' ', StringSplitOptions.RemoveEmptyEntries)));
         }
         return list;
     }
@@ -508,7 +521,7 @@ internal static class GitService
     }
 
     /// <summary>Commits on <paramref name="branch"/> not on <paramref name="baseBranch"/>, and the other way round; (0, 0) if git couldn't say.</summary>
-    private static async Task<(int Ahead, int Behind)> AheadBehindAsync(string dir, string baseBranch, string branch)
+    internal static async Task<(int Ahead, int Behind)> AheadBehindAsync(string dir, string baseBranch, string branch)
     {
         var r = await RunAsync(dir, ["rev-list", "--left-right", "--count", "--end-of-options", baseBranch + "..." + branch, "--"]);
         var parts = r.Ok ? r.Text.Trim().Split(['\t', ' '], StringSplitOptions.RemoveEmptyEntries) : [];
@@ -1196,6 +1209,26 @@ internal static class GitService
         return remote == null
             ? Failed("This repository has no remote to push to.")
             : await RunRemoteAsync(dir, ["push", "--set-upstream", "--end-of-options", remote, "HEAD"]);
+    }
+
+    /// <summary>
+    /// Pushes a local branch that needn't be checked out here (In flight's Push, for another worktree's branch): to its
+    /// upstream when it has one, else to the default remote under its own name, which becomes its upstream. Never forced.
+    /// </summary>
+    public static async Task<GitResult> PushBranchAsync(string dir, string branch)
+    {
+        if (await TrustGateAsync(dir, "push") is { } refused) return refused;
+        if (branch.StartsWith('-') || !(await RunAsync(dir, ["rev-parse", "--verify", "--quiet", "refs/heads/" + branch])).Ok)
+            return Failed($"There's no local branch named \"{branch}\".");
+        var upstream = (await RunAsync(dir, ["config", "--get", $"branch.{branch}.remote"])).Text.Trim();
+        var merge = (await RunAsync(dir, ["config", "--get", $"branch.{branch}.merge"])).Text.Trim();
+        // A full refspec, so the branch name is never read as an option or a pattern.
+        if (upstream.Length > 0 && upstream != "." && merge.StartsWith("refs/heads/"))
+            return await RunRemoteAsync(dir, ["push", "--end-of-options", upstream, $"refs/heads/{branch}:{merge}"]);
+        var remote = await DefaultRemoteAsync(dir);
+        return remote == null
+            ? Failed("This repository has no remote to push to.")
+            : await RunRemoteAsync(dir, ["push", "--set-upstream", "--end-of-options", remote, $"refs/heads/{branch}:refs/heads/{branch}"]);
     }
 
     /// <summary>"origin" if it exists, otherwise the first remote, or null when there are none.</summary>

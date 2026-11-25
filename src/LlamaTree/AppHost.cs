@@ -1661,7 +1661,36 @@ internal sealed partial class AppHost
                     OptStr(msg, "origPath"), OptStr(msg, "commit"), OptStr(msg, "parent"));
 
             case "git.log":
-                return await GitService.GetLogAsync(GitDir(msg));
+                return await GitService.GetLogAsync(GitDir(msg), Bool(msg, "all"));
+
+            case "git.focus":
+                return await BranchFocusService.GetAsync(GitDir(msg), OptStr(msg, "ref"), OptStr(msg, "merge"), OptStr(msg, "name"))
+                    ?? throw new InvalidOperationException("No branch by that name, open or merged into the main branch.");
+
+            case "git.focusMany":
+            {
+                var refs = msg.TryGetProperty("refs", out var rs) && rs.ValueKind == JsonValueKind.Array
+                    ? rs.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToList() : [];
+                return await BranchFocusService.GetManyAsync(GitDir(msg), refs);
+            }
+
+            case "git.mainline":
+            {
+                var include = msg.TryGetProperty("include", out var inc) && inc.ValueKind == JsonValueKind.Array
+                    ? inc.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToList() : [];
+                var count = msg.TryGetProperty("count", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetInt32() : 300;
+                return await MainLineService.GetAsync(GitDir(msg), count, include);
+            }
+
+            case "git.inflight":
+            {
+                // seen: { "<main worktree path>": "<commit id>" }, what the page remembers "since you last looked" by.
+                var seen = new Dictionary<string, string>();
+                if (msg.TryGetProperty("seen", out var map) && map.ValueKind == JsonValueKind.Object)
+                    foreach (var kv in map.EnumerateObject())
+                        if (kv.Value.ValueKind == JsonValueKind.String) seen[kv.Name] = kv.Value.GetString()!;
+                return await InFlightService.GetAsync(GitDir(msg), seen: seen);
+            }
 
             case "git.commitDetails":
                 return await GitService.GetCommitDetailsAsync(GitDir(msg), Str(msg, "sha"));
@@ -1815,6 +1844,34 @@ internal sealed partial class AppHost
                     newUrl = host.NewPullRequestUrl(branch),
                     pr = pr == null ? null : new { number = pr.Number, title = pr.Title, url = pr.Url, draft = pr.IsDraft },
                 };
+            }
+            case "git.branchPr":
+            {
+                // In flight: the open pull request for any branch (not only the session's), and the link to open one.
+                var root = GitDir(msg);
+                var branch = Str(msg, "branch");
+                var host = await PullRequestService.GetHostAsync(root, branch);
+                if (host == null) return null;
+                PullRequestInfo? pr = null;
+                try { pr = await PullRequestService.FindAsync(host, branch); }
+                catch (Exception) { /* offline, timed out or refused: no pull request shown */ }
+                return new
+                {
+                    branch,
+                    host = host.IsGitHub ? "GitHub" : "Azure DevOps",
+                    newUrl = host.NewPullRequestUrl(branch),
+                    pr = pr == null ? null : new { number = pr.Number, title = pr.Title, url = pr.Url, draft = pr.IsDraft },
+                };
+            }
+            case "git.pushBranch":
+            {
+                var s = Get(msg);
+                var result = await GitService.PushBranchAsync(GitDir(msg), Str(msg, "branch"));
+                NeedsTrust(result);
+                foreach (var x in sessions.Values) _ = x.RefreshStatusAsync();   // whichever worktree has it checked out
+                var text = string.Join('\n', new[] { result.Error, result.Text.Trim() }.Where(t => !string.IsNullOrWhiteSpace(t)));
+                if (!result.Ok) throw new InvalidOperationException(text.Length > 0 ? text : "push failed");
+                return text;
             }
             case "git.fetch":
             case "git.pull":
