@@ -8,8 +8,8 @@ using System.Text.RegularExpressions;
 namespace LlamaTree.Updates;
 
 /// <param name="Sha256">What the installer must hash to: GitHub's own digest of the file, or else the one in the notes.</param>
-/// <param name="ForThisMachine">Whether the asset is the one this copy installs itself from (on macOS, or a Linux release
-/// without its packages, it is the Windows installer, there only to say the release exists).</param>
+/// <param name="ForThisMachine">Whether the asset is the one this copy installs itself from (for a release without this
+/// platform's file, it is the Windows installer, there only to say the release exists).</param>
 /// <param name="ChecksumsUrl">The release's SHA256SUMS, and <paramref name="ChecksumsSignatureUrl"/> our signature of it
 /// (SHA256SUMS.p7s); null when the release doesn't carry them.</param>
 internal sealed record UpdateInfo(Version Version, string Name, string PageUrl, string Notes, string AssetName, string AssetUrl, long Size, string? Sha256,
@@ -62,9 +62,10 @@ internal static partial class UpdateService
     public static InstallKind Install => install.Value;
 
     private static readonly Lazy<InstallKind> install = new(() =>
-        OperatingSystem.IsWindows() ? InstallKind.Windows : OperatingSystem.IsLinux() ? LinuxUpdate.Detect() : InstallKind.None);
+        OperatingSystem.IsWindows() ? InstallKind.Windows : OperatingSystem.IsLinux() ? LinuxUpdate.Detect()
+        : OperatingSystem.IsMacOS() ? MacUpdate.Detect() : InstallKind.None);
 
-    /// <summary>Whether an update can install itself; otherwise (macOS for now) the dialog links the release page.</summary>
+    /// <summary>Whether an update can install itself; otherwise the dialog links the release page.</summary>
     public static bool CanInstallHere => Install != InstallKind.None;
 
     private static HttpClient CreateClient()
@@ -177,9 +178,14 @@ internal static partial class UpdateService
         if (!r.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array) return null;
 
         // The installer for this version. Releases also carry it under its name from before the rename, for copies that
-        // only know that one, so it is the fallback. On Linux, the package for how this copy was installed comes first;
-        // the Windows installer still shows the release exists when that package is missing (or on macOS).
-        string[] ours = kind == InstallKind.Windows ? [] : LinuxUpdate.AssetName(kind, version) is { } linux ? [linux] : [];
+        // only know that one, so it is the fallback. On Linux, the package for how this copy was installed comes first, and
+        // on a Mac the disk image for its processor; the Windows installer still shows the release exists without them.
+        string[] ours = kind switch
+        {
+            InstallKind.Windows => [],
+            InstallKind.Mac => [MacUpdate.AssetName(version)],
+            _ => LinuxUpdate.AssetName(kind, version) is { } linux ? [linux] : [],
+        };
         string[] wanted = [.. ours, $"LlamaTree-Setup-{version}.exe", $"ClaudeTerminals-Setup-{version}.exe"];
         JsonElement? asset = null;
         var matched = -1;

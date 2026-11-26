@@ -119,12 +119,12 @@ Plain <kbd>Esc</kbd> always goes to the terminal, because Claude Code uses it to
 
 A few seconds after starting, and every 15 minutes, LlamaTree checks the latest GitHub release (an anonymous request; nothing about you or your sessions is sent). When there's a newer version, an **Update to x.y.z** button appears in the title bar, showing what's new.
 
-*Update and restart* downloads the new version, checks it against the checksum signed for the release with our code signing certificate and, on Windows, checks that the installer itself is signed by Llamachant Technology Ltd (it won't run a file that fails either), closes the app, installs it and reopens it. Running sessions carry on in the conversations they were in.
+*Update and restart* downloads the new version, checks it against the checksum signed for the release with our code signing certificate and, on Windows and macOS, checks that the download itself is signed by Llamachant Technology Ltd (the installer's own signature on Windows; our Developer ID and Apple's notarization on a Mac). It won't install a file that fails either. Then it closes the app, installs it and reopens it. Running sessions carry on in the conversations they were in.
 
 - **Windows:** the installer runs silently.
 - **Linux, from a package:** the `.deb` or `.rpm` you installed from is downloaded and checked the same way, then installed with apt, dnf or zypper behind your desktop's administrator password prompt. A cancelled prompt leaves things as they were.
 - **Linux, from a `.tar.gz`:** a copy unpacked into a folder you own is replaced by the new one.
-- **macOS** (for now): the button links the release, where you download the new disk image, or run the install command again.
+- **macOS:** the new LlamaTree.app is copied beside the one in Applications, and takes its place once the app has closed. A copy in a folder you can't change (installed by another user, or opened straight from the disk image) links the release instead. Copies of 1.4.1 and earlier don't have this yet: update those once by hand, from the release's disk image or the install command.
 
 The version is shown at the top right and in the window title. Click it for *Check for updates*, and untick *Check for updates automatically* to turn the automatic check off. *Count me among the users*, in the same menu, is the answer you gave to *May we count you?* (see [Counting users](privacy.md#counting-users)).
 

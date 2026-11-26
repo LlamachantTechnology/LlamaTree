@@ -103,6 +103,105 @@ public sealed class UpdateServiceTests
     }
 
     [Fact]
+    public void A_mac_copy_updates_from_the_disk_image_for_its_processor()
+    {
+        var name = MacUpdate.AssetName(new Version(1, 0, 8));
+        Assert.Matches(@"^LlamaTree-1\.0\.8-macos-(arm64|x64)\.dmg$", name);
+        var json = Release(asset: name).Replace("\"name\":\"notes.txt\"", "\"name\":\"LlamaTree-Setup-1.0.8.exe\"");
+
+        var u = UpdateService.Parse(json, InstallKind.Mac);
+
+        Assert.Equal(name, u?.AssetName);
+        Assert.True(u?.ForThisMachine);
+    }
+
+    [Fact]
+    public void A_release_without_the_mac_disk_image_is_shown_to_a_mac_but_not_installed()
+    {
+        var u = UpdateService.Parse(Release(), InstallKind.Mac);
+        Assert.Equal("LlamaTree-Setup-1.0.8.exe", u?.AssetName);
+        Assert.False(u?.ForThisMachine);
+    }
+
+    [Theory]
+    [InlineData("/Applications/LlamaTree.app/Contents/MacOS/", "/Applications/LlamaTree.app")]
+    [InlineData("/Users/me/Applications/LlamaTree 2.app/Contents/MacOS", "/Users/me/Applications/LlamaTree 2.app")]
+    [InlineData("/Users/me/src/LlamaTree/bin/Debug/net10.0/", null)]   // run from source
+    [InlineData("/Applications/LlamaTree.app/Contents/Resources/", null)]
+    [InlineData("/Volumes/x/Contents/MacOS/", null)]                    // not a .app
+    public void A_mac_copy_knows_its_app_bundle_from_where_it_runs(string programFolder, string? bundle)
+    {
+        if (OperatingSystem.IsWindows()) return;   // the paths are Unix ones
+        Assert.Equal(bundle, MacUpdate.BundleOf(programFolder));
+    }
+
+    [Fact]
+    public void The_mac_swap_moves_the_old_app_aside_puts_it_back_if_the_new_one_fails_and_reopens_the_app()
+    {
+        var finish = MacUpdate.FinishCommands("/Applications/LlamaTree.app", "/Applications/.llamatree-update-1a2b3c4d");
+        Assert.Equal(
+            "if mv '/Applications/LlamaTree.app' '/Applications/.llamatree-update-1a2b3c4d/previous.app'; " +
+            "then mv '/Applications/.llamatree-update-1a2b3c4d/LlamaTree.app' '/Applications/LlamaTree.app' || " +
+            "mv '/Applications/.llamatree-update-1a2b3c4d/previous.app' '/Applications/LlamaTree.app'; fi; " +
+            "rm -rf '/Applications/.llamatree-update-1a2b3c4d'; exec /usr/bin/open '/Applications/LlamaTree.app'",
+            finish.Replace('\\', '/'));
+    }
+
+    /// <summary>What macOS 27's diskutil info says of a mounted disk image (41 lines, its disk near the top).</summary>
+    private const string DiskutilInfo = """
+           Device Identifier:         disk5s1
+           Device Node:               /dev/disk5s1
+           Whole:                     No
+           Part of Whole:             disk5
+
+           Volume Name:               LlamaTree
+           Mounted:                   Yes
+           Mount Point:               /private/var/folders/_6/sfsg984j4k781dvh350n_0zw0000gn/T/tmp.KAyRLXBg07
+
+           Partition Type:            Apple_HFS
+           File System Personality:   HFS+
+           Type (Bundle):             hfs
+           Name (User Visible):       Mac OS Extended
+           Owners:                    Disabled
+
+           OS Can Be Installed:       No
+           Media Type:                Generic
+           Protocol:                  Disk Image
+           SMART Status:              Not Supported
+           Volume UUID:               75071EB8-AD45-315E-BC77-6AAE124062A3
+           Disk / Partition UUID:     97020B6F-8FDB-4600-8AD9-0A87F25FA256
+           Partition Offset:          20480 Bytes (40 512-Byte-Device-Blocks)
+
+           Disk Size:                 133.3 MB (133259264 Bytes) (exactly 260272 512-Byte-Units)
+           Device Block Size:         512 Bytes
+
+           Volume Total Space:        133.3 MB (133259264 Bytes) (exactly 260272 512-Byte-Units)
+           Volume Used Space:         115.4 MB (115404800 Bytes) (exactly 225400 512-Byte-Units) (86.6%)
+           Volume Free Space:         17.9 MB (17854464 Bytes) (exactly 34872 512-Byte-Units) (13.4%)
+           Allocation Block Size:     4096 Bytes
+
+           Media OS Use Only:         No
+           Media Read-Only:           Yes
+           Volume Read-Only:          Yes (read-only mount flag set)
+
+           Device Location:           External
+           Removable Media:           Removable
+           Media Removal:             Software-Activated
+
+           Solid State:               Yes
+        """;
+
+    [Fact]
+    public void The_mac_update_ejects_its_disk_image_by_the_whole_disk_diskutil_names()
+    {
+        // All of diskutil's answer is read: the disk is on its fourth line (the first Mac test kept only the last six,
+        // and left the image attached).
+        Assert.Equal("disk5", MacUpdate.WholeDisk(DiskutilInfo));
+        Assert.Equal("disk5", MacUpdate.WholeDisk(DiskutilInfo.Replace("\n", "\r\n")));
+        Assert.Null(MacUpdate.WholeDisk("Could not find disk: /tmp/nothing"));
+    }
+
+    [Fact]
     public void The_linux_packages_are_named_as_the_packaging_tool_names_them()
     {
         if (System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture != System.Runtime.InteropServices.Architecture.X64) return;
