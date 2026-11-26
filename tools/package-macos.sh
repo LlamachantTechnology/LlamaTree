@@ -117,10 +117,11 @@ ditto "$app" "$work/image/LlamaTree.app"
 ln -s /Applications "$work/image/Applications"
 rm -f "$dmg"
 # macOS 27's diskutil image (an APFS image; every macOS the app runs on reads it), where hdiutil create is deprecated;
-# hdiutil on older Macs, as the build agents are.
-if diskutil image --help >/dev/null 2>&1; then
-    diskutil image create from --format UDZO --volumeName LlamaTree "$work/image" "$dmg" >/dev/null
-else
+# hdiutil on older Macs, as the build agents are, and where diskutil image is too old for these options (macOS 15 has
+# diskutil image without --volumeName).
+if ! { diskutil image --help >/dev/null 2>&1 &&
+       diskutil image create from --format UDZO --volumeName LlamaTree "$work/image" "$dmg" >/dev/null 2>&1; }; then
+    rm -f "$dmg"
     hdiutil create -volname LlamaTree -srcfolder "$work/image" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$dmg" >/dev/null
 fi
 if [ -n "$identity" ]; then
