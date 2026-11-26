@@ -76,9 +76,9 @@ Repositories without such settings, such as a plain clone, never ask.
 
 The history as a commit graph, with each commit's files. Click a file for that commit's diff.
 
-![Git Repository with outgoing commits and history](images/history.png)
+![Git Repository's Focused graph: main with one row per merge, and three branches open as lines beside it](images/history.png)
 
-The switch above the list chooses what it shows (remembered):
+**Graph** and **In flight**, at the top, switch between the history and the branches still to land (remembered). In the graph, the switch above the list chooses what it shows (remembered too):
 
 - **Focused** (the default): the repository's main branch (*main*, *master* or whatever `origin/HEAD` points at), its own line, one row per merge, with branch and tag badges where they point. A tag or branch on commits folded away shows on the fold's row. A merge whose dot shows **+** opens the branch it brought in as a line beside main (**−** hides it again). Each branch not merged yet has one row among main's commits, at the date of its newest commit, with how many commits it has and where it started; click its **+** to open it as a line down to where it forked, growing from where the row was. A branch older than the commits shown appears once you show older ones. The chips above the graph (*feature/*, *fix/*, *dependabot/*…) hide or show the branches with that prefix. Any branch opens by name in **Find a branch**. **Expand all** opens every branch listed; **Collapse all** hides them all.
 
@@ -86,6 +86,29 @@ Point at a line in the graph, or a branch's badge, to follow that branch: its li
 - **Everything**: every local and remote branch and tag, newest first. Each branch has its own coloured line from where it forks off to where it's merged. A merge is a small dot where two lines meet.
 
 Branch and tag badges sit on the commit they point at, edged in the colour of their line. A branch that matches its remote branch shows one badge with a cloud. Outgoing commits, not pushed yet, have hollow dots, and their count shows beside the heading.
+
+## In flight
+
+**In flight**, beside Graph in Git Repository, shows every branch not in main yet, from every worktree, with what each one needs next.
+
+![In flight: a card for each branch not merged yet, grouped by what it needs next](images/in-flight.png)
+
+Each branch is a card: its sessions (click one to go to it), what it needs next and the button that does it, commits ahead of and behind main, files changed, and whether it's pushed, reviewed or has a pull request. Click the name to open it in the graph; its ⋯ menu has the rest (Review, Push, the pull request, Copy branch name, Delete). The cards are grouped:
+
+- **Needs attention**: a session waiting for your answer, or a branch that conflicts with main.
+- **In progress**: a session is working on it, or it has changes not committed yet.
+- **Not pushed**: commits only on this computer (**Push**).
+- **Ready for review**: pushed and up to date; **Review** opens its [review](#review), and once approved, its pull request.
+- **Stale**: no commits for three weeks, and no session on it.
+- **On the remote only**: a branch nobody has here.
+
+Below the cards:
+
+- **Collisions between branches**: pairs that change the same files, those that would conflict first.
+- **Suggested merge order**: an order to land them in, with which need a rebase after another lands.
+- **Landed since you last looked**: what's been merged into main since you last clicked *Got it*. Click a merge to open its branch in the graph.
+
+Conflicts are checked with a merge done in memory, which never touches a worktree; that needs Git 2.38 or later, and a [trusted](#repositories-that-can-run-programs) repository.
 
 ## Review
 

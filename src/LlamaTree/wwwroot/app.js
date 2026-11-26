@@ -6815,7 +6815,7 @@ function inFlightCard(s, r, b, base, next) {
 // merge's dot opens the branch it brought in as a lane beside main, with its own commits; a branch merged into that
 // one opens the same way. Once a branch is open, the stretches of main between what matters to the open branches
 // (where they forked, took main in, and landed) fold into one row each, which unfold on a click. Branches not merged
-// yet sit in a strip at the top, and at the commit they started from; the current branch starts open.
+// yet are one row each at the date of their newest commit, which opens in place; the current branch starts open.
 
 const DRILL_PAGE = 300;
 
