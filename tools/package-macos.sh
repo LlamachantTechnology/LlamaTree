@@ -1,7 +1,7 @@
 #!/bin/sh
 # Packages a self-contained macOS build of LlamaTree (dotnet publish -f net10.0 -r osx-<arch> --self-contained) as
 #   LlamaTree-<version>-macos-<arch>.dmg   LlamaTree.app, and a link to Applications to drag it to
-# signed with our Developer ID and notarized by Apple, so Gatekeeper opens it. Runs on a Mac (codesign, hdiutil and
+# signed with our Developer ID and notarized by Apple, so Gatekeeper opens it. Runs on a Mac (codesign, diskutil and
 # notarytool are Apple's); the release pipeline runs it on a hosted macOS agent (azure-pipelines.yml).
 #
 #   tools/package-macos.sh <publish folder> <version> <x64|arm64> <output folder>
@@ -26,7 +26,7 @@ version=$2
 arch=$3
 output=$4
 case "$arch" in x64 | arm64) ;; *) echo "Unknown architecture $arch: x64 or arm64." >&2; exit 2 ;; esac
-[ "$(uname -s)" = Darwin ] || { echo "This runs on a Mac: codesign, hdiutil and notarytool are macOS's own." >&2; exit 2; }
+[ "$(uname -s)" = Darwin ] || { echo "This runs on a Mac: codesign, diskutil and notarytool are macOS's own." >&2; exit 2; }
 [ -f "$publish/LlamaTree" ] || { echo "$publish has no LlamaTree: publish the net10.0 build for osx-$arch there first." >&2; exit 1; }
 [ -f "$publish/Photino.Native.dylib" ] || { echo "$publish has no Photino.Native.dylib: publish it with -r osx-$arch." >&2; exit 1; }
 
@@ -116,7 +116,13 @@ mkdir "$work/image"
 ditto "$app" "$work/image/LlamaTree.app"
 ln -s /Applications "$work/image/Applications"
 rm -f "$dmg"
-hdiutil create -volname LlamaTree -srcfolder "$work/image" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$dmg" >/dev/null
+# macOS 27's diskutil image (an APFS image; every macOS the app runs on reads it), where hdiutil create is deprecated;
+# hdiutil on older Macs, as the build agents are.
+if diskutil image --help >/dev/null 2>&1; then
+    diskutil image create from --format UDZO --volumeName LlamaTree "$work/image" "$dmg" >/dev/null
+else
+    hdiutil create -volname LlamaTree -srcfolder "$work/image" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$dmg" >/dev/null
+fi
 if [ -n "$identity" ]; then
     codesign --force --timestamp --sign "$identity" "$dmg"
     codesign --verify --strict --verbose=2 "$dmg"
