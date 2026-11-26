@@ -63,5 +63,6 @@ Everything is in `%APPDATA%\LlamaTree` on Windows, `~/.config/LlamaTree` on Linu
 
 - **Windows:** Settings › Apps › LlamaTree › Uninstall.
 - **Linux:** `sudo apt remove llamatree` or `sudo dnf remove llamatree`; for a `.tar.gz`, delete its folder.
+- **macOS:** quit LlamaTree and move it from Applications (or `~/Applications`) to the Trash.
 
 Your sessions and settings stay in the data folder above, in case you come back. Delete it to remove them too.

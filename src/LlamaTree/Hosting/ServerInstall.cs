@@ -2,9 +2,10 @@ namespace LlamaTree.Hosting;
 
 /// <summary>
 /// Installs LlamaTree on a server that doesn't have it, with the release's own install script (see tools/install).
-/// On Linux, install.sh: run over ssh with no terminal, it installs the package with sudo where sudo needs no password,
-/// and otherwise a copy of your own in ~/.local/share/LlamaTree (which updates itself). On Windows, install.ps1: setup,
-/// for this user only, with no admin. Both check what they download against GitHub's SHA-256.
+/// On Linux and macOS, install.sh, run over ssh with no terminal. On Linux it installs the package with sudo where sudo
+/// needs no password, and otherwise a copy of your own in ~/.local/share/LlamaTree (which updates itself); on a Mac,
+/// LlamaTree.app in /Applications or ~/Applications, where Ssh.DefaultRemoteCommand looks for it. On Windows,
+/// install.ps1: setup, for this user only, with no admin. Both check what they download against GitHub's SHA-256.
 /// It's the latest release, which may be newer than this computer's LlamaTree; a server that ends up older says so
 /// on its badge, where it can be updated.
 /// </summary>

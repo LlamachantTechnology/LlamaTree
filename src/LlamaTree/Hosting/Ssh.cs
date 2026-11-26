@@ -15,7 +15,8 @@ internal sealed class Ssh
     /// <summary>
     /// What's run on the server: LlamaTree's bridge to its session host. The llamatree command where the server's shell
     /// finds it (a package's /usr/bin/llamatree), else where install.sh puts a copy of your own (~/.local/bin, which a
-    /// shell started by ssh often doesn't have on its PATH). In sh, whatever your login shell is (fish, csh…).
+    /// shell started by ssh often doesn't have on its PATH), else, on a Mac, the app where install.sh puts it (/Applications,
+    /// or ~/Applications). In sh, whatever your login shell is (fish, csh…).
     /// LLAMATREE_REMOTE_COMMAND overrides it.
     /// </summary>
     private static string RemoteCommand(string target) =>
@@ -37,6 +38,8 @@ internal sealed class Ssh
         "MSYS*) echo \"" + WindowsMessage + "\" >&2; exit 126;; CYGWIN*) echo \"" + WindowsMessage + "\" >&2; exit 126;; esac; " +
         "if command -v llamatree >/dev/null 2>&1; then exec llamatree --attach; " +
         "elif [ -x \"$HOME/.local/bin/llamatree\" ]; then exec \"$HOME/.local/bin/llamatree\" --attach; " +
+        "elif [ -x /Applications/LlamaTree.app/Contents/MacOS/LlamaTree ]; then exec /Applications/LlamaTree.app/Contents/MacOS/LlamaTree --attach; " +
+        "elif [ -x \"$HOME/Applications/LlamaTree.app/Contents/MacOS/LlamaTree\" ]; then exec \"$HOME/Applications/LlamaTree.app/Contents/MacOS/LlamaTree\" --attach; " +
         "else echo \"" + NotInstalledMessage + "\" >&2; exit 127; fi'";
 
     /// <summary>

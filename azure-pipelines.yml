@@ -1,173 +1,377 @@
-# Release build for LlamaTree: builds and code-signs the installer on the agent that holds the company's
-# SafeNet code signing token, then creates a draft GitHub release with the installer attached. Publishing the draft
-# (after checking its notes) is what makes the in-app updater offer it.
+# Release build for LlamaTree. Two jobs:
+#   macOS    on a Microsoft-hosted Mac: builds LlamaTree.app for Apple silicon and Intel, signs it with the company's
+#            Developer ID, has Apple notarize it, and makes a disk image of each (tools/package-macos.sh).
+#   Release  on the agent that holds the company's SafeNet code signing token: builds and code-signs the Windows
+#            installer, builds the Linux packages, signs the checksums of every file (the Mac disk images too), and
+#            creates a draft GitHub release with them attached. Publishing the draft (after checking its notes) is what
+#            makes the in-app updater offer it.
 #
 # Run by hand (Run pipeline) on main or on a version tag. On a tag, the tag must be v<Version> from
 # LlamaTree.csproj; the release is created for v<Version> either way. Untick "Create the GitHub release" for a
-# trial run that only builds and signs, keeping the installer on the run (Artifacts).
+# trial run that only builds and signs, keeping the files on the run (Artifacts).
+#
+# Platforms: Windows, Linux and macOS are each a tickbox. A new release has all three: the one-line installs, and
+# servers installing LlamaTree, take whatever release is latest, so one without a platform would leave it with nothing
+# to install. With only some ticked, the run adds those platforms to the release that's out already for this version
+# (published, not a draft): their files go on it, and its SHA256SUMS is signed again with them in (tools/sign-checksums.cs
+# --add-to, which first checks the list there is ours). A file the release has already stops the run; nothing on a
+# release is replaced but the install scripts and the checksums. Its notes, title and the rest are kept. For a Mac
+# build after the Windows and Linux ones failed or were left out, say; it's built from the commit this run is on, so
+# run it on the release's own tag where that has what the build needs.
 #
 # One-time setup in Azure DevOps:
 #   - This pipeline, created from the GitHub repository (it reads this file).
 #   - The GitHub service connection named in githubConnection below, with access to the repository and permitted
 #     for this pipeline.
 #   - Optionally a pipeline variable TimeStampServer; without it Sectigo's (the certificate's CA) is used.
-# The agent needs the .NET 10 SDK, Node.js (npm), Inno Setup 6 and the Windows SDK's signtool.
+#   - For the macOS job, in Pipelines › Library › Secure files, permitted for this pipeline:
+#       developer-id-application.p12   the Developer ID Application certificate and its private key
+#       AuthKey_AW2Y3CBGMT.p8          the App Store Connect API key notarizing uses (Key ID AW2Y3CBGMT)
+#     and a secret pipeline variable AppleCertificatePassword, the .p12's password.
+#     The certificate expires on 26 December 2027: renew it before then (Apple Developer › Certificates), and replace
+#     the .p12. Releases signed before then keep opening: their signatures are timestamped.
+# The Release agent needs the .NET 10 SDK, Node.js (npm), Inno Setup 6 and the Windows SDK's signtool.
 
 # Releases are started by hand: no pushes, tags or pull requests start this pipeline.
 trigger: none
 pr: none
 
 parameters:
-  # Untick for a trial run: build and sign only, with the installer kept on the run (Artifacts), no GitHub release.
+  # Untick for a trial run: build and sign only, with the files kept on the run (Artifacts), no GitHub release.
   - name: createRelease
-    displayName: 'Create the GitHub release (draft)'
+    displayName: 'Create the GitHub release (draft), or add to the published one'
+    type: boolean
+    default: true
+  - name: windows
+    displayName: 'Windows: the signed installer'
+    type: boolean
+    default: true
+  - name: linux
+    displayName: 'Linux: the .deb, .rpm and .tar.gz'
+    type: boolean
+    default: true
+  - name: macOS
+    displayName: 'macOS: the signed, notarized disk images'
     type: boolean
     default: true
 
 variables:
   githubConnection: 'github.com_LlamachantTechnology'         # the GitHub service connection (Project settings › Service connections)
   repository: 'LlamachantTechnology/LlamaTree'
+  # Who signs the Mac app: the certificate in developer-id-application.p12 (team N83JJRC3Y5).
+  appleSigningIdentity: 'Developer ID Application: Llamachant Technology Ltd. (N83JJRC3Y5)'
+  # The App Store Connect API key notarizing uses (its .p8 is the secure file): its key ID and its issuer, the team's.
+  appleNotaryKeyId: 'AW2Y3CBGMT'
+  appleNotaryIssuer: '4718c1df-d56b-4160-92d4-2fc3dd984485'
 
-pool:
-  name: 'SelfHostedPool'                     # the pool with the code signing agent (SafeNet token)
+jobs:
+  - ${{ if parameters.macOS }}:
+    - job: macOS
+      displayName: 'macOS: build, sign and notarize'
+      timeoutInMinutes: 120   # notarizing is usually minutes, but Apple's queue can be slow
+      pool:
+        vmImage: 'macOS-15'
+      steps:
+        - checkout: self
+          clean: true
 
-steps:
-  - checkout: self
-    clean: true
+        - task: UseNode@1
+          displayName: 'Node.js (front-end libraries)'
+          inputs:
+            version: '22.x'
 
-  - task: PowerShell@2
-    displayName: 'Check the tag matches the version'
-    inputs:
-      pwsh: false   # Windows PowerShell: always on the agent
-      targetType: inline
-      script: |
-        $version = ([xml](Get-Content src/LlamaTree/LlamaTree.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
-        $tag = '$(Build.SourceBranchName)'
-        if ('$(Build.SourceBranch)' -like 'refs/tags/*' -and $tag -ne "v$version") {
-          throw "Tag $tag doesn't match the project version $version."
-        }
-        Write-Host "##vso[task.setvariable variable=AppVersion]$version"
-        Write-Host "Building LlamaTree $version"
+        - task: UseDotNet@2
+          displayName: '.NET 10 SDK'
+          inputs:
+            packageType: sdk
+            version: '10.x'
 
-  # Tools the build needs, set up on the agent if they're missing (signtool comes with the Windows SDK, already there).
-  - task: UseNode@1
-    displayName: 'Node.js (front-end libraries)'
-    inputs:
-      version: '22.x'
+        - script: npm ci
+          displayName: 'Front-end libraries'
+          workingDirectory: web
 
-  # The themes the app comes with are changed in LlamaTree-Themes: a release ships what it publishes, not an older copy.
-  - script: node tools/sync-themes.mjs --check
-    displayName: 'Check the built-in themes match LlamaTree-Themes'
+        # Into a keychain of this run's own, deleted when the job ends.
+        - task: InstallAppleCertificate@2
+          displayName: 'Developer ID certificate'
+          inputs:
+            certSecureFile: 'developer-id-application.p12'
+            certPwd: '$(AppleCertificatePassword)'
+            keychain: 'temp'
 
-  - task: UseDotNet@2
-    displayName: '.NET 10 SDK'
-    inputs:
-      packageType: sdk
-      version: '10.x'
+        - task: DownloadSecureFile@1
+          name: notaryKey
+          displayName: 'App Store Connect API key (notarizing)'
+          inputs:
+            secureFile: 'AuthKey_AW2Y3CBGMT.p8'
 
-  - task: PowerShell@2
-    displayName: 'Inno Setup 6'
-    inputs:
-      pwsh: false
-      targetType: inline
-      script: |
-        $found = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ }
-        if ($found) { Write-Host "Inno Setup: $($found[0])"; return }
-        # A fixed version, installed for the agent's account only (no admin needed). It must carry a valid signature
-        # from Inno Setup's publisher, Pyrsys B.V.
-        $setup = Join-Path $env:AGENT_TEMPDIRECTORY 'innosetup-6.7.3.exe'
-        Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $setup -UseBasicParsing
-        $sig = Get-AuthenticodeSignature $setup
-        if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notlike 'CN=Pyrsys B.V.*') { throw "The Inno Setup download isn't signed by its publisher: $($sig.Status) $($sig.SignerCertificate.Subject)" }
-        Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER' -Wait
-        if (-not (Test-Path "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe")) { throw 'Inno Setup did not install.' }
-        Write-Host 'Inno Setup installed.'
+        - script: |
+            set -eu
+            version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' src/LlamaTree/LlamaTree.csproj | head -n 1)
+            [ -n "$version" ] || { echo "No <Version> in LlamaTree.csproj." >&2; exit 1; }
+            echo "Building LlamaTree $version for macOS"
+            for arch in arm64 x64; do
+              dotnet publish src/LlamaTree/LlamaTree.csproj -f net10.0 -c Release -r "osx-$arch" --self-contained true \
+                -p:DebugType=None -p:DebugSymbols=false -o "artifacts/osx-$arch"
+              tools/package-macos.sh "artifacts/osx-$arch" "$version" "$arch" artifacts/macos
+            done
+          displayName: 'Build, sign and notarize'
+          env:
+            MACOS_SIGN_IDENTITY: $(appleSigningIdentity)
+            MACOS_NOTARY_KEY: $(notaryKey.secureFilePath)
+            MACOS_NOTARY_KEY_ID: $(appleNotaryKeyId)
+            MACOS_NOTARY_ISSUER: $(appleNotaryIssuer)
 
-  - task: PowerShell@2
-    displayName: 'Build and sign'
-    inputs:
-      pwsh: false   # Windows PowerShell: always on the agent
-      # Inline, with the server passed as an environment variable: Azure's argument validation rejects the quoted
-      # value in an Arguments field ("Detected characters in arguments that may not be executed correctly").
-      targetType: inline
-      script: |
-        # The certificate is Sectigo's, so its timestamp server is the default; a TimeStampServer pipeline variable, if
-        # defined, is used instead (an undefined one reaches the script as the literal text "$(TimeStampServer)").
-        $server = $env:TIMESTAMP_SERVER
-        if (-not $server -or $server.StartsWith('$(')) { $server = 'http://timestamp.sectigo.com' }
-        Write-Host "Timestamp server: $server"
-        & ./publish.ps1 -Sign -TimestampServer $server
-    env:
-      TIMESTAMP_SERVER: $(TimeStampServer)
+        - task: PublishPipelineArtifact@1
+          displayName: 'Keep the disk images on the run'
+          inputs:
+            targetPath: 'artifacts/macos'
+            artifact: 'macos'
 
-  # Copies from before the rename (Claude Terminals 1.1.x) only look for an installer under the old name: the same
-  # signed file goes on the release under that name too, until they have all updated.
-  - powershell: Copy-Item "artifacts/LlamaTree-Setup-$(AppVersion).exe" "artifacts/ClaudeTerminals-Setup-$(AppVersion).exe"
-    displayName: 'Copy the installer under its old name'
+  - job: Release
+    displayName: 'Windows and Linux, checksums and the release'
+    ${{ if parameters.macOS }}:
+      dependsOn: macOS
+    pool:
+      name: 'SelfHostedPool'                     # the pool with the code signing agent (SafeNet token)
+    steps:
+      - checkout: self
+        clean: true
 
-  # SHA256SUMS lists every file the release carries, and SHA256SUMS.p7s is its signature by the same certificate (on
-  # the token, so it never leaves this agent). The app installs an update only when the download matches its line
-  # there and the signature is ours, so a release changed on GitHub afterwards, with a stolen token, isn't installed.
-  # Keep this list and the release's assets below the same.
-  - task: PowerShell@2
-    displayName: 'Sign the checksums'
-    inputs:
-      pwsh: false
-      targetType: inline
-      script: |
-        dotnet run tools/sign-checksums.cs -- artifacts/checksums `
-          "artifacts/LlamaTree-Setup-$(AppVersion).exe" `
-          "artifacts/ClaudeTerminals-Setup-$(AppVersion).exe" `
-          "artifacts/linux/llamatree_$(AppVersion)_amd64.deb" `
-          "artifacts/linux/llamatree-$(AppVersion)-1.x86_64.rpm" `
-          "artifacts/linux/LlamaTree-$(AppVersion)-linux-x64.tar.gz" `
-          tools/install/install.ps1 `
-          tools/install/install.sh
-        if ($LASTEXITCODE) { throw 'Signing the checksums failed.' }
+      - task: PowerShell@2
+        displayName: 'Check the tag matches the version'
+        inputs:
+          pwsh: false   # Windows PowerShell: always on the agent
+          targetType: inline
+          script: |
+            $version = ([xml](Get-Content src/LlamaTree/LlamaTree.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+            $tag = '$(Build.SourceBranchName)'
+            if ('$(Build.SourceBranch)' -like 'refs/tags/*' -and $tag -ne "v$version") {
+              throw "Tag $tag doesn't match the project version $version."
+            }
+            if ($env:WINDOWS -ne 'True' -and $env:LINUX -ne 'True' -and $env:MACOS -ne 'True') { throw 'Tick at least one platform.' }
+            Write-Host "##vso[task.setvariable variable=AppVersion]$version"
+            Write-Host "Building LlamaTree $version"
+        env:
+          WINDOWS: ${{ parameters.windows }}
+          LINUX: ${{ parameters.linux }}
+          MACOS: ${{ parameters.macOS }}
 
-  - task: PublishPipelineArtifact@1
-    displayName: 'Keep the signed checksums on the run'
-    inputs:
-      targetPath: 'artifacts/checksums'
-      artifact: 'checksums'
+      # With only some platforms, the published release for this version is what's added to: its signed checksums, and
+      # its title and notes, which go back on it unchanged. A new release needs all three platforms (see the top).
+      - ${{ if not(and(parameters.windows, parameters.linux, parameters.macOS)) }}:
+        - task: PowerShell@2
+          displayName: 'Find the release to add to'
+          inputs:
+            pwsh: false
+            targetType: inline
+            script: |
+              [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
+              $tag = "v$(AppVersion)"
+              try {
+                $release = Invoke-RestMethod "https://api.github.com/repos/$(repository)/releases/tags/$tag" -Headers @{ Accept = 'application/vnd.github+json' } -UseBasicParsing
+              } catch {
+                $release = $null
+                if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw }
+              }
+              if (-not $release) {
+                if ($env:CREATE -eq 'True') {
+                  throw "There's no published $tag release to add these platforms to. A new release needs all three platforms; a draft can't be added to (publish it first, or delete it and run with all three)."
+                }
+                Write-Host "No published $tag release: a trial run signs this run's files on their own."
+                return
+              }
+              New-Item -ItemType Directory -Force artifacts/existing | Out-Null
+              foreach ($name in 'SHA256SUMS', 'SHA256SUMS.p7s') {
+                $asset = $release.assets | Where-Object { $_.name -eq $name }
+                if (-not $asset) { throw "$tag has no $name, so nothing can be added to it." }
+                Invoke-WebRequest $asset.browser_download_url -OutFile "artifacts/existing/$name" -UseBasicParsing
+              }
+              [IO.File]::WriteAllText((Join-Path (Get-Location) 'artifacts/existing/notes.md'), [string]$release.body, (New-Object Text.UTF8Encoding $false))
+              Write-Host "##vso[task.setvariable variable=AddToRelease]true"
+              Write-Host "##vso[task.setvariable variable=ReleaseTitle]$($release.name)"
+              Write-Host "##vso[task.setvariable variable=ReleasePrerelease]$(if ($release.prerelease) { 'true' } else { 'false' })"
+              Write-Host "Adding to $tag ($($release.name)), published $($release.published_at), which has: $(($release.assets | ForEach-Object name) -join ', ')"
+          env:
+            CREATE: ${{ parameters.createRelease }}
 
-  - task: PublishPipelineArtifact@1
-    displayName: 'Keep the signed installer on the run'
-    inputs:
-      targetPath: 'artifacts/LlamaTree-Setup-$(AppVersion).exe'
-      artifact: 'installer'
+      # Tools the build needs, set up on the agent if they're missing (signtool comes with the Windows SDK, already there).
+      - task: UseNode@1
+        displayName: 'Node.js (front-end libraries)'
+        inputs:
+          version: '22.x'
 
-  - task: PublishPipelineArtifact@1
-    displayName: 'Keep the Linux packages on the run'
-    inputs:
-      targetPath: 'artifacts/linux'
-      artifact: 'linux'
+      # The themes the app comes with are changed in LlamaTree-Themes: a release ships what it publishes, not an older copy.
+      - script: node tools/sync-themes.mjs --check
+        displayName: 'Check the built-in themes match LlamaTree-Themes'
 
-  # Left out of a trial run entirely, so trying the signing doesn't need the GitHub connection.
-  # The install scripts (tools/install) go on every release, so the README's one-line installs, which fetch
-  # .../releases/latest/download/install.ps1 and install.sh, always get the newest: keep those names.
-  - ${{ if parameters.createRelease }}:
-    - task: GitHubRelease@1
-      displayName: 'Create draft GitHub release'
-      inputs:
-        gitHubConnection: '${{ variables.githubConnection }}'   # resolved when the pipeline is compiled, as Azure requires
-        repositoryName: '$(repository)'
-        action: create
-        target: '$(Build.SourceVersion)'
-        tagSource: userSpecifiedTag
-        tag: 'v$(AppVersion)'
-        title: 'LlamaTree $(AppVersion)'
-        releaseNotesSource: inline
-        releaseNotesInline: 'Release notes to follow.'
-        assets: |
-          artifacts/LlamaTree-Setup-$(AppVersion).exe
-          artifacts/ClaudeTerminals-Setup-$(AppVersion).exe
-          artifacts/linux/llamatree_$(AppVersion)_amd64.deb
-          artifacts/linux/llamatree-$(AppVersion)-1.x86_64.rpm
-          artifacts/linux/LlamaTree-$(AppVersion)-linux-x64.tar.gz
-          tools/install/install.ps1
-          tools/install/install.sh
-          artifacts/checksums/SHA256SUMS
-          artifacts/checksums/SHA256SUMS.p7s
-        isDraft: true
-        addChangeLog: false
+      - task: UseDotNet@2
+        displayName: '.NET 10 SDK'
+        inputs:
+          packageType: sdk
+          version: '10.x'
+
+      - ${{ if parameters.windows }}:
+        - task: PowerShell@2
+          displayName: 'Inno Setup 6'
+          inputs:
+            pwsh: false
+            targetType: inline
+            script: |
+              $found = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ }
+              if ($found) { Write-Host "Inno Setup: $($found[0])"; return }
+              # A fixed version, installed for the agent's account only (no admin needed). It must carry a valid signature
+              # from Inno Setup's publisher, Pyrsys B.V.
+              $setup = Join-Path $env:AGENT_TEMPDIRECTORY 'innosetup-6.7.3.exe'
+              Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $setup -UseBasicParsing
+              $sig = Get-AuthenticodeSignature $setup
+              if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notlike 'CN=Pyrsys B.V.*') { throw "The Inno Setup download isn't signed by its publisher: $($sig.Status) $($sig.SignerCertificate.Subject)" }
+              Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER' -Wait
+              if (-not (Test-Path "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe")) { throw 'Inno Setup did not install.' }
+              Write-Host 'Inno Setup installed.'
+
+      - ${{ if or(parameters.windows, parameters.linux) }}:
+        - task: PowerShell@2
+          displayName: 'Build and sign'
+          inputs:
+            pwsh: false   # Windows PowerShell: always on the agent
+            # Inline, with the server passed as an environment variable: Azure's argument validation rejects the quoted
+            # value in an Arguments field ("Detected characters in arguments that may not be executed correctly").
+            targetType: inline
+            script: |
+              # The certificate is Sectigo's, so its timestamp server is the default; a TimeStampServer pipeline variable, if
+              # defined, is used instead (an undefined one reaches the script as the literal text "$(TimeStampServer)").
+              $server = $env:TIMESTAMP_SERVER
+              if (-not $server -or $server.StartsWith('$(')) { $server = 'http://timestamp.sectigo.com' }
+              if ($env:WINDOWS -eq 'True') {
+                Write-Host "Timestamp server: $server"
+                if ($env:LINUX -eq 'True') { & ./publish.ps1 -Sign -TimestampServer $server }
+                else { & ./publish.ps1 -Sign -TimestampServer $server -SkipLinux }
+              } else {
+                & ./publish.ps1 -SkipWindows   # the Linux packages aren't signed themselves: the checksums are
+              }
+          env:
+            TIMESTAMP_SERVER: $(TimeStampServer)
+            WINDOWS: ${{ parameters.windows }}
+            LINUX: ${{ parameters.linux }}
+
+      # Copies from before the rename (Claude Terminals 1.1.x) only look for an installer under the old name: the same
+      # signed file goes on the release under that name too, until they have all updated.
+      - ${{ if parameters.windows }}:
+        - powershell: Copy-Item "artifacts/LlamaTree-Setup-$(AppVersion).exe" "artifacts/ClaudeTerminals-Setup-$(AppVersion).exe"
+          displayName: 'Copy the installer under its old name'
+
+      # The macOS job's disk images, signed and notarized there.
+      - ${{ if parameters.macOS }}:
+        - task: DownloadPipelineArtifact@2
+          displayName: 'The Mac disk images'
+          inputs:
+            buildType: current
+            artifactName: 'macos'
+            targetPath: '$(Build.SourcesDirectory)/artifacts/macos'
+
+      # SHA256SUMS lists every file the release carries, and SHA256SUMS.p7s is its signature by the same certificate (on
+      # the token, so it never leaves this agent). The app installs an update only when the download matches its line
+      # there and the signature is ours, so a release changed on GitHub afterwards, with a stolen token, isn't installed.
+      # Added to a published release, it's that release's list with this run's files in.
+      - task: PowerShell@2
+        displayName: 'Sign the checksums'
+        inputs:
+          pwsh: false
+          targetType: inline
+          script: |
+            $v = '$(AppVersion)'
+            $files = @()
+            if ($env:WINDOWS -eq 'True') { $files += "artifacts/LlamaTree-Setup-$v.exe", "artifacts/ClaudeTerminals-Setup-$v.exe" }
+            if ($env:LINUX -eq 'True') { $files += "artifacts/linux/llamatree_${v}_amd64.deb", "artifacts/linux/llamatree-$v-1.x86_64.rpm", "artifacts/linux/LlamaTree-$v-linux-x64.tar.gz" }
+            if ($env:MACOS -eq 'True') { $files += "artifacts/macos/LlamaTree-$v-macos-arm64.dmg", "artifacts/macos/LlamaTree-$v-macos-x64.dmg" }
+            foreach ($file in $files) { if (-not (Test-Path $file)) { throw "This run made no $file." } }
+            # The install scripts go on every release, and again when adding to one: the newest are what the one-line
+            # installs fetch.
+            $files += 'tools/install/install.ps1', 'tools/install/install.sh'
+            $add = @()
+            if ($env:ADD_TO_RELEASE -eq 'true') {
+              $add = '--add-to', 'artifacts/existing/SHA256SUMS', 'artifacts/existing/SHA256SUMS.p7s', '--may-replace', 'install.ps1', '--may-replace', 'install.sh'
+            }
+            dotnet run tools/sign-checksums.cs -- artifacts/checksums @files @add
+            if ($LASTEXITCODE) { throw 'Signing the checksums failed.' }
+        env:
+          WINDOWS: ${{ parameters.windows }}
+          LINUX: ${{ parameters.linux }}
+          MACOS: ${{ parameters.macOS }}
+          ADD_TO_RELEASE: $(AddToRelease)
+
+      - task: PublishPipelineArtifact@1
+        displayName: 'Keep the signed checksums on the run'
+        inputs:
+          targetPath: 'artifacts/checksums'
+          artifact: 'checksums'
+
+      - ${{ if parameters.windows }}:
+        - task: PublishPipelineArtifact@1
+          displayName: 'Keep the signed installer on the run'
+          inputs:
+            targetPath: 'artifacts/LlamaTree-Setup-$(AppVersion).exe'
+            artifact: 'installer'
+
+      - ${{ if parameters.linux }}:
+        - task: PublishPipelineArtifact@1
+          displayName: 'Keep the Linux packages on the run'
+          inputs:
+            targetPath: 'artifacts/linux'
+            artifact: 'linux'
+
+      # Left out of a trial run entirely, so trying the signing doesn't need the GitHub connection.
+      # The install scripts (tools/install) go on every release, so the README's one-line installs, which fetch
+      # .../releases/latest/download/install.ps1 and install.sh, always get the newest: keep those names.
+      # The files are found by pattern: the checkout is cleaned first, so artifacts holds only this run's.
+      - ${{ if parameters.createRelease }}:
+        - ${{ if and(parameters.windows, parameters.linux, parameters.macOS) }}:
+          - task: GitHubRelease@1
+            displayName: 'Create draft GitHub release'
+            inputs:
+              gitHubConnection: '${{ variables.githubConnection }}'   # resolved when the pipeline is compiled, as Azure requires
+              repositoryName: '$(repository)'
+              action: create
+              target: '$(Build.SourceVersion)'
+              tagSource: userSpecifiedTag
+              tag: 'v$(AppVersion)'
+              title: 'LlamaTree $(AppVersion)'
+              releaseNotesSource: inline
+              releaseNotesInline: 'Release notes to follow.'
+              assets: |
+                artifacts/*.exe
+                artifacts/linux/*
+                artifacts/macos/*.dmg
+                tools/install/install.ps1
+                tools/install/install.sh
+                artifacts/checksums/SHA256SUMS
+                artifacts/checksums/SHA256SUMS.p7s
+              isDraft: true
+              addChangeLog: false
+        - ${{ else }}:
+          # The published release, with this run's files added: replace mode leaves the files already there alone and
+          # replaces only those of the same name (the checksums and the install scripts; sign-checksums refused any
+          # other). The title, notes and pre-release flag are the release's own, read back above.
+          - task: GitHubRelease@1
+            displayName: 'Add to the published GitHub release'
+            inputs:
+              gitHubConnection: '${{ variables.githubConnection }}'
+              repositoryName: '$(repository)'
+              action: edit
+              target: '$(Build.SourceVersion)'
+              tag: 'v$(AppVersion)'
+              title: '$(ReleaseTitle)'
+              releaseNotesSource: filePath
+              releaseNotesFilePath: 'artifacts/existing/notes.md'
+              assetUploadMode: replace
+              assets: |
+                artifacts/*.exe
+                artifacts/linux/*
+                artifacts/macos/*.dmg
+                tools/install/install.ps1
+                tools/install/install.sh
+                artifacts/checksums/SHA256SUMS
+                artifacts/checksums/SHA256SUMS.p7s
+              isDraft: false
+              isPreRelease: $(ReleasePrerelease)
+              addChangeLog: false

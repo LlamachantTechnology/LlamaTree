@@ -1,5 +1,6 @@
 # Builds and tests LlamaTree on Windows, Linux and macOS, and keeps a self-contained build of each as the run's
-# artifacts. Releases (the signed Windows installer) are made by azure-pipelines.yml, not here.
+# artifacts, with a Mac disk image of each Mac build, signed ad hoc. Releases (signed and notarized) are made by
+# azure-pipelines.yml, not here.
 name: Build
 
 on:
@@ -57,4 +58,35 @@ jobs:
         with:
           name: LlamaTree-${{ matrix.rid }}
           path: artifacts/LlamaTree-${{ matrix.rid }}
+          retention-days: 14
+
+      # The Mac app and its disk image, as a release makes them but signed ad hoc (a release signs them with our
+      # Developer ID and notarizes them: azure-pipelines.yml).
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: tools/package-macos.sh artifacts/LlamaTree-${{ matrix.rid }} 0.0.0 ${{ matrix.rid == 'osx-arm64' && 'arm64' || 'x64' }} artifacts/macos
+
+      # The program in the disk image runs: an ad-hoc signature turns on the hardened runtime too, so .NET running under
+      # the app's entitlements is tried here. The session host, given 20 seconds (SIGALRM, 142, means it was still
+      # running), or ending by itself with no window to wait for; a crash is anything else.
+      - name: Run the packaged app (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mount="$RUNNER_TEMP/llamatree-dmg"
+          mkdir -p "$mount" "$RUNNER_TEMP/llamatree-data"
+          hdiutil attach artifacts/macos/LlamaTree-0.0.0-macos-*.dmg -nobrowse -readonly -mountpoint "$mount"
+          codesign --verify --deep --strict "$mount/LlamaTree.app"
+          set +e
+          LLAMATREE_DATA="$RUNNER_TEMP/llamatree-data" perl -e 'alarm 20; exec @ARGV' "$mount/LlamaTree.app/Contents/MacOS/LlamaTree" --host
+          code=$?
+          set -e
+          hdiutil detach "$mount"
+          echo "Exit code $code"
+          [ "$code" = 0 ] || [ "$code" = 142 ]
+
+      - uses: actions/upload-artifact@v6
+        if: runner.os == 'macOS'
+        with:
+          name: LlamaTree-${{ matrix.rid }}-dmg
+          path: artifacts/macos/*.dmg
           retention-days: 14

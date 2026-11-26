@@ -502,7 +502,7 @@ internal sealed partial class AppHost
 
     /// <summary>Themes of your own (see <see cref="Themes.ThemeCatalog"/>); the app's own are in wwwroot/themes.</summary>
     private static string ThemeFolder => Path.Combine(SessionStore.AppDataFolder, "themes");
-    private static string BuiltInThemeFolder => Path.Combine(AppContext.BaseDirectory, "wwwroot", "themes");
+    private static string BuiltInThemeFolder => Path.Combine(AppFiles.Folder, "wwwroot", "themes");
 
     /// <summary>Where Get plugins unpacks a plugin before it goes in the plugins folder (beside it, so it moves rather than copies).</summary>
     private static string GalleryStaging => Path.Combine(SessionStore.AppDataFolder, "downloads");
