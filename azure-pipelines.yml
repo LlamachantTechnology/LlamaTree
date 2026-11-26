@@ -1,10 +1,10 @@
 # Release build for LlamaTree. Two jobs:
 #   macOS    on a Microsoft-hosted Mac: builds LlamaTree.app for Apple silicon and Intel, signs it with the company's
 #            Developer ID, has Apple notarize it, and makes a disk image of each (tools/package-macos.sh).
-#   Release  on the agent that holds the company's SafeNet code signing token: builds and code-signs the Windows
-#            installer, builds the Linux packages, signs the checksums of every file (the Mac disk images too), and
-#            creates a draft GitHub release with them attached. Publishing the draft (after checking its notes) is what
-#            makes the in-app updater offer it.
+#   Release  ("Sign and release") on the agent that holds the company's SafeNet code signing token: builds and
+#            code-signs the Windows installer and builds the Linux packages (each when ticked), signs the checksums of
+#            every file (the Mac disk images too), and creates a draft GitHub release with them attached. Publishing the
+#            draft (after checking its notes) is what makes the in-app updater offer it.
 #
 # Run by hand (Run pipeline) on main or on a version tag. On a tag, the tag must be v<Version> from
 # LlamaTree.csproj; the release is created for v<Version> either way. Untick "Create the GitHub release" for a
@@ -128,7 +128,7 @@ jobs:
             artifact: 'macos'
 
   - job: Release
-    displayName: 'Windows and Linux, checksums and the release'
+    displayName: 'Sign and release'   # Windows and Linux too, when ticked
     ${{ if parameters.macOS }}:
       dependsOn: macOS
     pool:
