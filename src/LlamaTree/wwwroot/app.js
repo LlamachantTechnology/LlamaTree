@@ -5164,13 +5164,21 @@ function onGitStatus(m) {
     s.commitInfo = null;
     for (const t of docs.tabs.filter((x) => x.sessionId === s.id && !isConvTab(x))) closeDoc(t.key);
   }
+  // Statuses come after every burst of file changes and every 15 seconds, mostly saying nothing new. Redrawing the
+  // whole side panel each time (the graph included) kept the page, and so the terminals, busy while an agent worked.
+  const prev = s.git;
+  const same = prev && JSON.stringify(prev) === JSON.stringify(m);
+  const treeOnly = !same && prev && JSON.stringify({ ...prev, staged: 0, unstaged: 0 }) === JSON.stringify({ ...m, staged: 0, unstaged: 0 });
   s.git = m;
   renderTileHeader(s);
   updateTabBranch(s);
-  refreshOpenDiff(s);   // the visible diff follows its own session, whichever one the Git panel shows
+  refreshOpenDiff(s);   // the visible diff follows its own session, whichever one the Git panel shows (a file can change and keep its status)
   projectViewChanged(s);
   const historyPending = !s.log && !logFailed(s);
-  if (s.id === state.currentId && (isTabShown('changes') || historyPending)) renderGit();
+  if (s.id !== state.currentId || same) return;
+  // Only the files changed: Git Changes is all that shows them.
+  if (treeOnly) { if (isTabShown('changes')) renderGit('changes'); }
+  else if (isTabShown('changes') || historyPending) renderGit();
 }
 
 const currentSession = () => state.byId.get(state.currentId);
@@ -5279,7 +5287,8 @@ const panelSeen = new Map();
 const markSeen = (t) => { const p = panelByTab(t); if (p) panelSeen.set(t, p.updated); };
 const isUnseen = (p) => panelSeen.get(panelTab(p)) !== p.updated;
 
-function renderGit() {
+/** Redraws the side panel; with <only> (a tab, 'changes' say), only the groups showing that tab, the rest left as they are. */
+function renderGit(only = null) {
   applySideEmpty();   // with the Git tabs off, the side panel comes and goes with its panels
   if (!state.gitVisible) return;
   placePanels();
@@ -5290,6 +5299,7 @@ function renderGit() {
     g.el.hidden = !tabs.length;
     if (!tabs.length) continue;
     const open = shownActive(g);
+    if (only && open !== only) continue;
     if (!g.folded && isPanelTab(open)) markSeen(open);
     g.el.classList.toggle('folded', !!g.folded);
     renderDockTabs(g, tabs, open);
@@ -8883,7 +8893,10 @@ async function loadAllReviews(force = false) {
   if (isTabShown('reviews') || reviewsYours() !== before) renderGit();
 }
 
-setInterval(() => { if (!document.hidden) loadAllReviews(); }, 60_000);
+// Only while the Reviews tab is in sight: open, or in a tab row with its count. In flight and Git Changes ask for their own.
+setInterval(() => {
+  if (!document.hidden && state.gitVisible && dock.groups.some((g) => groupTabs(g).includes('reviews'))) loadAllReviews();
+}, 60_000);
 
 /** How many reviews are waiting on you, in every repository: the Reviews tab's count. */
 function reviewsYours() {
@@ -13036,6 +13049,18 @@ function syncControlStatus(s) {
   post({ type: 'control.status', id: s.id, status: st });
 }
 setInterval(() => { for (const s of state.sessions) syncControlStatus(s); }, 1000);
+
+/** Tells the host which sessions are on screen (the selected one and any side-by-side panes; none while the window is hidden), when that changes: their Git status is polled more often. */
+let toldForeground = null;
+function syncForeground() {
+  const ids = document.hidden ? [] : [...new Set([state.currentId, ...state.paneIds].filter(Boolean))].sort();
+  const key = `${ids.join('|')}#${state.sessions.length}`;   // a session added in the background starts out polled as on screen
+  if (key === toldForeground) return;
+  toldForeground = key;
+  post({ type: 'git.foreground', ids });
+}
+setInterval(syncForeground, 1000);
+document.addEventListener('visibilitychange', syncForeground);
 
 /**
  * Types a prompt a session sent this one (send_prompt) and sends it, as relayNotify does: not while you're typing in

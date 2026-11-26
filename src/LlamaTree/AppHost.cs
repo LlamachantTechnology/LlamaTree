@@ -1250,6 +1250,14 @@ internal sealed partial class AppHost
             case "control.status":
                 Driving.SetStatus(Str(msg, "id"), Str(msg, "status"));
                 return null;
+            case "git.foreground":
+            {
+                // The sessions on screen: their Git status is polled more often than the rest's.
+                var ids = msg.TryGetProperty("ids", out var arr) && arr.ValueKind == JsonValueKind.Array
+                    ? arr.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToHashSet() : [];
+                foreach (var x in sessions.Values) x.SetForeground(ids.Contains(x.Id));
+                return null;
+            }
             case "control.answer":
                 Driving.AnswerSpawn(Str(msg, "id"), Bool(msg, "allow"), OptStr(msg, "scope") ?? "once");
                 return null;

@@ -96,6 +96,7 @@ internal static partial class PullRequestService
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
         if (token != null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         using var response = await Http.SendAsync(request);
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized) ForgetToken(host);
         if (!response.IsSuccessStatusCode) return null;
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         foreach (var pr in doc.RootElement.EnumerateArray())
@@ -117,7 +118,9 @@ internal static partial class PullRequestService
             ? new AuthenticationHeaderValue("Bearer", token)
             : new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(":" + token)));
         using var response = await Http.SendAsync(request);
-        if (!response.IsSuccessStatusCode) return null;
+        // Azure DevOps answers an expired token with 401, or 203 and its sign-in page.
+        if (response.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.NonAuthoritativeInformation) ForgetToken(host);
+        if (!response.IsSuccessStatusCode || response.StatusCode == System.Net.HttpStatusCode.NonAuthoritativeInformation) return null;
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         foreach (var pr in doc.RootElement.GetProperty("value").EnumerateArray())
         {
@@ -154,10 +157,49 @@ internal static partial class PullRequestService
     /// git runs outside the repository (<see cref="GitService.RunOutsideRepositoryAsync"/>) and reads only their own
     /// config: a repository's credential.helper can name any command.
     /// </summary>
+    /// <remarks>
+    /// Kept for a while (each fill starts Git Credential Manager, a few hundred milliseconds), as the task, so lookups that
+    /// ask at once (In flight's, one per branch) share one fill. No credential is kept for less long, so signing in is
+    /// noticed soon; a token the API turns down is dropped (<see cref="ForgetToken"/>).
+    /// </remarks>
     private static async Task<string?> GetTokenAsync(RepoHost host)
     {
         if (CredentialInput(host) is not { } input) return null;
-        var result = await GitService.RunOutsideRepositoryAsync(CredentialFillArgs, input, CredentialEnvironment, TimeSpan.FromSeconds(20));
+        var now = DateTime.UtcNow;
+        Task<string?> task;
+        lock (Tokens)
+        {
+            if (!Tokens.TryGetValue(input, out var hit) || now >= hit.Until)
+            {
+                hit = (FillTokenAsync(input), now + TokenFor);
+                Tokens[input] = hit;
+            }
+            task = hit.Task;
+        }
+        var token = await task;
+        if (token == null)
+            lock (Tokens)
+                if (Tokens.TryGetValue(input, out var hit) && hit.Task == task && hit.Until > DateTime.UtcNow + NoTokenFor)
+                    Tokens[input] = (task, DateTime.UtcNow + NoTokenFor);
+        return token;
+    }
+
+    private static readonly TimeSpan TokenFor = TimeSpan.FromMinutes(10), NoTokenFor = TimeSpan.FromMinutes(2);
+
+    /// <summary>credential fill's input → the fill's answer, and until when it's used.</summary>
+    private static readonly Dictionary<string, (Task<string?> Task, DateTime Until)> Tokens = [];
+
+    /// <summary>The host turned the token down (signed out, expired, revoked): the next lookup asks again.</summary>
+    private static void ForgetToken(RepoHost host)
+    {
+        if (CredentialInput(host) is { } input) lock (Tokens) Tokens.Remove(input);
+    }
+
+    private static async Task<string?> FillTokenAsync(string input)
+    {
+        GitResult result;
+        try { result = await GitService.RunOutsideRepositoryAsync(CredentialFillArgs, input, CredentialEnvironment, TimeSpan.FromSeconds(20)); }
+        catch (Exception) { return null; }   // kept as no credential, not as a failure every lookup would rethrow
         if (!result.Ok) return null;
         foreach (var line in result.Text.Split('\n'))
             if (line.StartsWith("password=", StringComparison.Ordinal))
