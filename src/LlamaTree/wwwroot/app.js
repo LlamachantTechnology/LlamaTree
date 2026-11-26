@@ -58,6 +58,11 @@ const PATHS = {
   chevU: 'M4 10l4-4 4 4',
   edit: 'M10.5 2.5l3 3-8 8h-3v-3zM9 4l3 3',   // a pencil: changed files, as on Visual Studio's status bar
   up: 'M8 13V3M4 7l4-4 4 4',
+  cloud: 'M4.5 12.5h7a2.5 2.5 0 0 0 .3-5 3.6 3.6 0 0 0-6.9-.9A3 3 0 0 0 4.5 12.5z',   // a branch also on the remote
+  check: 'M3 8.5l3 3 7-7',
+  trash: 'M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5',   // the branch picker's Delete
+  search: 'M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 1 0 0-9M10.3 10.3l3.2 3.2',
+  merge: 'M4.5 2.5a1.5 1.5 0 1 0 0 .01M4.5 13.5a1.5 1.5 0 1 0 0 .01M11.5 8a1.5 1.5 0 1 0 0 .01M4.5 4v8M4.5 4c0 3.5 3 4 5.5 4',
   down: 'M8 3v10M4 9l4 4 4-4',
   more: 'M3.5 8h.01M8 8h.01M12.5 8h.01',
   collapse: 'M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4',
@@ -333,6 +338,10 @@ const state = {
   projectViewOf: null,       // the project whose Project view is showing: a place of its own, with no session open
   currentId: store.get('currentId', null),   // session shown in the Git panel
   gitVisible: store.get('gitVisible', true),
+  // Git Repository's graph: 'main' (the base branch's own line, drilled into branch by branch; the current branch's
+  // history when there's no base branch) or 'all' (everything at once). A stored 'current', from before, is 'main'.
+  graphScope: store.get('repoScope') === 'all' ? 'all' : 'main',
+  repoView: store.get('repoView', 'graph') === 'inflight' ? 'inflight' : 'graph',   // Git Repository: the Graph or In flight
   hiddenGitTabs: new Set(store.get('hiddenGitTabs', [])),   // 'changes' and/or 'repo', turned off in the side panel's ▾
   gitWidth: store.get('gitWidth', 400),
   panels: [],                // shown by Claude through the app's MCP server (their tabs live in the dock)
@@ -5118,10 +5127,15 @@ function onGitStatus(m) {
   const s = state.byId.get(m.id);
   if (!s) return;
   // A new last commit, or a push/pull changing what is outgoing, makes the cached history stale.
-  if (s.git && (s.git.head !== m.head || s.git.upstream !== m.upstream || s.git.ahead !== m.ahead)) invalidateLog(s);
+  // Incoming commits (a fetch) change it too: the base branch's line and every branch's.
+  if (s.git && (s.git.head !== m.head || s.git.upstream !== m.upstream || s.git.ahead !== m.ahead
+    || s.git.behind !== m.behind)) invalidateLog(s);
   if (s.git && s.git.root !== m.root) {
     // Another repository: what was shown for the last one (its history, pull request and file diffs) no longer applies.
     invalidateLog(s);
+    s.inflight = null;
+    s.inflightAt = 0;
+    s.drill = null;
     s.prInfo = null;
     s.selectedCommit = null;
     s.commitInfo = null;
@@ -5145,6 +5159,7 @@ const logFailed = (s) => s.logError != null && s.logError.gen === s.logGen;
 function invalidateLog(s) {
   s.log = null;
   s.logGen = (s.logGen || 0) + 1;
+  if (s.drill) s.drill.stale = true;   // the Main graph keeps showing what it has while it asks again
 }
 
 // ---- docking
@@ -5153,7 +5168,7 @@ function invalidateLog(s) {
 // bottom half of a group, it splits that group. A group with nothing to show for the selected session (only panels
 // that belong elsewhere) hides, keeping its place. The layout is remembered.
 
-const GIT_TABS = { changes: 'Git Changes', repo: 'Git Repository' };
+const GIT_TABS = { changes: 'Git Changes', repo: 'Git Repository', reviews: 'Reviews' };
 const isPanelTab = (t) => t.startsWith('panel:');
 const panelByTab = (t) => state.panels.find((p) => panelTab(p) === t);
 
@@ -5261,7 +5276,8 @@ function renderGit() {
     g.body.hidden = plugin;
     g.frames.hidden = !plugin;
     if (plugin) { showDockPlugin(g, open); continue; }
-    if (!s) g.body.replaceChildren(h('div', { class: 'git-message' }, 'No session selected.'));
+    if (open === 'reviews') renderReviewsTab(g.body);   // every repository's, whichever session is selected
+    else if (!s) g.body.replaceChildren(h('div', { class: 'git-message' }, 'No session selected.'));
     else if (isPanelTab(open)) renderPanel(panelByTab(open), g.body);
     else if (open === 'repo') renderRepo(s, g.body);
     else renderChanges(s, g.body);
@@ -5334,7 +5350,12 @@ function renderDockTabs(g, tabs, open) {
         title: `${pluginCaption(id)}: a plugin${p?.description ? '\n' + p.description : ''}`,
       }, pluginIcon(id), h('span', { class: 'panel-tab-title' }, pluginCaption(id)), pluginBadge(id));
     }
-    if (!isPanelTab(t)) return h('button', { class: cls, 'data-tab': t, role: 'tab', 'aria-selected': String(t === open) }, GIT_TABS[t]);
+    if (!isPanelTab(t)) {
+      // Reviews carries how many are waiting on you, in every repository.
+      const yours = t === 'reviews' ? reviewsYours() : 0;
+      return h('button', { class: cls, 'data-tab': t, role: 'tab', 'aria-selected': String(t === open), title: yours ? `${plural(yours, 'review')} waiting on you` : null },
+        t === 'reviews' ? 'Reviews (Beta)' : GIT_TABS[t], yours > 0 && h('span', { class: 'tw-badge tone-warning' }, String(yours)));
+    }
     const p = panelByTab(t);
     const owner = state.byId.get(p.owner);
     return h('button', {
@@ -5411,7 +5432,7 @@ function reopenItems() {
 }
 
 function resetDock() {
-  const tabs = ['changes', 'repo', ...dock.groups.flatMap((g) => g.tabs).filter((t) => isPanelTab(t) || isPluginDockTab(t))];
+  const tabs = ['changes', 'repo', 'reviews', ...dock.groups.flatMap((g) => g.tabs).filter((t) => isPanelTab(t) || isPluginDockTab(t))];
   for (const g of dock.groups) { g.el?.remove(); g.divider?.remove(); }
   dock.groups = [{ tabs, active: 'changes', bySession: {}, size: 1 }];
   saveDock();
@@ -5649,6 +5670,10 @@ function branchLine(s) {
         onclick: (e) => { const r = e.currentTarget.getBoundingClientRect(); pullRequestMenu(s, pr, r.left, r.bottom + 2); },
       }, iconEl('pr'), `PR ${pr.pr.number}`, iconEl('chevD'))),
     h('div', { class: 'git-tools' },
+      // The current branch's review, unless it's the base branch itself.
+      onBranch && !['main', 'master', s.inflight?.baseBranch?.replace(/^[^/]+\//, ''), s.drill?.data?.baseBranch?.replace(/^[^/]+\//, '')].includes(g.branch)
+        && h('button', { class: 'icon-btn', title: `Review ${g.branch}: its changes against main file by file, with comments for the agent`,
+          onclick: () => openReview(s, 'refs/heads/' + g.branch, g.branch) }, iconEl('check')),
       tool('fetch', 'fetch', 'Fetch: download new commits and branches from the remote, without changing your files'),
       tool('pull', 'pull', g.upstream
         ? `Pull: bring in ${plural(behind, 'incoming commit')} from ${g.upstream}. Fast-forward only: never merges`
@@ -5781,6 +5806,7 @@ async function remoteOp(s, op) {
     const out = (await request('git.' + op, { id: s.id }))?.trim();
     s.info = { text: out ? `${done}\n${out}` : done };
     if (op === 'push') ensurePullRequest(s, true);   // a first push may have just made "New Pull Request" relevant
+    if (op === 'fetch') invalidateLog(s);   // other branches' remote ends, and the base branch, may have moved
   } catch (e) {
     s.info = { text: e.message, error: true };
   } finally {
@@ -5925,6 +5951,8 @@ async function branchPicker(s, anchor) {
     const current = !b.remote && b.name === s.git.branch;
     const elsewhere = !b.remote && !current && b.worktree && b.worktree.replace(/[\\/]+$/, '').toLowerCase() !== here ? b.worktree : null;
     const state = [b.ahead && `↑${b.ahead}`, b.behind && `↓${b.behind}`, b.gone && 'gone'].filter(Boolean).join(' ');
+    // Delete, on the row's button or its right-click menu: not for the branch checked out here (Git won't).
+    const del = () => { closeMenu(); deleteBranch(s, b.name, b.remote); };
     return h('div', {
       class: 'menu-item bp-row' + (current ? ' current' : '') + (elsewhere ? ' elsewhere' : ''),
       title: [b.name, current && 'The current branch', b.upstream && `Tracking ${b.upstream}${b.gone ? ' (gone from the remote)' : ''}`,
@@ -5933,9 +5961,22 @@ async function branchPicker(s, anchor) {
         if (elsewhere) { closeMenu(); toast(`${b.name} is checked out in the worktree ${elsewhere}, so it can't be checked out here too.`, true); return; }
         pick(b);
       },
+      oncontextmenu: (e) => {
+        e.preventDefault();
+        showMenu(e.clientX, e.clientY, [
+          { header: b.name },
+          !current && !elsewhere && { label: b.remote ? 'Check out' : 'Switch to', action: () => pick(b) },
+          current ? { label: 'Delete branch…', disabled: true, title: 'It is checked out here: switch to another branch first' }
+            : { label: b.remote ? 'Delete on remote…' : 'Delete branch…', danger: true, action: del },
+        ]);
+      },
     }, h('span', { class: 'menu-icon' }, iconEl(b.upstream ? 'branchTracked' : 'branch')),
     h('span', { class: 'bp-name' }, b.name),
-    elsewhere ? h('span', { class: 'bp-note' }, `in ${leafName(elsewhere)}`) : state && h('span', { class: 'bp-note' }, state));
+    elsewhere ? h('span', { class: 'bp-note' }, `in ${leafName(elsewhere)}`) : state && h('span', { class: 'bp-note' }, state),
+    !current && h('button', {
+      class: 'icon-btn small bp-del', title: b.remote ? `Delete ${b.name} on the remote…` : `Delete ${b.name}…`, html: icon('trash'),
+      onclick: (e) => { e.stopPropagation(); del(); },
+    }));
   };
   const fill = () => {
     for (const t of tabs.children) t.classList.toggle('active', t.dataset.tab === tab);
@@ -5998,6 +6039,7 @@ function renderChanges(s, body) {
   const before = branchLine(s);
   const after = [
     trustBanner(s),
+    reviewStrip(s),
     s.info && h('div', { class: 'infobar' + (s.info.error ? ' error' : '') }, h('span', { class: 'msg' }, s.info.text),
       h('button', { class: 'icon-btn small', title: 'Dismiss', onclick: () => { s.info = null; renderGit(); } }, iconEl('close'))),
     scroll,
@@ -6344,6 +6386,13 @@ async function renderRepo(s, body) {
     body.replaceChildren(branchLine(s), h('div', { class: 'git-message' }, 'No commits yet.'));
     return;
   }
+  if (state.repoView === 'inflight') { renderInFlight(s, body); return; }
+  if (state.graphScope === 'main' && !noBaseBranch(s)) { renderDrill(s, body); return; }
+  // Without a base branch, the current branch's history (and a base branch appearing later, after a fetch, is noticed).
+  if (state.graphScope === 'main' && s.drill.stale && !s.drill.loading) loadMainLine(s);
+  // Everything and the current branch's history are different lists: one loaded for the other is asked for again.
+  const wantAll = state.graphScope === 'all';
+  if (s.log && s.logAll !== wantAll) s.log = null;
   // A failure is kept until the history actually changes (invalidateLog bumps logGen), so status updates don't
   // re-request a log that just failed, over and over while a session is editing files.
   if (!s.log && logFailed(s)) {
@@ -6357,23 +6406,50 @@ async function renderRepo(s, body) {
     s.logLoading = true;
     const asked = s.logGen;
     let log, failure;
-    try { log = await request('git.log', { id: s.id }); } catch (e) { failure = e.message; } finally { s.logLoading = false; }
+    try { log = await request('git.log', { id: s.id, all: wantAll }); } catch (e) { failure = e.message; } finally { s.logLoading = false; }
     const current = currentSession() === s && isTabShown('repo');
-    if (s.logGen !== asked) { if (current) renderGit(); return; }   // the history changed while loading: ask again
+    // The history changed while loading, or the scope did: ask again
+    if (s.logGen !== asked || wantAll !== (state.graphScope === 'all')) { if (current) renderGit(); return; }
     if (failure) {   // not cached as an empty history; remembered for this generation, so Retry or a real change asks again
       s.logError = { gen: asked, message: failure };
       if (current) renderGit();
       return;
     }
     s.log = log;
+    s.logAll = wantAll;
     if (!current) return;
   }
   const logEl = h('div', { class: 'repo-log' });
-  const outgoing = s.log.filter((c) => c.outgoing);
-  const rest = s.log.filter((c) => !c.outgoing);
-  const commitRow = (c) => h('div', {
+  const outgoing = s.log.filter((c) => c.outgoing).length;
+  const rows = graphLayout(s.log, state.graphScope === 'all' ? graphPinned(s.log) : null);
+  const lanes = Math.min(GRAPH_MAX_LANES, Math.max(1, ...rows.map((r) => r.width)));
+  // A merged branch is usually deleted, taking its badge with it: its newest commit gets its name back, from the merge.
+  const mergedNames = new Map();   // a merged branch's newest commit → { name, merge }
+  for (const c of s.log) {
+    const src = c.parents?.length > 1 && mergeSource(c.subject);
+    if (src && !mergedNames.has(c.parents[1])) mergedNames.set(c.parents[1], { name: src.branch, merge: c.sha });
+  }
+  const focusOn = (e, target) => { e.stopPropagation(); expandBranch(s, target); };
+  const subject = (c, row) => {
+    const src = c.parents?.length > 1 && mergeSource(c.subject);
+    if (!src) {
+      const gone = !c.refs && mergedNames.get(c.sha);
+      return [gone && h('span', {
+        class: 'ref-gone focusable', style: `color:var(--lane-${row.color})`, title: `${gone.name}, since merged\nClick to see this branch on its own`,
+        onclick: (e) => focusOn(e, { merge: gone.merge, name: gone.name }),
+      }, gone.name), h('span', { class: 'commit-subject' }, c.subject), prOf(c.subject) && h('span', { class: 'pr-num' }, `#${prOf(c.subject)}`)];
+    }
+    // The merge, as what it brought in: the branch in its own line's colour, and the pull request's number.
+    const incoming = row.bottom[1]?.[2] ?? row.color;
+    return [h('span', {
+      class: 'merge-chip focusable', style: `--c:var(--lane-${incoming})`, title: `${c.subject}\nClick to see ${src.branch} on its own`,
+      onclick: (e) => focusOn(e, { merge: c.sha, name: src.branch }),
+    }, iconEl('merge'), 'merged ', h('b', {}, src.branch)),
+    src.pr && h('span', { class: 'pr-num' }, `#${src.pr}`), h('span', { class: 'commit-subject' })];
+  };
+  const commitRow = (c, i) => h('div', {
     class: 'commit-row' + (c.outgoing ? ' outgoing' : '') + (s.selectedCommit === c.sha ? ' selected' : ''),
-    title: `${c.subject}\n${c.author} · ${new Date(c.date).toLocaleString()}\n${c.sha}`,
+    title: `${c.subject}\n${c.author} · ${new Date(c.date).toLocaleString()}\n${c.sha}${c.outgoing ? '\nOutgoing: not pushed yet' : ''}`,
     onclick: () => selectCommit(s, c.sha),
     oncontextmenu: (e) => {
       e.preventDefault();
@@ -6382,26 +6458,1265 @@ async function renderRepo(s, body) {
         { label: 'Copy Commit ID', action: () => navigator.clipboard.writeText(c.sha) },
       ]);
     },
-  }, h('span', { class: 'graph' }), refBadges(c.refs), h('span', { class: 'commit-subject' }, c.subject),
+  }, h('span', { class: 'graph', style: `width:${lanes * GRAPH_LANE + 4}px`, html: graphSvg(rows[i], c) }),
+  refBadges(c.refs, rows[i], (ref, name) => expandBranch(s, { ref, name })), subject(c, rows[i]),
   h('span', { class: 'commit-meta' }, `${c.author} · ${relTime(c.date)}`));
 
-  if (outgoing.length) logEl.append(h('div', { class: 'group-label' }, `Outgoing (${outgoing.length})`), ...outgoing.map(commitRow));
-  logEl.append(h('div', { class: 'group-label' }, s.git.branch ? `Local history · ${s.git.branch}` : 'Local history'), ...rest.map(commitRow));
+  // Branches seen in this history, for the finder: by their refs, and merged ones by the merge that brought them in.
+  const refTargets = [];
+  for (const c of s.log) {
+    for (const r of (c.refs || '').split(', ')) {
+      const full = r.replace('HEAD -> ', '');
+      if (/^refs\/(heads|remotes)\//.test(full)) refTargets.push({ ref: full, name: full.replace(/^refs\/(heads|remotes)\//, '') });
+    }
+  }
+  logEl.append(repoViewBar(wantAll ? 'Every branch and tag' : s.git.branch ? `History · ${s.git.branch}` : 'History',
+    outgoing ? `${outgoing} outgoing` : null, graphScopeSwitch(s)),
+  branchFinder(s, refTargets, mergedNames),
+  ...s.log.map(commitRow));
   if (!s.log.length) logEl.append(h('div', { class: 'git-message' }, 'No commits yet.'));
 
   const details = h('div', { class: 'repo-details' });
   renderCommitDetails(s, details);
+  const keep = keptScroll(body, 'graph');
   body.replaceChildren(branchLine(s), h('div', { class: 'repo-split' }, logEl, details));
+  logEl.scrollTop = keep;
+  logEl.dataset.view = 'graph';
 }
 
-function refBadges(refs) {
-  if (!refs) return null;
-  return refs.split(', ').filter(Boolean).slice(0, 3).map((r) => {
-    const head = r.startsWith('HEAD -> ');
-    const tag = r.startsWith('tag: ');
-    const label = r.replace('HEAD -> ', '').replace('tag: ', '');
-    return h('span', { class: 'ref' + (head ? ' head' : tag ? ' tag' : '') }, label);
+/**
+ * The graph's two scopes: Focused, the base branch's own line (main, master, develop: the bar beside it names it) with
+ * the branches you open beside it; or Everything at once. Without a base branch the first is the current branch's history.
+ */
+function graphScopeSwitch(s) {
+  const scope = (v, label, title) => h('button', { class: 'scope-btn' + (state.graphScope === v ? ' active' : ''), title, onclick: () => setGraphScope(v) }, label);
+  const d = s?.drill?.data;
+  const base = d?.baseBranch?.replace(/^[^/]+\//, '');
+  return h('span', { class: 'scope-switch' },
+    d && !d.baseTip
+      ? scope('main', 'History', "There's no main or master branch: the current branch's history")
+      : scope('main', 'Focused', `${base || 'The main branch'}'s own line, one row per merge, with its branches and tags: click a merge's dot to see that branch beside it`),
+    scope('all', 'Everything', 'Every local and remote branch and tag at once, with where they branch off and merge'));
+}
+
+/** The base branch's line can't be drawn without a base branch: the graph shows the current branch's history instead. */
+const noBaseBranch = (s) => !!s.drill?.data && !s.drill.data.baseTip;
+
+function setGraphScope(v) {
+  if (state.graphScope === v) return;
+  state.graphScope = v;
+  store.set('repoScope', v);
+  renderGit();
+}
+
+/**
+ * "Find a branch": branches by ref ({ ref, name }) and merged ones by the merge that brought them in, picked by name to
+ * open in the Main graph. A name not among them is looked up as far back as main goes.
+ */
+function branchFinder(s, refs, mergedNames) {
+  const targets = new Map();   // name → { ref } | { merge }
+  for (const t of refs) if (!targets.has(t.name)) targets.set(t.name, { ref: t.ref, name: t.name });
+  for (const { name, merge } of mergedNames.values()) if (!targets.has(name)) targets.set(name, { merge, name, merged: true });
+  const listId = 'branchFinderList';
+  const input = h('input', {
+    class: 'branch-finder', placeholder: `Find a branch (${targets.size})…`, list: listId, spellcheck: 'false',
+    title: 'Type a branch name and press Enter to open it beside main: its commits, where it forked and landed, and what it changes.\nMerged branches are found however long ago they landed.',
+    onchange: (e) => { const t = targets.get(e.target.value.trim()); if (t) { expandBranch(s, t); e.target.value = ''; } },
+    onkeydown: (e) => {
+      if (e.key !== 'Enter') return;
+      const q = e.target.value.trim().toLowerCase();
+      const t = targets.get(e.target.value.trim()) || [...targets.values()].find((x) => x.name.toLowerCase().includes(q));
+      if (q) { expandBranch(s, t || { name: e.target.value.trim() }); e.target.value = ''; }
+    },
   });
+  const options = [...targets.values()].sort((a, b) => (a.merged === b.merged ? a.name.localeCompare(b.name) : a.merged ? 1 : -1))
+    .map((t) => h('option', { value: t.name }, t.merged ? 'merged' : ''));
+  return h('div', { class: 'branch-find' }, iconEl('search'), input, h('datalist', { id: listId }, options));
+}
+
+/** Where the list was scrolled to, when it's being redrawn for the same view (a status update, a refresh). */
+const keptScroll = (body, view) => { const el = body.querySelector('.repo-log'); return el?.dataset.view === view ? el.scrollTop : 0; };
+
+/** The bar at the top of Git Repository: Graph or In flight, what the view shows, and the view's own controls. */
+function repoViewBar(title, note, right) {
+  const view = (v, label, tip) => h('button', {
+    class: 'scope-btn' + (state.repoView === v ? ' active' : ''), title: tip,
+    onclick: () => { if (state.repoView === v) return; state.repoView = v; store.set('repoView', v); renderGit(); },
+  }, label);
+  return h('div', { class: 'group-label repo-scope' },
+    h('span', { class: 'scope-switch' },
+      view('graph', 'Graph', 'The history: every commit, and where branches fork and merge'),
+      view('inflight', 'In flight', 'What is being worked on beside main, and where it will collide')),
+    h('span', { class: 'repo-scope-title' }, title, note ? ` · ${note}` : ''),
+    right);
+}
+
+// ---- In flight
+// What's being worked on beside the base branch (origin/main, say): each branch with commits main doesn't have, or with
+// uncommitted changes in its worktree, with the sessions on it; which of them would conflict with main or with each
+// other (merged in memory by git merge-tree, nothing touched); an order to merge them in; and what has landed on main
+// since you last looked. Checked again every INFLIGHT_STALE_MS while it shows.
+
+const INFLIGHT_STALE_MS = 20000;
+
+async function loadInFlight(s) {
+  if (s.inflightLoading || !s.git?.isRepo) return;
+  s.inflightLoading = true;
+  const root = s.git.root;
+  try {
+    const reviews = request('git.reviewSummary', { id: s.id }).catch(() => null);
+    const r = await request('git.inflight', { id: s.id, seen: store.get('inflightSeen', {}) });
+    if (s.git?.root !== root) return;   // the session is in another repository by now
+    s.reviews = (await reviews) || s.reviews || {};
+    s.reviewsAt = Date.now();
+    s.inflight = r;
+    s.inflightError = null;
+    // A first look starts the count: nothing has "landed since you last looked" yet.
+    const seen = store.get('inflightSeen', {});
+    if (r.baseTip && !seen[r.repo]) { seen[r.repo] = r.baseTip; store.set('inflightSeen', seen); }
+  } catch (e) {
+    s.inflightError = e.message;
+  } finally {
+    s.inflightLoading = false;
+    s.inflightAt = Date.now();
+  }
+  if (currentSession() === s && isTabShown('repo') && state.repoView === 'inflight') renderGit();
+}
+
+setInterval(() => {
+  const s = currentSession();
+  if (s && state.repoView === 'inflight' && isTabShown('repo') && document.visibilityState === 'visible'
+    && !s.inflightLoading && Date.now() - (s.inflightAt || 0) >= INFLIGHT_STALE_MS) loadInFlight(s);
+}, 5000);
+
+/** The sessions working in a worktree. */
+const sessionsIn = (path) => path ? [...state.byId.values()].filter((x) => x.git?.root && normPath(x.git.root) === normPath(path)) : [];
+
+/** A branch's colour, by what its name says it is (feature/, fix/, docs/…), the same wherever it shows. */
+function branchKind(name) {
+  const p = name.includes('/') ? name.slice(0, name.indexOf('/')).toLowerCase() : '';
+  if (['feature', 'feat'].includes(p)) return 'feature';
+  if (['fix', 'bugfix', 'hotfix', 'bug'].includes(p)) return 'fix';
+  if (['docs', 'doc'].includes(p)) return 'docs';
+  if (['chore', 'build', 'ci', 'refactor', 'deps', 'dependabot'].includes(p)) return 'chore';
+  if (['release', 'releases'].includes(p)) return 'release';
+  return 'other';
+}
+
+const fileList = (files, max = 3) => files.slice(0, max).map((f) => f.split('/').pop()).join(', ') + (files.length > max ? ` and ${files.length - max} more` : '');
+const plural = (n, word, many = word + 's') => `${n} ${n === 1 ? word : many}`;
+
+/**
+ * An order to merge the open branches in. Those that conflict with main need a rebase first and come last. Of the rest,
+ * each step takes the branch that conflicts with the fewest of those still waiting (then one nobody's still changing,
+ * then the oldest): a branch that conflicts with one merged before it needs a rebase at that point, and says so.
+ */
+function landingPlan(r) {
+  const conflictsWith = (a, b) => r.overlaps.find((o) => (o.a === a && o.b === b) || (o.a === b && o.b === a))?.conflicts;
+  const waiting = r.branches.filter((b) => b.ahead > 0 && !b.baseConflicts?.length);
+  const blocked = r.branches.filter((b) => b.ahead > 0 && b.baseConflicts?.length);
+  const plan = [];
+  const landed = [];
+  while (waiting.length) {
+    const score = (b) => waiting.filter((o) => o !== b && conflictsWith(b.name, o.name)?.length).length;
+    waiting.sort((a, b) => score(a) - score(b) || (a.uncommitted > 0) - (b.uncommitted > 0) || a.date.localeCompare(b.date));
+    const next = waiting.shift();
+    const after = landed.filter((l) => conflictsWith(next.name, l.name)?.length);
+    plan.push({ branch: next, after });
+    landed.push(next);
+  }
+  return { plan, blocked };
+}
+
+// In flight answers "what are the branches, and what can we do with them?": every branch not in main yet, grouped by
+// what it needs next, each with that next step as a button. Below them, how they collide, an order to merge them in,
+// and what has landed on main since you last looked.
+
+const STALE_DAYS = 21;
+const PR_LOOKUP_MS = 3 * 60_000;
+
+/** The open pull request for a branch, looked up in the background (cached a few minutes); undefined until known. */
+function branchPr(s, name) {
+  s.branchPrs ??= new Map();
+  const hit = s.branchPrs.get(name);
+  if (hit && (hit.loading || Date.now() - hit.at < PR_LOOKUP_MS)) return hit.data;
+  const entry = { loading: true, at: Date.now(), data: hit?.data };
+  s.branchPrs.set(name, entry);
+  request('git.branchPr', { id: s.id, branch: name })
+    .then((data) => { entry.data = data || null; }, () => { entry.data = null; })
+    .finally(() => {
+      entry.loading = false;
+      entry.at = Date.now();
+      if (currentSession() === s && state.repoView === 'inflight' && isTabShown('repo')) renderGit();
+    });
+  return entry.data;
+}
+
+async function pushBranch(s, name) {
+  s.pushing ??= new Set();
+  if (s.pushing.has(name)) return;
+  s.pushing.add(name);
+  renderGit();
+  try {
+    const out = (await request('git.pushBranch', { id: s.id, branch: name }))?.trim();
+    toast(out ? `Pushed ${name}.\n${out}` : `Pushed ${name}.`);
+    s.branchPrs?.delete(name);   // a first push makes "Create pull request" the next step
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    s.pushing.delete(name);
+    s.inflightAt = 0;
+    loadInFlight(s);
+  }
+}
+
+// ---- Delete branch
+// Any local branch can go, merged or not: the dialog says first what would be lost with it, and offers to delete its copy
+// on the remote too (the last choice is remembered). A branch that's only on the remote can be deleted there.
+
+/**
+ * Asks, then deletes a branch: a local one by its name, or with remote set, a remote one by In flight's name for it
+ * ("origin/feature/x"). The host checks it again, and refuses a branch checked out in a worktree.
+ */
+async function deleteBranch(s, name, remote = false) {
+  let info;
+  try {
+    info = await request('git.branchDeleteInfo', { id: s.id, branch: name, remote });
+  } catch (e) {
+    toast(e.message, true);
+    return;
+  }
+  if (!info?.exists) { toast(`There's no ${remote ? 'remote' : 'local'} branch named ${name} any more.`, true); return; }
+  if (info.worktree) {
+    openModal('Can\'t delete branch', h('div', {}, `${name} is checked out in the worktree ${info.worktree}. Switch that worktree to another branch first.`),
+      [h('button', { class: 'btn primary', onclick: closeModal }, 'OK')]);
+    return;
+  }
+  const error = h('div', { class: 'form-error', hidden: true });
+  const ok = h('button', { class: 'btn danger primary' }, remote ? 'Delete on remote' : 'Delete branch');
+  let alsoRemote = null;
+  const body = [];
+  if (remote) {
+    body.push(h('div', {}, `Delete ${info.branch} on ${info.remote}? It goes for everyone who uses ${info.remote}.`));
+    if (info.isBase) body.push(h('div', { class: 'form-error' }, `${name} is the base branch: In flight, Reviews and the graph compare every branch with it.`));
+    body.push(h('div', { class: info.lost ? 'form-error' : 'dim' }, info.lost
+      ? `${plural(info.lost, 'commit')} on it ${info.lost === 1 ? 'is' : 'are'} on no branch you have here and would be lost, unless someone else has fetched ${info.lost === 1 ? 'it' : 'them'}.`
+      : 'Every commit on it is on a branch you have here.'));
+  } else {
+    const base = info.baseBranch;
+    const copy = info.remote ? `${info.remote}/${info.remoteBranch}` : null;
+    body.push(h('div', {}, `Delete the branch ${name}?`));
+    if (info.isBase) {
+      body.push(h('div', { class: 'form-error' }, `${name} is the base branch: In flight, Reviews and the graph compare every branch with it. Delete it only if you mean to stop using it.`));
+      body.push(h('div', { class: info.lost ? 'form-error' : 'dim' }, info.lost
+        ? `${plural(info.lost, 'commit')} on it ${info.lost === 1 ? 'is' : 'are'} on no other branch and would be lost.`
+        : 'Every commit on it is on another branch too.'));
+    } else if (info.merged) {
+      body.push(h('div', { class: 'dim' }, `It's merged into ${base}, so no commits are lost.`));
+    } else if (info.lost) {
+      const others = [base, copy].filter(Boolean);
+      body.push(h('div', { class: 'form-error' }, `It isn't merged${base ? ` into ${base}` : ''}. ${plural(info.lost, 'commit')} on it would be lost: `
+        + (others.length ? `${others.join(' and ')} ${others.length > 1 ? "don't" : "doesn't"} have ${info.lost === 1 ? 'it' : 'them'}.` : `no other branch has ${info.lost === 1 ? 'it' : 'them'}.`)));
+    } else {
+      // With a base, only its remote copy can be holding them; without one, they were checked against every other branch.
+      body.push(h('div', { class: 'dim' }, base && copy ? `It isn't merged into ${base}, but ${copy} has all its commits.` : 'Every commit on it is on another branch too.'));
+    }
+    if (copy) {
+      alsoRemote = h('input', { type: 'checkbox', checked: !!store.get('deleteRemoteBranch', false) });
+      // Deleting the copy that keeps the commits loses them after all.
+      const keeps = !info.isBase && !info.merged && !info.lost;
+      const note = h('div', { class: 'form-error', hidden: true }, `Then nothing keeps its commits that ${base} doesn't have.`);
+      const update = () => { note.hidden = !(keeps && alsoRemote.checked); };
+      alsoRemote.addEventListener('change', update);
+      update();
+      body.push(h('label', { class: 'check-field' }, alsoRemote, `Also delete ${copy}`), note);
+    }
+  }
+  body.push(error);
+  ok.onclick = async () => {
+    if (alsoRemote) store.set('deleteRemoteBranch', alsoRemote.checked);
+    ok.disabled = true;
+    ok.textContent = 'Deleting…';
+    try {
+      const r = await request('git.deleteBranch', remote ? { id: s.id, branch: name, remote: true }
+        : { id: s.id, branch: name, deleteRemote: !!alsoRemote?.checked, tip: info.tip });
+      closeModal();
+      if (r.remoteError) toast(`${r.message}\n${r.remoteError}`, true);
+      else toast(r.message);
+      branchDeleted(s, remote ? null : name, [
+        ...(remote || r.remoteDeleted ? [`refs/remotes/${info.remote}/${remote ? info.branch : info.remoteBranch}`] : []),
+        ...(remote ? [] : ['refs/heads/' + name])]);
+    } catch (e) {
+      error.hidden = false;
+      error.textContent = e.message;
+      ok.disabled = false;
+      ok.textContent = remote ? 'Delete on remote' : 'Delete branch';
+    }
+  };
+  openModal(remote ? 'Delete remote branch' : 'Delete branch', body, [h('button', { class: 'btn', onclick: closeModal, 'data-autofocus': true }, 'Cancel'), ok]);
+}
+
+/** A branch by its full ref: { name, remote } for refs/heads/x or refs/remotes/origin/x, else null. */
+function branchOfRef(ref) {
+  if (ref?.startsWith('refs/heads/')) return { name: ref.slice(11), remote: false };
+  if (ref?.startsWith('refs/remotes/') && !ref.endsWith('/HEAD')) return { name: ref.slice(13), remote: true };
+  return null;
+}
+
+/**
+ * After a delete: everything that showed the branch asks again. Histories are dropped for each session in the repository
+ * (its worktrees as In flight knows them, else every session: a dropped history only costs a reload), lanes open on the
+ * deleted refs close, and so do review tabs for the branch.
+ */
+function branchDeleted(s, localName, refs) {
+  const known = s.inflight ? new Set([s.inflight.repo, ...s.inflight.branches.map((b) => b.worktree)].filter(Boolean).map(normPath)) : null;
+  const repo = s.inflight?.repo && normPath(s.inflight.repo);
+  for (const x of state.byId.values()) {
+    if (!x.git?.isRepo) continue;
+    if (x !== s && known && !known.has(normPath(x.git.root)) && !(repo && x.inflight?.repo && normPath(x.inflight.repo) === repo)) continue;
+    invalidateLog(x);
+    x.inflightAt = 0;
+    x.branchPrs?.delete(localName);
+    if (x.drill) {
+      for (const [key, e] of x.drill.expanded) if (refs.includes(e.target.ref)) { x.drill.expanded.delete(key); if (x.drill.selected === key) x.drill.selected = null; }
+    }
+  }
+  for (const t of docs.tabs.filter((t) => isReviewTab(t) && (refs.includes(t.ref) || (localName && t.name === localName)))) closeDoc(t.key);
+  loadInFlight(s);
+  loadReviews(s, true);
+  loadAllReviews(true);   // the Reviews tab: a deleted branch's review is done
+  renderGit();
+}
+
+/**
+ * What a branch needs next: its group (attention, progress, stale, push, review, remote), what to say, and the one
+ * action that moves it on.
+ */
+function branchNext(s, r, b, base) {
+  const sessions = sessionsIn(b.worktree);
+  const asking = sessions.find((x) => ['asking', 'attention'].includes(statusClass(x)));
+  const working = sessions.find((x) => statusClass(x) === 'working');
+  const days = b.date ? (Date.now() - Date.parse(b.date)) / 86_400_000 : 0;
+  const goTo = (x) => ({ label: `Go to ${x.name}`, run: () => expand(x.id) });
+  const show = { label: 'Show in graph', run: () => expandBranch(s, { ref: (b.remote ? 'refs/remotes/' : 'refs/heads/') + b.name, name: b.name }) };
+  const pushIt = { label: s.pushing?.has(b.name) ? 'Pushing…' : 'Push', run: () => pushBranch(s, b.name), busy: s.pushing?.has(b.name) };
+
+  if (b.remote) return { group: 'remote', text: `Only on ${b.name.split('/')[0]}: nobody has it here`, action: show };
+  if (asking) return { group: 'attention', tone: 'bad', text: `${asking.name} needs your answer`, action: goTo(asking) };
+  if (b.baseConflicts?.length) {
+    return { group: 'attention', tone: 'bad', text: `Conflicts with ${base} in ${fileList(b.baseConflicts)}: it needs ${base} merged in, or a rebase`,
+      action: sessions[0] ? goTo(sessions[0]) : show };
+  }
+  if (working) return { group: 'progress', text: `${working.name} is working on it`, action: goTo(working) };
+  if (b.uncommitted > 0) {
+    return { group: 'progress', tone: 'warn', text: `${plural(b.uncommitted, 'file')} changed, not committed`, action: sessions[0] ? goTo(sessions[0]) : show };
+  }
+  if (days > STALE_DAYS && !sessions.length) return { group: 'stale', text: `No commits for ${Math.floor(days)} days`, action: show };
+  if (!b.upstream) return { group: 'push', text: `Not pushed: only on this computer`, action: pushIt };
+  if (b.unpushed > 0) return { group: 'push', text: `${plural(b.unpushed, 'commit')} not pushed yet`, action: pushIt };
+
+  // Ready for review: reviewing it here comes first, then its pull request once you've approved it.
+  const pr = branchPr(s, b.name);
+  const rv = reviewStatus(s, b);
+  const reviewIt = { label: rv.state === 'new' ? 'Review changes' : 'Review', run: () => openReview(s, 'refs/heads/' + b.name, b.name) };
+  const approved = rv.state === 'approved';
+  if (pr?.pr) {
+    return { group: 'review', tone: 'ok', text: `${pr.pr.draft ? 'Draft pull request' : 'Pull request'} #${pr.pr.number}: ${pr.pr.title}`,
+      action: approved ? { label: `Open #${pr.pr.number}`, run: () => request('openUrl', { uri: pr.pr.url }) } : reviewIt };
+  }
+  const clean = b.baseConflicts && !b.baseConflicts.length;
+  return { group: 'review', tone: clean ? 'ok' : null, text: `Pushed${clean ? `, merges cleanly into ${base}` : ''}: ready for ${approved ? 'a pull request' : 'review'}`,
+    action: !approved ? reviewIt : pr?.newUrl ? { label: 'Create pull request', run: () => request('openUrl', { uri: pr.newUrl }) } : show };
+}
+
+/** Where a branch's review stands (see ReviewService.SummariesAsync): not reviewed, reviewed, new commits since, or approved. */
+function reviewStatus(s, b) {
+  const rs = s.reviews?.[b.remote ? b.name.slice(b.name.indexOf('/') + 1) : b.name];
+  const open = rs?.open || 0;
+  if (!rs?.reviewedTip) return { state: 'none', text: 'not reviewed', open };
+  if (rs.approvedTip && rs.approvedTip === rs.tip) return { state: 'approved', text: 'approved', open };
+  if (rs.tip && rs.reviewedTip !== rs.tip) return { state: 'new', text: 'new commits since your review', open };
+  return { state: 'reviewed', text: 'reviewed', open };
+}
+
+const IF_GROUPS = [
+  ['attention', 'Needs attention'],
+  ['progress', 'In progress'],
+  ['push', 'Not pushed'],
+  ['review', 'Ready for review'],
+  ['stale', 'Stale'],
+  ['remote', 'On the remote only'],
+];
+
+function renderInFlight(s, body) {
+  const r = s.inflight;
+  if (!r || Date.now() - (s.inflightAt || 0) >= INFLIGHT_STALE_MS) loadInFlight(s);
+  const wrap = h('div', { class: 'repo-log inflight' });
+  const base = r?.baseBranch || 'main';
+  const done = () => {
+    const keep = keptScroll(body, 'inflight');
+    body.replaceChildren(branchLine(s), wrap);
+    wrap.scrollTop = keep;
+    wrap.dataset.view = 'inflight';
+  };
+  const busy = h('span', { class: 'inflight-busy' + (s.inflightLoading ? ' on' : ''), title: 'Checking…' }, iconEl('refresh'));
+  if (!r) {
+    wrap.append(repoViewBar('In flight', null, busy),
+      h('div', { class: 'git-message' }, s.inflightError ? `Could not check the branches: ${s.inflightError}` : 'Checking the branches…'));
+    return done();
+  }
+  if (!r.baseBranch) {
+    wrap.append(repoViewBar('In flight', null, busy), h('div', { class: 'git-message' }, 'There is no main or master branch to compare the others with.'));
+    return done();
+  }
+
+  const cards = r.branches.map((b) => ({ b, next: branchNext(s, r, b, base) }));
+  const attention = cards.filter((x) => x.next.group === 'attention').length;
+  wrap.append(repoViewBar(`${plural(r.branches.length, 'branch', 'branches')} not in ${base}`, attention ? `${attention} need${attention === 1 ? 's' : ''} attention` : null, busy));
+  if (r.conflictCheck !== 'on') {
+    wrap.append(h('div', { class: 'if-note' }, r.conflictCheck === 'untrusted'
+      ? "Conflicts aren't checked: this repository's own settings can run programs during a merge, and it isn't trusted."
+      : "Conflicts aren't checked: that needs Git 2.38 or later."));
+  }
+  if (!r.branches.length) {
+    wrap.append(h('div', { class: 'git-message' }, `Nothing in flight: every branch is in ${base}, and no worktree has uncommitted changes.`));
+  }
+
+  const section = (title, count, ...kids) => [h('div', { class: 'if-head' }, title, count != null && h('span', { class: 'count' }, `(${count})`)), ...kids];
+
+  // The branches, by what they need next; newest first within each group.
+  for (const [group, title] of IF_GROUPS) {
+    const list = cards.filter((x) => x.next.group === group).sort((a, b) => (b.b.date || '').localeCompare(a.b.date || ''));
+    if (list.length) wrap.append(...section(title, list.length, ...list.map(({ b, next }) => inFlightCard(s, r, b, base, next))));
+  }
+
+  // How they collide: pairs changing the same files, those that would conflict first.
+  const overlaps = r.overlaps.slice().sort((a, b) => (b.conflicts?.length || 0) - (a.conflicts?.length || 0) || b.count - a.count);
+  if (overlaps.length) {
+    wrap.append(...section('Collisions between branches', overlaps.length, ...overlaps.map((o) => {
+      const bad = o.conflicts?.length;
+      const how = bad ? ` conflict in ${fileList(o.conflicts)}`
+        : o.conflicts ? ` both change ${fileList(o.files)}, but merge cleanly`
+        : ` both change ${fileList(o.files)}${r.conflictCheck === 'on' ? ', not committed yet' : ''}`;
+      return h('div', { class: 'if-clash' + (bad ? ' bad' : ''), title: (bad ? o.conflicts : o.files).join('\n') },
+        iconEl(bad ? 'warn' : 'info'), h('b', {}, o.a), ' and ', h('b', {}, o.b), h('span', { class: 'if-files' }, how));
+    })));
+  }
+
+  // An order to merge them in
+  const { plan, blocked } = landingPlan(r);
+  if (plan.length > 1 || blocked.length) {
+    wrap.append(...section('Suggested merge order', null,
+      ...plan.map(({ branch, after }, i) => h('div', { class: 'if-step' },
+        h('span', { class: 'if-n' }, String(i + 1)), h('b', {}, branch.name),
+        h('span', { class: 'if-files' }, after.length ? ` · rebase it after ${after.map((a) => a.name).join(' and ')} lands`
+          : branch.baseConflicts ? ' · merges cleanly' : ''),
+        branch.uncommitted > 0 && h('span', { class: 'if-files' }, ' · still has uncommitted changes'))),
+      ...blocked.map((b) => h('div', { class: 'if-step' }, h('span', { class: 'if-n bad' }, '!'), h('b', {}, b.name),
+        h('span', { class: 'if-files' }, ` · rebase it on ${base} first`)))));
+  }
+
+  // Since you last looked
+  if (r.landed?.length) {
+    const seen = () => { const m = store.get('inflightSeen', {}); m[r.repo] = r.baseTip; store.set('inflightSeen', m); s.inflight = { ...r, landed: [] }; renderGit(); };
+    wrap.append(...section(`Landed on ${base} since you last looked`, r.landed.length,
+      ...r.landed.slice(0, 8).map((c) => {
+        const src = mergeSource(c.subject);
+        return h('div', {
+          class: 'if-landed' + (src ? ' focusable' : ''), title: `${c.subject}\n${c.author} · ${new Date(c.date).toLocaleString()}${src ? `\nClick to show ${src.branch} in the graph` : ''}`,
+          onclick: src ? () => expandBranch(s, { merge: c.sha, name: src.branch }) : null,
+        },
+        src ? [h('span', { class: 'merge-chip', style: `--c:var(--kind-${branchKind(src.branch)})` }, iconEl('merge'), 'merged ', h('b', {}, src.branch)), src.pr && h('span', { class: 'pr-num' }, `#${src.pr}`)]
+          : [h('span', { class: 'commit-subject' }, c.subject), prOf(c.subject) && h('span', { class: 'pr-num' }, `#${prOf(c.subject)}`)],
+        h('span', { class: 'commit-subject' }), h('span', { class: 'commit-meta' }, `${c.author} · ${relTime(c.date)}`));
+      }),
+      r.landed.length > 8 && h('div', { class: 'if-more' }, `and ${r.landed.length - 8} more`),
+      h('div', { class: 'if-actions' }, h('button', { class: 'btn', onclick: seen }, 'Got it'))));
+  }
+  return done();
+}
+
+/** A branch's card: who's on it, where it stands, what it needs next (with the button for it), and what else it offers. */
+function inFlightCard(s, r, b, base, next) {
+  const sessions = sessionsIn(b.worktree);
+  const ref = (b.remote ? 'refs/remotes/' : 'refs/heads/') + b.name;
+  const clashes = r.overlaps.filter((o) => (o.a === b.name || o.b === b.name) && o.conflicts?.length).map((o) => (o.a === b.name ? o.b : o.a));
+  const pr = !b.remote && b.upstream ? s.branchPrs?.get(b.name)?.data : null;
+  const rv = reviewStatus(s, b);
+  const push = b.remote ? null : b.upstream ? (b.unpushed ? `${b.unpushed} to push` : 'pushed') : (b.ahead ? 'not pushed' : null);
+  const more = (e) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    showMenu(rect.left, rect.bottom + 2, [
+      { label: 'Review', action: () => openReview(s, ref, b.name) },
+      { label: 'Show in graph', action: () => expandBranch(s, { ref, name: b.name }) },
+      ...sessions.map((x) => ({ label: `Go to ${x.name}`, action: () => expand(x.id) })),
+      !b.remote && (b.ahead > 0 || b.unpushed > 0) && { label: 'Push', action: () => pushBranch(s, b.name) },
+      pr?.pr && { label: `Open pull request #${pr.pr.number}`, action: () => request('openUrl', { uri: pr.pr.url }) },
+      pr && !pr.pr && { label: 'Create pull request', action: () => request('openUrl', { uri: pr.newUrl }) },
+      '-',
+      { label: 'Copy branch name', action: () => navigator.clipboard.writeText(b.name) },
+      b.remote ? { label: 'Delete on remote…', danger: true, action: () => deleteBranch(s, b.name, true) }
+        : { label: 'Delete branch…', danger: true, action: () => deleteBranch(s, b.name) },
+    ]);
+  };
+  return h('div', { class: `if-card kind-${branchKind(b.name)}` },
+    h('div', { class: 'if-line' },
+      h('button', { class: 'if-name focusable', title: `${b.name}${b.worktree ? `\nChecked out in ${b.worktree}` : ''}\nClick to show it in the graph`,
+        onclick: () => expandBranch(s, { ref, name: b.name }) }, b.name),
+      ...sessions.map((x) => h('button', { class: 'if-session', title: `${x.name}: ${statusText(x)}\nClick to go to it`, onclick: () => expand(x.id) }, statusDot(x), x.name)),
+      !sessions.length && b.worktree && h('span', { class: 'if-dim', title: b.worktree }, b.worktree.split(/[\\/]/).pop()),
+      h('span', { class: 'if-spacer' }),
+      h('button', { class: 'icon-btn if-more-btn', title: 'More', onclick: more, html: icon('more') })),
+    h('div', { class: 'if-line if-next' },
+      h('span', { class: 'if-status' + (next.tone ? ' ' + next.tone : '') }, next.text),
+      next.action && h('button', { class: 'btn if-action' + (next.group === 'push' || next.group === 'review' ? ' primary' : ''), disabled: !!next.action.busy,
+        onclick: next.action.run }, next.action.label),
+      // Any branch with work of its own can be reviewed, whatever it needs next.
+      b.ahead > 0 && !/^Review/.test(next.action?.label || '') && h('button', {
+        class: 'btn if-action', title: 'Its changes file by file: tick them off, and comment for the agent working on it',
+        onclick: () => openReview(s, ref, b.name),
+      }, rv.state === 'new' ? 'Review changes' : 'Review')),
+    h('div', { class: 'if-line if-meta' },
+      h('span', { title: `${plural(b.ahead, 'commit')} ${base} doesn't have; ${plural(b.behind, 'commit')} on ${base} it doesn't have` }, `↑${b.ahead} ↓${b.behind}`),
+      b.files > 0 && h('span', {}, plural(b.files, 'file')),
+      b.uncommitted > 0 && next.group !== 'progress' && h('span', { class: 'if-warnish' }, `${b.uncommitted} uncommitted`),
+      push && next.group !== 'push' && h('span', {}, push),
+      pr?.pr && next.group !== 'review' && h('span', { class: 'pr-num' }, `#${pr.pr.number}`),
+      rv.state !== 'none' && h('button', { class: 'if-review ' + rv.state, title: 'Open its review', onclick: () => openReview(s, ref, b.name) },
+        rv.text, rv.open ? ` · ${plural(rv.open, 'open comment')}` : ''),
+      b.date && h('span', { class: 'if-dim', title: b.subject }, `last commit ${relTime(b.date)}`)),
+    clashes.length > 0 && h('div', { class: 'if-line if-bad' }, iconEl('warn'), `conflicts with ${clashes.join(', ')}`));
+}
+
+// ---- The Main graph: main's own line, drilled into branch by branch
+// Shows only the base branch's own line (its first parents: one row per merge) until you ask for more. Clicking a
+// merge's dot opens the branch it brought in as a lane beside main, with its own commits; a branch merged into that
+// one opens the same way. Once a branch is open, the stretches of main between what matters to the open branches
+// (where they forked, took main in, and landed) fold into one row each, which unfold on a click. Branches not merged
+// yet are one row each at the date of their newest commit, which opens in place; the current branch starts open.
+
+const DRILL_PAGE = 300;
+
+function drillState(s) {
+  s.drill ??= { count: DRILL_PAGE, data: null, loading: false, error: null, stale: false, expanded: new Map(), unfolded: new Set(),
+    selected: null, nextColor: 1, autoOpened: false };
+  return s.drill;
+}
+
+/** Commits main has to reach for the open lanes to join it: where each forked, took main in, and landed. */
+function drillInclude(dr) {
+  const list = [];
+  for (const e of dr.expanded.values()) {
+    const d = e.data;
+    if (!d) continue;
+    if (d.fork) list.push(d.fork.sha);
+    if (d.landed) list.push(d.landed.sha);
+    for (const c of d.commits) if (c.fromBase) list.push(c.parents[1]);
+  }
+  return list;
+}
+
+async function loadMainLine(s) {
+  const dr = drillState(s);
+  if (dr.loading) return;
+  dr.loading = true;
+  const root = s.git?.root;
+  const refresh = dr.stale;
+  try {
+    // A refresh asks again for the open branches shown too: they may have new commits.
+    if (refresh) {
+      await Promise.all([...dr.expanded.values()].filter((e) => e.target.ref && e.data).map(async (e) => {
+        try { e.data = await request('git.focus', { id: s.id, ref: e.target.ref }); } catch { /* keeps what it had */ }
+      }));
+    }
+    const data = await request('git.mainline', { id: s.id, count: dr.count, include: drillInclude(dr) });
+    if (s.git?.root !== root) return;
+    dr.data = data;
+    dr.error = null;
+    dr.stale = false;
+  } catch (e) {
+    dr.error = e.message;
+  } finally {
+    dr.loading = false;
+  }
+  if (currentSession() === s) renderGit();
+}
+
+/**
+ * Opens a branch as a lane in the Main graph, from anywhere (a merge's dot, an open branch, the finder, In flight):
+ * target is { ref, name } for a branch that exists, { merge, name } for one brought in by that merge, or { name } alone.
+ * select: show its summary in the details below; scroll: bring its newest commit into view.
+ */
+async function expandBranch(s, target, { select = true, scroll = true } = {}) {
+  const dr = drillState(s);
+  const key = target.merge || target.ref || 'name:' + target.name;
+  if (state.graphScope !== 'main') setGraphScope('main');
+  if (state.repoView !== 'graph') { state.repoView = 'graph'; store.set('repoView', 'graph'); }
+  if (!isTabShown('repo') && gitTabOn('repo')) openDockTab('repo');
+  let e = dr.expanded.get(key);
+  if (!e) {
+    e = { key, target, name: target.name, data: null, error: null, color: dr.nextColor };
+    dr.nextColor = dr.nextColor % 7 + 1;   // lanes 1–7; main is 0
+    dr.expanded.set(key, e);
+  }
+  if (select) { dr.selected = key; s.selectedCommit = null; s.commitInfo = null; }
+  renderGit();
+  if (!e.data && !e.loading) {
+    e.loading = true;
+    try {
+      e.data = await request('git.focus', { id: s.id, ref: target.ref || null, merge: target.merge || null, name: target.ref || target.merge ? null : target.name });
+    } catch (err) {
+      e.error = err.message;
+      dr.expanded.delete(key);
+      if (dr.selected === key) dr.selected = null;
+      toast(`Couldn't show ${target.name}: ${err.message}`, true);
+    } finally {
+      e.loading = false;
+    }
+    // Main has to reach where it forked and landed for its lane to join up.
+    const have = new Set((dr.data?.commits || []).map((c) => c.sha));
+    if (e.data && drillInclude(dr).some((sha) => !have.has(sha))) await loadMainLine(s);
+  }
+  if (currentSession() === s) renderGit();
+  if (scroll && e.data) requestAnimationFrame(() => document.querySelector(`.repo-log.drill [data-sha="${e.data.commits[0]?.sha}"]`)?.scrollIntoView({ block: 'center' }));
+}
+
+function collapseBranch(s, key) {
+  const dr = drillState(s);
+  dr.expanded.delete(key);
+  if (dr.selected === key) dr.selected = null;
+  renderGit();
+}
+
+/**
+ * Keeps the row that was clicked where it is on screen while the graph changes around it (rows opening or folding above
+ * it would otherwise push it away): the first of shas still shown, held through every redraw until change finishes.
+ */
+async function keepInPlace(s, shas, change) {
+  const dr = drillState(s);
+  const list = document.querySelector('.repo-log.drill');
+  const row = list && shas.filter(Boolean).map((sha) => list.querySelector(`[data-sha="${CSS.escape(sha)}"]`)).find(Boolean);
+  const anchor = row ? { shas: shas.filter(Boolean), offset: row.getBoundingClientRect().top - list.getBoundingClientRect().top } : null;
+  dr.anchor = anchor;
+  try { await change(); } finally { if (dr.anchor === anchor) dr.anchor = null; }
+}
+
+/** Puts the anchored row back where it was, after a redraw. */
+function applyAnchor(dr, list) {
+  const a = dr.anchor;
+  if (!a) return;
+  const row = a.shas.map((sha) => list.querySelector(`[data-sha="${CSS.escape(sha)}"]`)).find(Boolean);
+  if (row) list.scrollTop += row.getBoundingClientRect().top - list.getBoundingClientRect().top - a.offset;
+}
+
+/** A branch's prefix for the Main graph's filter: "feature/" for feature/x (or origin/feature/x), "" for none. */
+function branchPrefix(b) {
+  const name = b.ref?.startsWith('refs/remotes/') ? b.name.slice(b.name.indexOf('/') + 1) : b.name;
+  const i = name.indexOf('/');
+  return i > 0 ? name.slice(0, i + 1) : '';
+}
+
+/** Opens these open branches (by default every one not merged into main yet) from one request, then has main reach where they all fork. */
+async function expandAll(s, branches = null) {
+  const dr = drillState(s);
+  const todo = (branches || dr.data?.open || []).filter((b) => !dr.expanded.has(b.ref)).map((b) => {
+    const e = { key: b.ref, target: { ref: b.ref, name: b.name }, name: b.name, data: null, error: null, color: dr.nextColor, loading: true };
+    dr.nextColor = dr.nextColor % 7 + 1;
+    dr.expanded.set(b.ref, e);
+    return e;
+  });
+  if (!todo.length) return;
+  renderGit();
+  const root = s.git?.root;
+  let found = {}, error = null;
+  try { found = await request('git.focusMany', { id: s.id, refs: todo.map((e) => e.target.ref) }); }
+  catch (err) { error = err.message; }
+  const failed = [];
+  for (const e of todo) {
+    e.loading = false;
+    e.data = found[e.target.ref] || null;
+    if (!e.data) { if (dr.expanded.get(e.key) === e) dr.expanded.delete(e.key); if (dr.selected === e.key) dr.selected = null; failed.push(e.name); }
+  }
+  if (s.git?.root !== root) return;
+  if (failed.length) toast(`Couldn't show ${failed.join(', ')}${error ? `: ${error}` : ''}`, true);
+  const have = new Set((dr.data?.commits || []).map((c) => c.sha));
+  if (drillInclude(dr).some((sha) => !have.has(sha))) await loadMainLine(s);
+  else if (currentSession() === s) renderGit();
+}
+
+/** Hides every open lane, and folds main back up. */
+function collapseAll(s) {
+  const dr = drillState(s);
+  dr.expanded.clear();
+  dr.unfolded.clear();
+  dr.selected = null;
+  renderGit();
+}
+
+/** A pull request's number, from a merge's message or a squash merge's "(#123)". */
+const prOf = (subject) => mergeSource(subject)?.pr || /\(#(\d+)\)\s*$/.exec(subject || '')?.[1] || null;
+
+/**
+ * The Main graph's rows, in an order the graph can draw (children before parents; otherwise newest first), each with
+ * its parents among those shown. A parent that isn't shown is replaced by the nearest one that is: a folded stretch of
+ * main stands for all its commits.
+ */
+function drillGraph(dr, stubs = []) {
+  const main = dr.data.commits;
+  const open = [...dr.expanded.values()].filter((e) => e.data);
+  const lineOf = new Map();   // a lane's commit → its lane
+  for (const e of open) for (const c of e.data.commits) if (!lineOf.has(c.sha)) lineOf.set(c.sha, e);
+  const landedBy = new Map(open.filter((e) => e.data.landed).map((e) => [e.data.landed.sha, e]));
+
+  // What stays on main one by one once lanes are open: where they forked, took main in, and landed.
+  const events = new Map();   // sha → notes
+  const note = (sha, text) => { if (sha) events.set(sha, [...(events.get(sha) || []), text]); };
+  for (const e of open) {
+    const d = e.data;
+    note(d.landed?.sha, null);
+    note(d.fork?.sha, null);   // its line curving in says so
+    for (const c of d.commits) if (c.fromBase) note(c.parents[1], `${e.name} took main in here`);
+  }
+  const nodeOfMain = new Map();
+  const unfolded = new Map();   // the newest commit of an unfolded stretch → { key, count }
+  const folds = new Map();
+  let run = [];
+  const flush = () => {
+    const key = open.length && run.length > 2 ? 'fold:' + run[0].sha : null;   // nothing open: nothing folds
+    if (key && !dr.unfolded.has(key)) { for (const c of run) nodeOfMain.set(c.sha, key); folds.set(key, run); }
+    else {
+      for (const c of run) nodeOfMain.set(c.sha, c.sha);
+      if (key) unfolded.set(run[0].sha, { key, count: run.length });
+    }
+    run = [];
+  };
+  for (const c of main) { if (events.has(c.sha)) { flush(); nodeOfMain.set(c.sha, c.sha); } else run.push(c); }
+  flush();
+
+  const visible = (sha) => nodeOfMain.get(sha) ?? (lineOf.has(sha) ? sha : null);
+  const shown = new Map();
+  const add = (node) => { node.parents = [...new Set(node.parents.filter((p) => p && p !== node.sha))]; shown.set(node.sha, node); };
+  main.forEach((c, i) => {
+    const id = nodeOfMain.get(c.sha);
+    let next = null;
+    for (let k = i + 1; k < main.length && !next; k++) if (nodeOfMain.get(main[k].sha) !== id) next = nodeOfMain.get(main[k].sha);
+    if (id !== c.sha) {
+      if (!shown.has(id)) add({ sha: id, kind: 'fold', members: folds.get(id), date: c.date, parents: [next] });
+      return;
+    }
+    add({ sha: c.sha, kind: 'main', commit: c, date: c.date, parents: [next, landedBy.get(c.sha)?.data.commits[0]?.sha],
+      notes: (events.get(c.sha) || []).filter(Boolean), refold: unfolded.get(c.sha) });
+  });
+  for (const e of open) {
+    const commits = e.data.commits;
+    commits.forEach((c, i) => {
+      if (lineOf.get(c.sha) !== e) return;
+      const first = i + 1 < commits.length ? commits[i + 1].sha : visible(c.parents[0]);
+      const second = c.parents.length < 2 ? null : landedBy.get(c.sha)?.data.commits[0]?.sha ?? (c.fromBase ? visible(c.parents[1]) : null);
+      add({ sha: c.sha, kind: 'line', line: e, commit: c, date: c.date, parents: [first, second], tip: i === 0 });
+    });
+  }
+  // A branch not open yet: one row at its newest commit's date, with no line (it takes a free column for its dot).
+  for (const b of stubs) add({ sha: 'stub:' + b.ref, kind: 'stub', branch: b, date: b.date, parents: [] });
+
+  const children = new Map([...shown.keys()].map((k) => [k, 0]));
+  for (const n of shown.values()) for (const p of n.parents) if (children.has(p)) children.set(p, children.get(p) + 1);
+  const time = (n) => Date.parse(n.date) || 0;
+  const ready = [...shown.values()].filter((n) => children.get(n.sha) === 0);
+  const nodes = [];
+  while (ready.length) {
+    let best = 0;
+    for (let k = 1; k < ready.length; k++) if (time(ready[k]) > time(ready[best])) best = k;
+    const n = ready.splice(best, 1)[0];
+    nodes.push(n);
+    for (const p of n.parents) if (children.has(p)) { children.set(p, children.get(p) - 1); if (children.get(p) === 0) ready.push(shown.get(p)); }
+  }
+  const pinned = nodes.find((n) => n.kind === 'main' || n.kind === 'fold')?.sha ?? null;
+  const colorOf = (sha) => { const n = shown.get(sha); return !n ? null : n.kind === 'line' ? n.line.color : n.kind === 'stub' ? 'stub' : 0; };
+  return { nodes, rows: graphLayout(nodes.map((n) => ({ sha: n.sha, parents: n.parents, fold: n.kind === 'fold' })), pinned, colorOf) };
+}
+
+function renderDrill(s, body) {
+  const dr = drillState(s);
+  if ((!dr.data || dr.stale) && !dr.loading && !dr.error) loadMainLine(s);
+  const list = h('div', { class: 'repo-log drill' });
+  const d = dr.data;
+  const base = d?.baseBranch || 'main';
+  list.append(repoViewBar(d ? `${base} · ${plural(d.commits.length, 'commit')}${d.more ? '+' : ''}` : 'Main', null, graphScopeSwitch(s)));
+  const finish = () => {
+    const details = h('div', { class: 'repo-details' });
+    const sel = dr.selected && dr.expanded.get(dr.selected);
+    if (sel) renderBranchDetails(s, details, sel, base); else renderCommitDetails(s, details);
+    const keep = keptScroll(body, 'drill');
+    body.replaceChildren(branchLine(s), h('div', { class: 'repo-split' }, list, details));
+    list.scrollTop = keep;
+    list.dataset.view = 'drill';
+    applyAnchor(dr, list);
+    // Scrolling yourself lets go of a row being held in place.
+    for (const ev of ['wheel', 'keydown', 'pointerdown']) list.addEventListener(ev, () => { dr.anchor = null; }, { passive: true });
+  };
+  if (!d) {
+    list.append(h('div', { class: 'git-message' }, dr.error ? `Could not load ${base}: ${dr.error} ` : 'Loading…',
+      dr.error && h('button', { class: 'btn', onclick: () => { dr.error = null; loadMainLine(s); } }, 'Retry')));
+    return finish();
+  }
+  if (!d.baseTip) { renderGit(); return; }   // no base branch: the current branch's history shows instead
+
+  // The current branch starts open, once.
+  if (!dr.autoOpened) {
+    dr.autoOpened = true;
+    const branch = s.git.branch;
+    const localBase = base.replace(/^[^/]+\//, '');
+    if (branch && !branch.startsWith('(') && branch !== base && branch !== localBase) {
+      setTimeout(() => expandBranch(s, { ref: 'refs/heads/' + branch, name: branch }, { select: false, scroll: false }));
+    }
+  }
+
+  // Finding a branch, and the branches still open
+  const mergedNames = new Map();
+  for (const c of d.commits) {
+    const src = c.parents.length > 1 && mergeSource(c.subject);
+    if (src && !mergedNames.has(c.parents[1])) mergedNames.set(c.parents[1], { name: src.branch, merge: c.sha });
+  }
+  list.append(branchFinder(s, d.open.map((b) => ({ ref: b.ref, name: b.name })), mergedNames));
+
+  // The branches not open yet sit among main's commits by the date of their newest commit, one folded row each, so
+  // opening one grows its line down from where it already is. Prefixes (feature/, fix/, dependabot/…) can be hidden.
+  const hidden = new Set(store.get('drillHiddenPrefixes', []) || []);
+  const prefixes = new Map();
+  for (const b of d.open) { const p = branchPrefix(b); prefixes.set(p, (prefixes.get(p) || 0) + 1); }
+  // A branch still being read keeps its folded row (with a spinner) until its line can take its place.
+  const closed = d.open.filter((b) => !dr.expanded.get(b.ref)?.data && !hidden.has(branchPrefix(b)));
+  // Branches older than the commits read so far show once they are (Show older commits).
+  const oldest = d.more && d.commits.length ? Date.parse(d.commits[d.commits.length - 1].date) : -Infinity;
+  const stubs = closed.filter((b) => (Date.parse(b.date) || 0) >= oldest);
+  const busy = [...dr.expanded.values()].some((e) => e.loading);
+  const showing = d.open.length - d.open.filter((b) => !dr.expanded.has(b.ref)).length;
+  const togglePrefix = (p) => {
+    const next = new Set(hidden);
+    if (next.has(p)) next.delete(p); else next.add(p);
+    store.set('drillHiddenPrefixes', [...next]);
+    renderGit();
+  };
+  list.append(h('div', { class: 'drill-tools' },
+    d.open.length > 0 && h('span', { class: 'if-dim drill-open-count' }, plural(d.open.length, 'open branch', 'open branches'),
+      showing ? ` · ${showing} showing` : ''),
+    // One chip per prefix, most branches first; the plain ones last.
+    prefixes.size > 1 && h('span', { class: 'prefix-chips' }, ...[...prefixes].sort((a, b) => (a[0] === '' ? 1 : b[0] === '' ? -1 : b[1] - a[1]))
+      .map(([p, n]) => h('button', {
+        class: 'prefix-chip' + (hidden.has(p) ? ' off' : ''), 'aria-pressed': String(!hidden.has(p)),
+        title: `${hidden.has(p) ? 'Show' : 'Hide'} the ${plural(n, 'open branch', 'open branches')} ${p ? `named ${p}…` : 'with no prefix'}`,
+        onclick: () => togglePrefix(p),
+      }, p || 'other', h('span', { class: 'prefix-count' }, String(n))))),
+    h('span', { class: 'drill-tools-gap' }),
+    h('span', { class: 'scope-switch scope-actions' },
+      h('button', {
+        class: 'scope-btn', disabled: !stubs.length || busy,
+        title: stubs.length ? `Show the ${plural(stubs.length, 'branch', 'branches')} listed beside ${base}` : `Every branch listed is showing`,
+        onclick: () => expandAll(s, stubs),
+      }, busy ? 'Expanding…' : 'Expand all'),
+      h('button', {
+        class: 'scope-btn', disabled: !dr.expanded.size && !dr.unfolded.size,
+        title: `Hide every branch and fold ${base} back up`,
+        onclick: () => collapseAll(s),
+      }, 'Collapse all'))));
+
+  const g = drillGraph(dr, stubs);
+  const lanes = Math.min(GRAPH_MAX_LANES, Math.max(1, ...g.rows.map((r) => r.width)));
+  const expandedFiles = [...dr.expanded.values()].filter((e) => e.data).map((e) => ({ e, files: new Set(e.data.files.map((f) => f.path)) }));
+  list.append(...g.nodes.map((n, i) => drillRow(s, dr, n, g.rows[i], lanes, base, expandedFiles)));
+  drillHover(s, dr, list);
+  if (d.more) {
+    const later = closed.length - stubs.length;
+    list.append(h('div', { class: 'if-actions drill-more' }, h('button', {
+      class: 'btn', onclick: () => { dr.count += DRILL_PAGE; loadMainLine(s); },
+    }, `Show ${DRILL_PAGE} older commits on ${base}`, later ? ` (and ${plural(later, 'open branch', 'open branches')})` : '')));
+  }
+  return finish();
+}
+
+/**
+ * The branches and tags at these commits, as git log --decorate=full writes them (for refBadges): the current branch
+ * marked HEAD, tags marked tag:, and any ref in skip left out (a lane's own branch, which its name badge already shows).
+ */
+function drillRefs(s, dr, shas, skip = null) {
+  const refs = dr.data?.refs;
+  if (!refs) return null;
+  const head = s.git?.branch ? 'refs/heads/' + s.git.branch : null;
+  // The skipped branch's remote copies go with it (origin/x beside x).
+  const name = skip?.replace(/^refs\/(heads|remotes\/[^/]+)\//, '');
+  const skipped = (r) => !!skip && (r === skip || (r.startsWith('refs/remotes/') && r.replace(/^refs\/remotes\/[^/]+\//, '') === name));
+  const list = shas.flatMap((sha) => refs[sha] || []).filter((r) => !skipped(r))
+    .map((r) => (r === head ? 'HEAD -> ' + r : r.startsWith('refs/tags/') ? 'tag: ' + r : r));
+  return list.length ? list.join(', ') : null;
+}
+
+/**
+ * A branch not merged into main and not open yet: one row at the date of its newest commit, folded to a grey ring with
+ * a plus. The dot (or the row) opens it as a line, whose newest commit stays where the row was.
+ */
+function drillStub(s, dr, n, row, lanes, base) {
+  const b = n.branch;
+  const fork = b.fork && dr.data.commits.find((c) => c.sha === b.fork);
+  const pr = fork && prOf(fork.subject);
+  const loading = !!dr.expanded.get(b.ref)?.loading;
+  const open = (select) => { if (!loading) dr.hoverMute = b.tip; if (!loading) keepInPlace(s, [b.tip], () => expandBranch(s, { ref: b.ref, name: b.name }, { select, scroll: false })); };
+  const what = [b.ahead != null && plural(b.ahead, 'commit'), pr ? `from #${pr}` : fork ? `from ${base} ${relTime(fork.date)}` : null].filter(Boolean).join(' · ');
+  return h('div', {
+    class: 'commit-row drill-stub', 'data-sha': b.tip,
+    title: `${b.name}\n${b.subject}\nNot merged into ${base} yet\nClick to show its commits beside ${base}`,
+    onclick: () => open(true),
+  },
+  h('span', { class: 'graph' + (loading ? '' : ' drill-dot'), style: `width:${lanes * GRAPH_LANE + 4}px`, 'data-cols': laneCols(row),
+    html: graphSvg(row, { parents: [], expand: loading ? 'loading' : 'stub' }),
+    title: loading ? `Reading ${b.name}…` : `Click the dot to show ${b.name}`, onclick: (e) => { e.stopPropagation(); open(false); } }),
+  refBadges(drillRefs(s, dr, [b.tip]), null, (ref, name) => expandBranch(s, { ref, name })) || h('span', { class: 'ref plain' }, b.name),
+  h('span', { class: 'commit-subject' }, b.subject),
+  what && h('span', { class: 'if-dim drill-stub-what' }, what),
+  h('span', { class: 'commit-meta' }, relTime(b.date)));
+}
+
+/**
+ * Following a branch in the Main graph: pointing at a row keeps its line and commits at full strength, main faintly,
+ * and fades the rest; a + that opens a branch not shown yet doesn't, and nor does the row just opened or closed until
+ * the pointer moves to another. Lines are told apart by colour (each open branch has its own).
+ */
+function drillHover(s, dr, list) {
+  let current = null;
+  const apply = (target) => {
+    if ((target?.key ?? null) === current) return;
+    current = target?.key ?? null;
+    for (const r of list.querySelectorAll('.commit-row.hl-row')) r.classList.remove('hl-row');
+    list.classList.toggle('hl', !!target);
+    if (!target) { delete list.dataset.hl; return; }
+    list.dataset.hl = target.lane;
+    for (const r of target.rows || list.querySelectorAll(`.commit-row[data-lane="${target.lane}"]`)) r.classList.add('hl-row');
+  };
+  // Only the graph itself or a branch badge follows a branch, after a moment, so reading down the messages or passing
+  // over the graph on the way somewhere doesn't keep dimming everything. In the graph it's the line under the pointer
+  // (by its column), not just the row's own dot.
+  let timer = 0;
+  const later = (target) => {
+    if ((target?.key ?? null) === current) { clearTimeout(timer); return; }
+    clearTimeout(timer);
+    timer = setTimeout(() => apply(target), target ? 120 : 60);
+  };
+  const follow = (ev) => {
+    const spot = ev.target.closest?.('.graph, .ref');
+    const row = spot?.closest('.commit-row');
+    if (!row || !list.contains(row)) { later(null); return; }
+    // The row whose dot was just clicked to open or close a branch: nothing until the pointer has left it.
+    if (dr.hoverMute) {
+      if (row.dataset.sha === dr.hoverMute) { later(null); return; }
+      dr.hoverMute = null;
+    }
+    if (spot.classList.contains('graph')) {
+      const col = Math.floor((ev.clientX - spot.getBoundingClientRect().left - 2) / GRAPH_LANE);
+      const lane = (spot.dataset.cols || '').split(',')[col];
+      // An empty column, or a + that opens a branch not shown yet (a folded branch, a merge's): nothing to follow.
+      if (!lane || lane === 'stub' || (spot.dataset.expand === 'closed' && String(col) === spot.dataset.col)) { later(null); return; }
+      later({ key: 'l' + lane, lane });
+      return;
+    }
+    // A branch badge: the line it's on, unless it's a folded branch's.
+    if (row.classList.contains('drill-stub') || row.dataset.lane == null) { later(null); return; }
+    later({ key: 'l' + row.dataset.lane, lane: row.dataset.lane });
+  };
+  list.addEventListener('mouseover', follow);
+  list.addEventListener('mousemove', (ev) => { if (ev.target.closest?.('.graph')) follow(ev); });
+  list.addEventListener('mouseleave', () => later(null));
+  apply(null);
+}
+
+/** Which line runs through each column of a graph row ("1,,3": column 0 is lane colour 1, column 1 empty…), for following the one under the pointer. */
+function laneCols(row) {
+  const cols = [];
+  for (const [a, b, color] of [...row.top, ...row.bottom]) { cols[a] ??= color; cols[b] ??= color; }
+  cols[row.col] = row.color;
+  return Array.from(cols, (c) => (c == null ? '' : String(c))).join(',');
+}
+
+/** One row of the Main graph. */
+function drillRow(s, dr, n, row, lanes, base, expandedFiles) {
+  if (n.kind === 'stub') return drillStub(s, dr, n, row, lanes, base);
+  const c = n.commit;
+  const badges = (shas, skip, lineRow = row) => refBadges(drillRefs(s, dr, shas, skip), lineRow, (ref, name) => expandBranch(s, { ref, name }));
+  const meta = (date, author) => h('span', { class: 'commit-meta' }, author ? `${author} · ${relTime(date)}` : relTime(date));
+  const prChip = (pr) => pr && h('span', { class: 'pr-num' }, `#${pr}`);
+  const src = c && c.parents.length > 1 && mergeSource(c.subject);
+  // A merge's dot opens (or hides) the branch it brought in.
+  const key = c?.sha;
+  const opens = src && key && !(n.kind === 'line' && c.fromBase);
+  const isOpen = opens && dr.expanded.has(key);
+  const loading = isOpen && !!dr.expanded.get(key).loading;
+  const graph = h('span', {
+    class: 'graph' + (opens && !loading ? ' drill-dot' : ''), style: `width:${lanes * GRAPH_LANE + 4}px`, 'data-cols': laneCols(row),
+    'data-col': row.col, 'data-expand': opens ? (isOpen && !loading ? 'open' : 'closed') : null,
+    html: graphSvg(row, { parents: n.parents, fold: n.kind === 'fold', expand: opens ? (loading ? 'loading' : isOpen ? dr.expanded.get(key).color : 'closed') : null }),
+    title: opens ? (loading ? `Reading ${src.branch}…` : `Click the dot to ${isOpen ? 'hide' : 'show'} ${src.branch}`) : null,
+    onclick: opens ? (e) => {
+      e.stopPropagation();
+      if (loading) return;
+      dr.hoverMute = n.sha;
+      keepInPlace(s, [n.sha], () => (isOpen ? collapseBranch(s, key) : expandBranch(s, { merge: key, name: src.branch }, { scroll: false })));
+    } : null,
+  });
+  const select = c ? () => { dr.selected = null; selectCommit(s, c.sha); } : null;
+  const rowEl = (cls, content, onclick = select, title = c ? `${c.subject}\n${c.author} · ${new Date(c.date).toLocaleString()}\n${c.sha}` : null) =>
+    h('div', { class: 'commit-row ' + cls + (c && s.selectedCommit === c.sha && !dr.selected ? ' selected' : ''), title, onclick, 'data-sha': n.sha, 'data-lane': row.color }, graph, content);
+  const mergeChip = (name, color) => h('span', { class: 'merge-chip', style: `--c:${color}` }, iconEl('merge'), 'merged ', h('b', {}, name));
+
+  if (n.kind === 'fold') {
+    const m = n.members;
+    const prs = m.filter((x) => x.parents.length > 1).length;
+    const touching = m.filter((x) => expandedFiles.some(({ files }) => x.files.some((f) => files.has(f))));
+    const first = m[m.length - 1], last = m[0];
+    const day = (iso) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    const range = day(first.date) === day(last.date) ? day(last.date) : `${day(first.date)} – ${day(last.date)}`;
+    return rowEl('focus-fold', [
+      h('span', { class: 'chev', html: icon('chevR') }),
+      // Tags and branches on the folded commits show here, plain, so a release inside a fold isn't lost.
+      badges(m.map((x) => x.sha), null, null),
+      h('span', { class: 'commit-subject' }, `${plural(m.length, 'commit')} on ${base}`, prs ? ` · ${plural(prs, 'PR')}` : '', h('span', { class: 'if-dim' }, ` · ${range}`)),
+      touching.length > 0 && h('span', { class: 'focus-overlap', title: touching.map((x) => x.subject).join('\n') }, iconEl('warn'), `${touching.length} touched open lanes' files`)],
+    () => keepInPlace(s, [n.sha, m[0].sha], () => { dr.unfolded.add(n.sha); renderGit(); }),
+    `${m.slice(0, 12).map((x) => x.subject).join('\n')}${m.length > 12 ? `\n… and ${m.length - 12} more` : ''}\n\nClick to unfold`);
+  }
+
+  if (n.kind === 'main') {
+    const landing = [...dr.expanded.values()].find((e) => e.data?.landed?.sha === c.sha);
+    const overlaps = landing ? [] : expandedFiles.filter(({ e, files }) => c.files.some((f) => files.has(f))).map(({ e }) => e.name);
+    return rowEl('focus-main', [
+      n.refold && h('button', { class: 'focus-refold', title: `Fold these ${n.refold.count} commits on ${base} back into one`,
+        onclick: (e) => { e.stopPropagation(); keepInPlace(s, [n.sha, n.refold.key], () => { dr.unfolded.delete(n.refold.key); renderGit(); }); } }, iconEl('chevU'), 'fold'),
+      badges([c.sha]),
+      src ? [mergeChip(src.branch, isOpen ? `var(--lane-${dr.expanded.get(key).color})` : 'var(--text-dim)'), prChip(src.pr), h('span', { class: 'commit-subject' })]
+        : [h('span', { class: 'commit-subject' }, c.subject), prChip(prOf(c.subject))],
+      n.notes.length > 0 && h('span', { class: 'focus-note' }, n.notes.join(' · ')),
+      overlaps.length > 0 && h('span', { class: 'focus-overlap', title: `Changes files that ${overlaps.join(' and ')} change${overlaps.length > 1 ? '' : 's'} too` }, iconEl('warn'), overlaps.join(', ')),
+      meta(c.date, c.author)]);
+  }
+
+  // A lane's commit: its PR (from where it landed) beside each, its name on the newest.
+  const e = n.line;
+  const pr = e.data.landed ? prOf(e.data.landed.subject) : null;
+  return rowEl('focus-mine', [
+    n.tip && h('span', {
+      class: 'ref own focusable' + (dr.selected === e.key ? ' selected-branch' : ''), style: `--c:var(--lane-${e.color})`,
+      title: `${e.name}\nClick for its summary and what it changes`,
+      onclick: (ev) => { ev.stopPropagation(); dr.selected = e.key; s.selectedCommit = null; renderGit(); },
+    }, e.name, h('button', {
+      class: 'ref-close', title: `Hide ${e.name}`, html: icon('close'),
+      // Its rows go: an open branch folds back to one row where its newest commit was; a merged one leaves where it
+      // landed or forked from main where it is.
+      onclick: (ev) => { ev.stopPropagation(); dr.hoverMute = e.data.commits[0]?.sha; keepInPlace(s, [e.data.landed ? null : e.data.commits[0]?.sha, e.data.landed?.sha, e.data.fork?.sha], () => collapseBranch(s, e.key)); },
+    })),
+    // Other branches and tags on this commit (on the tip, the lane's own branch is the name badge already).
+    badges([c.sha], n.tip ? e.target.ref : null),
+    c.fromBase ? h('span', { class: 'commit-subject focus-took' }, `took in ${plural(c.tookIn, 'commit')} from ${base}`)
+      : src ? [mergeChip(src.branch, isOpen ? `var(--lane-${dr.expanded.get(key).color})` : 'var(--text-dim)'), prChip(src.pr), h('span', { class: 'commit-subject' })]
+      : [h('span', { class: 'commit-subject' }, c.subject), prChip(prOf(c.subject) || pr)],
+    meta(c.date, c.author)]);
+}
+
+/** An open lane's summary, in the details below the graph: where it stands, where it came from, and what it changes. */
+function renderBranchDetails(s, el, e, base) {
+  const d = e.data;
+  if (!d) { el.append(h('div', { class: 'git-message' }, e.error || `Loading ${e.name}…`)); return; }
+  const own = d.commits.filter((c) => c.parents.length < 2);
+  const fromBase = d.commits.filter((c) => c.fromBase);
+  const authors = [...own.reduce((m, c) => m.set(c.author, (m.get(c.author) || 0) + 1), new Map())].sort((a, b) => b[1] - a[1]);
+  const pr = d.landed && prOf(d.landed.subject);
+  const branch = branchOfRef(e.target.ref);
+  const day = (iso) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: new Date(iso).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+  el.append(
+    h('div', { class: 'focus-head' },
+      h('div', { class: 'focus-title', style: `--c:var(--lane-${e.color})` }, e.name),
+      h('div', {}, d.landed
+        ? [iconEl('merge'), `Merged into ${base}`, pr ? ` as #${pr}` : '', ` · ${day(d.landed.date)}`]
+        : [h('b', {}, 'Open'), ` · ↑${d.ahead} ↓${d.behind} against ${base}`]),
+      h('div', { class: 'if-dim', title: d.fork?.subject || '' }, d.fork ? `Forked from ${base} · ${day(d.fork.date)} (${relTime(d.fork.date)})`
+        : d.truncated ? `More than ${d.commits.length} commits: the oldest aren't shown` : ''),
+      h('div', { class: 'if-dim' }, [plural(own.length, 'commit'),
+        authors.length && authors.map(([a, n]) => (authors.length > 1 ? `${a} ${n}` : a)).join(', '),
+        fromBase.length && `took in ${base} ${plural(fromBase.length, 'time')}`].filter(Boolean).join(' · ')),
+      // An open branch by its ref can be reviewed: file by file, with comments for the agent working on it.
+      !d.landed && e.target.ref && h('div', { class: 'if-actions' },
+        h('button', { class: 'btn primary', title: 'Its changes file by file: tick them off, and comment for the agent working on it', onclick: () => openReview(s, e.target.ref, e.name) }, 'Review'),
+        branch && h('button', { class: 'btn', title: 'Delete this branch, after saying what would be lost with it',
+          onclick: () => deleteBranch(s, branch.name, branch.remote) }, 'Delete…'))),
+    h('div', { class: 'section-header' }, h('span', { class: 'chev', html: icon('chevD') }), `Changes against ${base}`, h('span', { class: 'count' }, `(${d.files.length})`)),
+    ...treeRows(d.files, 1, 'branch-' + d.tip, s, (file, pin) => openDiff(s,
+      { mode: 'commit', path: file.path, origPath: file.origPath, status: file.status, commit: d.tip, parent: d.diffFrom }, pin)),
+    !d.files.length && h('div', { class: 'git-message' }, `No change against ${base}.`));
+}
+
+
+/** onFocus(ref, name): a branch badge was clicked, to see that branch on its own. */
+function refBadges(refs, row, onFocus = null) {
+  if (!refs) return null;
+  // git log --decorate=full: "HEAD -> refs/heads/main", "refs/remotes/origin/main", "tag: refs/tags/v1", "HEAD".
+  const all = refs.split(', ').filter(Boolean).map((r) => {
+    const head = r.startsWith('HEAD -> ');
+    const full = r.replace('HEAD -> ', '').replace('tag: ', '');
+    const kind = full.startsWith('refs/heads/') ? 'local' : full.startsWith('refs/remotes/') ? 'remote' : full.startsWith('refs/tags/') ? 'tag' : 'other';
+    return { head, kind, full, name: full.replace(/^refs\/(heads|remotes|tags)\//, '') };
+  });
+  // A remote branch at the same commit as the local one of the same name (pushed and up to date) shares its badge.
+  const locals = new Set(all.filter((r) => r.kind === 'local').map((r) => r.name));
+  const twinOf = (r) => r.kind === 'remote' && r.name.includes('/') ? (locals.has(r.name.slice(r.name.indexOf('/') + 1)) ? r.name.slice(r.name.indexOf('/') + 1) : null) : null;
+  const remotes = new Map();
+  for (const r of all) { const t = twinOf(r); if (t) remotes.set(t, [...(remotes.get(t) || []), r.name]); }
+  const shown = all.filter((r) => !twinOf(r));
+  // Only one branch owns the line its commit sits on, and only its badge takes that line's colour: main (or master),
+  // else the current branch, else the first local one, else a remote one. Another branch at the same commit (one just
+  // made from it, say) has no line of its own yet, so its badge stays plain.
+  const branches = shown.filter((r) => r.kind === 'local' || r.kind === 'remote');
+  const owner = row && (branches.find((r) => r.kind === 'local' && ['main', 'master'].includes(r.name)) || branches.find((r) => r.head)
+    || branches.find((r) => r.kind === 'local') || branches[0]);
+  return shown.slice(0, 3).map((r) => {
+    const tag = r.kind === 'tag', label = r.name;
+    const also = r.kind === 'local' ? remotes.get(label) : null;
+    const branch = r.kind === 'local' || r.kind === 'remote';
+    const tips = [r.head && 'The current branch', also && `the same as ${also.join(' and ')}`].filter(Boolean);
+    const focus = onFocus && branch;
+    return h('span', {
+      class: 'ref' + (tag ? ' tag' : r === owner ? ' own' : ' plain') + (r.head ? ' head' : '') + (focus ? ' focusable' : ''),
+      style: r === owner ? `--c:var(--lane-${row.color})` : null,
+      title: (tips.length ? `${label}: ${tips.join(', ')}` : label) + (focus ? '\nClick to see this branch on its own' : ''),
+      onclick: focus ? (e) => { e.stopPropagation(); onFocus(r.full, label); } : null,
+      // Right-click: delete it (the graph shows the selected session's repository).
+      oncontextmenu: branch && !r.full.endsWith('/HEAD') ? (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const s = currentSession();
+        if (!s) return;
+        showMenu(e.clientX, e.clientY, [
+          { header: label },
+          onFocus && { label: 'Show this branch', action: () => onFocus(r.full, label) },
+          { label: 'Copy branch name', action: () => navigator.clipboard.writeText(label) },
+          '-',
+          r.kind === 'remote' ? { label: 'Delete on remote…', danger: true, action: () => deleteBranch(s, label, true) }
+            : { label: 'Delete branch…', danger: true, action: () => deleteBranch(s, label) },
+        ]);
+      } : null,
+    }, label, also && h('span', { class: 'ref-remote', html: icon('cloud') }));
+  });
+}
+
+// ---- the commit graph
+// Each commit's row draws its own slice of the graph: the lines coming down into it from the row above, its dot, and
+// the lines leaving it for the row below. The layout walks the commits newest first, keeping a list of lanes, each
+// waiting for the commit it will lead to next (a parent of one already drawn). Lane colours are by lane, like GitKraken.
+
+const GRAPH_LANE = 14, GRAPH_ROW = 24, GRAPH_COLORS = 8, GRAPH_MAX_LANES = 24;
+
+/**
+ * Lays out the graph for commits listed children before parents (git log's order). One entry per commit:
+ * { col, color, width, top: [[fromLane, toLane, color]], bottom: [[fromLane, toLane, color]] }, where top runs from the
+ * row's top edge to its dot's height and bottom from there to its bottom edge.
+ */
+function graphLayout(commits, pinned = null, colorFor = null) {
+  // pinned (main's tip, say) keeps the first lane, kept empty and undrawn above it, so the main line runs straight down
+  // the left however many branches have newer commits. colorFor(sha) gives a line its own colour (null: the next one).
+  let lanes = pinned ? [{ sha: pinned, color: 0, reserved: true }] : [];   // { sha, color, reserved? } | null
+  let nextColor = pinned ? 1 : 0;
+  const newColor = (sha) => colorFor?.(sha) ?? nextColor++ % GRAPH_COLORS;
+  const free = (arr, avoid = -1) => { const i = arr.findIndex((l, k) => !l && k !== avoid); return i < 0 ? Math.max(arr.length, avoid + 1) : i; };
+  return commits.map((c) => {
+    let col = lanes.findIndex((l) => l?.sha === c.sha);
+    let color;
+    if (col < 0) { col = free(lanes); color = newColor(c.sha); }   // a branch tip: nothing above leads here
+    else color = lanes[col].color;
+
+    // Into the dot: every lane waiting for this commit (its children's) bends into it; the others pass straight down.
+    const top = [];
+    const after = lanes.slice();
+    lanes.forEach((l, k) => {
+      if (!l) return;
+      if (l.sha === c.sha) { if (!l.reserved) top.push([k, col, l.color]); after[k] = null; }
+      else if (!l.reserved) top.push([k, k, l.color]);
+    });
+
+    // Out of the dot: the first parent always carries on in this lane, even when another lane waits for it too, so a
+    // branch keeps its own line down to where it forked and the main line doesn't drift sideways; lanes waiting for the
+    // same commit meet at its row. A further parent (a merged branch) joins the lane already waiting for it, if any,
+    // else gets one of its own.
+    const bottom = [];
+    (c.parents || []).forEach((p, n) => {
+      let j = n === 0 ? col : after.findIndex((l) => l?.sha === p);
+      if (n === 0 || j < 0) {
+        if (n > 0) j = free(after, col);
+        after[j] = { sha: p, color: n === 0 ? color : newColor(p) };
+      }
+      bottom.push([col, j, after[j].color]);
+    });
+    after.forEach((l, k) => { if (l && lanes[k] === l && !l.reserved) bottom.push([k, k, l.color]); });   // passing lanes go on
+
+    while (after.length && !after[after.length - 1]) after.pop();
+    const width = Math.max(col + 1, lanes.length, after.length);
+    lanes = after;
+    return { col, color, width, top, bottom };
+  });
+}
+
+/** The commit to keep in the first lane with every branch shown: main's (or master's), local first, else none. */
+function graphPinned(commits) {
+  for (const ref of ['refs/heads/main', 'refs/heads/master', 'refs/remotes/origin/main', 'refs/remotes/origin/master']) {
+    const c = commits.find((x) => x.refs && x.refs.split(', ').some((r) => r.replace('HEAD -> ', '') === ref));
+    if (c) return c.sha;
+  }
+  return null;
+}
+
+/**
+ * The branch a merge brought in, and its pull request, read from git's and the hosts' usual merge messages:
+ * "Merge pull request #12 from owner/branch", "Merge branch 'x' into y", "Merge remote-tracking branch 'origin/x'",
+ * "Merged PR 12: title" (Azure DevOps). Null when the message is none of these.
+ */
+function mergeSource(subject) {
+  let m = /^Merge pull request #(\d+) from [^/\s]+\/(\S+)/.exec(subject);
+  if (m) return { branch: m[2], pr: m[1] };
+  m = /^Merge (?:remote-tracking )?branch '([^']+)'/.exec(subject);
+  if (m) return { branch: m[1], pr: null };
+  m = /^Merged PR (\d+): (.+)/.exec(subject);
+  if (m) return { branch: m[2], pr: m[1] };
+  return null;
+}
+
+/** The SVG for one row of the graph. */
+function graphSvg(row, c) {
+  const x = (k) => k * GRAPH_LANE + GRAPH_LANE / 2 + 2;
+  const mid = GRAPH_ROW / 2;
+  const seg = ([a, b, color], y1, y2) => {
+    const d = a === b ? `M${x(a)} ${y1}V${y2}`
+      : `M${x(a)} ${y1}C${x(a)} ${(y1 + y2) / 2} ${x(b)} ${(y1 + y2) / 2} ${x(b)} ${y2}`;
+    return `<path class="l${color}" d="${d}" style="stroke:var(--lane-${color})"/>`;
+  };
+  const merge = c.parents?.length > 1;
+  // A merge is a small dot; an outgoing commit (not pushed yet) is hollow; a fold of several commits is a ringed dot.
+  const lane = `var(--lane-${row.color})`;
+  // A merge whose branch can open beside it (Main graph): a ring with a plus; once open, filled in the branch's colour
+  // with a minus.
+  const cx = x(row.col);
+  const sign = (color, plus) => `<path class="dot-sign" d="M${cx - 3} ${mid}H${cx + 3}${plus ? `M${cx} ${mid - 3}V${mid + 3}` : ''}" style="stroke:${color}"/>`;
+  // A branch not open yet (Main graph): the same ring and plus, in grey until it has a line and a colour of its own.
+  // A branch being read to open beside main: a faint ring with an arc running round it.
+  const spin = row.color === 'stub' ? 'var(--text-dim)' : lane;
+  const dot = c.expand === 'loading'
+    ? `<circle cx="${cx}" cy="${mid}" r="6.5" style="stroke:var(--border-strong);fill:var(--panel)"/><circle class="dot-loading" cx="${cx}" cy="${mid}" r="6.5" style="stroke:${spin};fill:none;stroke-dasharray:11 30;stroke-linecap:round"/>`
+    : c.expand === 'stub'
+    ? `<circle class="dot-expand" cx="${cx}" cy="${mid}" r="6.5" style="stroke:var(--text-dim);fill:var(--panel)"/>${sign('var(--text-dim)', true)}`
+    : c.expand != null
+    ? c.expand === 'closed'
+      ? `<circle class="dot-expand" cx="${cx}" cy="${mid}" r="6.5" style="stroke:${lane};fill:var(--panel)"/>${sign(lane, true)}`
+      : `<circle class="dot-expand" cx="${cx}" cy="${mid}" r="6.5" style="stroke:var(--lane-${c.expand});fill:var(--lane-${c.expand})"/>${sign('var(--panel)', false)}`
+    : c.fold
+    ? `<circle cx="${x(row.col)}" cy="${mid}" r="6" style="stroke:${lane};fill:var(--panel)"/><circle cx="${x(row.col)}" cy="${mid}" r="2.5" style="stroke:none;fill:${lane}"/>`
+    : `<circle cx="${x(row.col)}" cy="${mid}" r="${merge ? 3 : 4.5}" style="stroke:${lane};fill:${c.outgoing ? 'var(--panel)' : lane}"/>`;
+  return `<svg width="${row.width * GRAPH_LANE + 4}" height="${GRAPH_ROW}">${
+    row.top.map((t) => seg(t, 0, mid)).join('')}${row.bottom.map((b) => seg(b, mid, GRAPH_ROW)).join('')}<g class="gdot l${row.color}">${dot}</g></svg>`;
 }
 
 async function selectCommit(s, sha) {
@@ -6436,6 +7751,7 @@ $('#gitRefresh').addEventListener('click', () => {
   const s = currentSession();
   if (!s) return;
   invalidateLog(s);
+  s.inflightAt = 0;   // In flight checks again too
   request('git.refresh', { id: s.id }).catch((e) => toast(e.message, true));
   if (isTabShown('repo')) renderGit();
 });
@@ -7109,6 +8425,7 @@ function showDocs() {
     else if (isProjectTab(prev)) prev.scrollTop = $('#projectBody').scrollTop;
     else if (isPermsTab(prev)) prev.scrollTop = $('#permsBody').scrollTop;
     else if (isGalleryTab(prev)) prev.scrollTop = $('#galleryBody').scrollTop;
+    else if (isReviewTab(prev)) { /* it keeps its file and mode; the diff is read again */ }
     else if (!isPluginTab(prev) && !isPermsTab(prev) && diffEditor) prev.viewState = diffEditor.saveViewState();
   }
   docs.shown = tab;
@@ -7118,8 +8435,9 @@ function showDocs() {
   docs.paneOf = !sideBySide() || !paneDocOk(tab) ? null
     : state.paneIds.includes(tab.sessionId) ? tab.sessionId
       : prev === tab && state.paneIds.includes(docs.paneOf) ? docs.paneOf : state.expandedId;
-  $('#diffDoc').hidden = !tab || isConvTab(tab) || isProjectTab(tab) || isPluginTab(tab) || isPermsTab(tab) || isGalleryTab(tab);
+  $('#diffDoc').hidden = !tab || isConvTab(tab) || isProjectTab(tab) || isPluginTab(tab) || isPermsTab(tab) || isGalleryTab(tab) || isReviewTab(tab);
   $('#convDoc').hidden = !isConvTab(tab);
+  $('#reviewDoc').hidden = !isReviewTab(tab);
   $('#projectDoc').hidden = !isProjectTab(tab);
   $('#pluginDoc').hidden = !isPluginTab(tab);
   $('#permsDoc').hidden = !isPermsTab(tab);
@@ -7137,6 +8455,7 @@ function showDocs() {
     else if (isPluginTab(tab)) showPlugin(tab);
     else if (isPermsTab(tab)) showPermissions(tab);
     else if (isGalleryTab(tab)) showGallery(tab);
+    else if (isReviewTab(tab)) { review.loadedKey = null; showReview(tab); }
     else loadDiff(tab);
   } else if (!tab) {
     diffState.seq++;
@@ -7201,7 +8520,7 @@ function closeDoc(key) {
   } else {
     renderDocTabs();
   }
-  if (!docs.tabs.some((t) => !isConvTab(t) && !isProjectTab(t) && !isPluginTab(t) && !isPermsTab(t) && !isGalleryTab(t))) disposeDiffModels();
+  if (!docs.tabs.some((t) => !isConvTab(t) && !isProjectTab(t) && !isPluginTab(t) && !isPermsTab(t) && !isGalleryTab(t) && !isReviewTab(t))) disposeDiffModels();
 }
 
 function cycleDoc(delta) {
@@ -7270,6 +8589,18 @@ function renderDocTabs() {
         onmousedown: (e) => { if (e.button === 1) e.preventDefault(); },
         onauxclick: (e) => { if (e.button === 1) closeDoc(t.key); },
       }, iconEl('bag'), h('span', { class: 'doc-title' }, gallery.by === 'themes' ? 'Get themes' : 'Get plugins'),
+      h('button', { class: 'icon-btn small', title: 'Close (Ctrl+W)', onclick: () => closeDoc(t.key) }, iconEl('close')));
+    }
+    if (isReviewTab(t)) {
+      return h('div', {
+        class: 'doc-tab' + (docs.active === t.key ? ' active' : ''),
+        'data-id': t.key,
+        title: `Review of ${t.name}: its changes, the files you've reviewed, and your comments`,
+        onclick: (e) => { if (!e.target.closest('button')) activateDoc(t.key); },
+        onmousedown: (e) => { if (e.button === 1) e.preventDefault(); },
+        onauxclick: (e) => { if (e.button === 1) closeDoc(t.key); },
+      }, iconEl('check'), h('span', { class: 'doc-title' }, 'Review'),
+      h('span', { class: 'doc-sub' }, t.name),
       h('button', { class: 'icon-btn small', title: 'Close (Ctrl+W)', onclick: () => closeDoc(t.key) }, iconEl('close')));
     }
     if (isConvTab(t)) {
@@ -7397,7 +8728,7 @@ function goToChange(dir, absolute = false) {
 /** Keeps the visible diff live while the session edits the file. */
 function refreshOpenDiff(s) {
   const t = shownDoc();
-  if (!t || isConvTab(t) || t.sessionId !== s.id || t.spec.mode === 'commit') return;
+  if (!t?.spec || t.sessionId !== s.id || t.spec.mode === 'commit') return;   // only a file's diff has a spec
   loadDiff(t, true);
 }
 
@@ -7407,6 +8738,7 @@ function applyDiffOptions() {
   $('#diffMode').title = diffState.sideBySide ? 'Side-by-side (click for inline)' : 'Inline (click for side-by-side)';
   $('#diffWs').classList.toggle('on', diffState.ignoreWs);
   diffEditor?.updateOptions({ renderSideBySide: diffState.sideBySide, ignoreTrimWhitespace: diffState.ignoreWs });
+  review.editor?.updateOptions({ renderSideBySide: diffState.sideBySide, ignoreTrimWhitespace: diffState.ignoreWs });
 }
 
 $('#diffPrev').addEventListener('click', () => goToChange(-1));
@@ -7415,12 +8747,718 @@ $('#diffMode').addEventListener('click', () => { diffState.sideBySide = !diffSta
 $('#diffWs').addEventListener('click', () => { diffState.ignoreWs = !diffState.ignoreWs; store.set('diffIgnoreWs', diffState.ignoreWs); applyDiffOptions(); });
 $('#diffOpenFile').addEventListener('click', () => {
   const t = shownDoc();
-  if (t && !isConvTab(t)) request('openFile', { id: t.sessionId, path: t.spec.path }).catch((e) => toast(e.message, true));
+  if (t?.spec) request('openFile', { id: t.sessionId, path: t.spec.path }).catch((e) => toast(e.message, true));
 });
 $('#diffDoc').addEventListener('keydown', (e) => {
   if (e.altKey && e.key === 'ArrowDown') { e.preventDefault(); goToChange(1); }
   if (e.altKey && e.key === 'ArrowUp') { e.preventDefault(); goToChange(-1); }
 });
+
+// ------------------------------------------------------------------ Review
+// A branch's changes against main, file by file, the riskiest first: tick files off as viewed (a tick goes when the file
+// changes again), comment on lines, and send the comments to the agent working on the branch as one prompt. After you
+// send, approve or mark it reviewed, "Since your review" shows only what changed since then (not what came in from
+// main), and each sent comment says whether the lines around it have changed: perhaps addressed. Kept per repository
+// and branch on the host (ReviewService).
+
+function isReviewTab(t) { return t?.kind === 'review'; }   // a declaration: tab code above may run first
+const REVIEW_POLL_MS = 15_000;
+const review = { editor: null, zones: [], hover: [], loadedKey: null, seq: 0 };
+
+/** Opens a branch's review (ref: refs/heads/x or refs/remotes/origin/x), as a tab of the session it's opened from. */
+function openReview(s, ref, name) {
+  const key = `review|${s.id}|${ref}`;
+  if (!docs.tabs.some((t) => t.key === key)) docs.tabs.push({ key, kind: 'review', sessionId: s.id, ref, name, mode: 'all', file: null });
+  activateDoc(key);
+  // From now on it's in the list of reviews.
+  request('git.reviewUpdate', { id: s.id, ref, op: 'start' }).then(() => loadAllReviews(true), () => {});
+}
+
+const REVIEWS_STALE_MS = 30_000;   // anything done in a review asks again at once (reviewTouched)
+
+/** Every review of the session's repository in a word (s.reviews, by branch name), asked again when it's a while old. */
+async function loadReviews(s, force = false) {
+  if (!s?.git?.isRepo || s.reviewsLoading || (!force && Date.now() - (s.reviewsAt || 0) < REVIEWS_STALE_MS)) return;
+  s.reviewsLoading = true;
+  const root = s.git.root;
+  try {
+    const r = await request('git.reviewSummary', { id: s.id });
+    if (s.git?.root === root) s.reviews = r;
+  } catch { /* keeps what it had */ } finally {
+    s.reviewsLoading = false;
+    s.reviewsAt = Date.now();
+  }
+  if (currentSession() === s) renderGit();
+}
+
+/** The repository's base branch by its own name (main, master…), as far as anything here has learned it. */
+const baseNameOf = (s) => (s.inflight?.baseBranch || s.drill?.data?.baseBranch || '').replace(/^[^/]+\//, '') || null;
+
+/**
+ * Where a review stands, from its summary: 'yours' (your turn: new commits since, comments not sent, or under way),
+ * 'agent' (sent, waiting for changes), 'approved', or 'done' (merged, or the branch has gone).
+ */
+function reviewStage(rs, base = 'main') {
+  if (!rs.tip) return { stage: 'done', text: 'The branch has been deleted' };
+  if (rs.merged) return { stage: 'done', text: `Merged into ${base}` };
+  if (rs.approvedTip && rs.approvedTip === rs.tip) return { stage: 'approved', text: 'Approved: nothing new since' };
+  if (rs.reviewedTip && rs.reviewedTip !== rs.tip) return { stage: 'yours', tone: 'warn', text: 'New commits since your review' };
+  if (rs.pending) return { stage: 'yours', text: `${plural(rs.pending, 'comment')} written, not sent yet` };
+  if (rs.sent) return { stage: 'agent', text: `${plural(rs.sent, 'comment')} sent: waiting for changes` };
+  if (rs.reviewedTip) return { stage: 'agent', text: 'Reviewed: waiting for changes' };
+  return { stage: 'yours', text: rs.viewed ? `Under way: ${plural(rs.viewed, 'file')} reviewed` : 'Started' };
+}
+
+const REVIEW_STAGES = [
+  ['yours', 'Your turn'],
+  ['agent', 'Waiting for changes'],
+  ['approved', 'Approved'],
+  ['done', 'Done'],
+];
+
+async function forgetReview(s, branch) {
+  try {
+    await request('git.reviewUpdate', { id: s.id, op: 'forget', branch });
+    for (const t of docs.tabs.filter((x) => isReviewTab(x) && x.name === branch)) closeDoc(t.key);
+    loadReviews(s, true);
+    loadAllReviews(true);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+// ---- The Reviews tab (side panel): every review under way in every repository a session is in, by what it needs
+// (your turn, waiting for the agent's changes, approved, done) or by repository, and the branches you could start
+// reviewing. Each repository is asked once (git.reviewList), from any session in it.
+
+/** repo (normalised) → { data (ReviewList), roots (the worktrees asked from), name }. */
+const allReviews = { repos: new Map(), loading: false, at: 0, more: new Set() };
+
+async function loadAllReviews(force = false) {
+  if (allReviews.loading || (!force && Date.now() - allReviews.at < REVIEWS_STALE_MS)) return;
+  const byRoot = new Map();   // one session per worktree is enough to ask
+  for (const s of state.byId.values()) if (s.git?.isRepo && s.git.root && !byRoot.has(normPath(s.git.root))) byRoot.set(normPath(s.git.root), s);
+  allReviews.loading = true;
+  const before = reviewsYours();
+  try {
+    const answers = await Promise.all([...byRoot].map(([root, s]) =>
+      request('git.reviewList', { id: s.id }).then((data) => ({ root, data }), () => null)));
+    const repos = new Map();
+    for (const a of answers) {
+      if (!a) continue;
+      const key = normPath(a.data.repo);
+      if (!repos.has(key)) repos.set(key, { data: a.data, roots: new Set(), name: a.data.repo.split(/[\\/]/).filter(Boolean).pop() });
+      repos.get(key).roots.add(a.root);
+      // Each session's own summary too, for In flight and Git Changes.
+      for (const x of state.byId.values()) if (x.git?.root && normPath(x.git.root) === a.root) { x.reviews = a.data.reviews; x.reviewsAt = Date.now(); }
+    }
+    allReviews.repos = repos;
+  } finally {
+    allReviews.loading = false;
+    allReviews.at = Date.now();
+  }
+  if (isTabShown('reviews') || reviewsYours() !== before) renderGit();
+}
+
+setInterval(() => { if (!document.hidden) loadAllReviews(); }, 60_000);
+
+/** How many reviews are waiting on you, in every repository: the Reviews tab's count. */
+function reviewsYours() {
+  let n = 0;
+  for (const e of allReviews.repos.values()) for (const rs of Object.values(e.data.reviews)) if (reviewStage(rs).stage === 'yours') n++;
+  return n;
+}
+
+/** The session a repository's review opens in: one on that branch, else any in the repository. */
+function repoSession(e, branch) {
+  const inRepo = [...state.byId.values()].filter((x) => x.git?.root && e.roots.has(normPath(x.git.root)));
+  return inRepo.find((x) => x.git.branch === branch) || inRepo[0] || null;
+}
+
+function renderReviewsTab(body) {
+  loadAllReviews();
+  const by = store.get('reviewsBy', 'status') === 'repo' ? 'repo' : 'status';
+  const repos = [...allReviews.repos.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const several = repos.length > 1;
+  const base = (e) => e.data.baseBranch?.replace(/^[^/]+\//, '') || 'main';
+  const rows = repos.flatMap((e) => Object.entries(e.data.reviews).map(([branch, rs]) => ({ e, branch, rs, ...reviewStage(rs, base(e)) })));
+  const active = rows.filter((r) => r.stage !== 'done').length;
+  const yours = rows.filter((r) => r.stage === 'yours').length;
+  const switchTo = (v) => { store.set('reviewsBy', v); renderGit(); };
+  const scope = (v, label, title) => h('button', { class: 'scope-btn' + (by === v ? ' active' : ''), title, onclick: () => switchTo(v) }, label);
+  const wrap = h('div', { class: 'repo-log inflight reviews-tab' },
+    h('div', { class: 'group-label repo-scope' },
+      h('span', { class: 'repo-scope-title' }, allReviews.at ? `${plural(active, 'review')} under way${yours ? ` · ${yours} your turn` : ''}` : 'Reviews'),
+      h('span', { class: 'scope-switch' },
+        scope('status', 'By status', 'What needs you first, in every repository'),
+        scope('repo', 'By repository', 'Each repository with its reviews')),
+      h('button', { class: 'icon-btn' + (allReviews.loading ? ' spin' : ''), title: 'Check again', onclick: () => loadAllReviews(true), html: icon('refresh') })));
+  const section = (title, count, sub) => h('div', { class: 'if-head' }, title, count != null && h('span', { class: 'count' }, `(${count})`), sub && h('span', { class: 'if-dim review-sub' }, sub));
+
+  if (!allReviews.at) wrap.append(h('div', { class: 'git-message' }, 'Checking…'));
+  else if (!repos.length) wrap.append(h('div', { class: 'git-message' }, 'No session is in a Git repository.'));
+  else if (!rows.length) wrap.append(h('div', { class: 'git-message' }, 'No reviews yet. Start one below, or with Review this branch in Git Changes, or Review on a branch in In flight.'));
+
+  const order = Object.fromEntries(REVIEW_STAGES.map(([st], i) => [st, i]));
+  const newest = (a, b) => (b.rs.updated || '').localeCompare(a.rs.updated || '');
+  if (by === 'status') {
+    for (const [stage, title] of REVIEW_STAGES) {
+      const list = rows.filter((r) => r.stage === stage).sort(newest);
+      if (list.length) wrap.append(section(title, list.length), ...list.map((r) => reviewCard(r, several)));
+    }
+  } else {
+    for (const e of repos) {
+      const list = rows.filter((r) => r.e === e).sort((a, b) => order[a.stage] - order[b.stage] || newest(a, b));
+      if (list.length) wrap.append(section(e.name, list.length, e.data.repo), ...list.map((r) => reviewCard(r, false)));
+    }
+  }
+
+  // Branches with work of their own and no review yet, in each repository: the newest first.
+  const starts = repos.filter((e) => e.data.unreviewed.length);
+  if (starts.length) {
+    wrap.append(section('Start a review', starts.reduce((n, e) => n + e.data.unreviewed.length, 0)));
+    for (const e of starts) {
+      const all = allReviews.more.has(e.data.repo);
+      const list = all ? e.data.unreviewed : e.data.unreviewed.slice(0, 6);
+      if (several) wrap.append(h('div', { class: 'review-repo-label' }, e.name));
+      wrap.append(...list.map((c) => {
+        const s = repoSession(e, c.name);
+        return h('div', { class: 'if-step review-start', title: c.subject },
+          h('b', {}, c.name), h('span', { class: 'if-files' }, ` · ${relTime(c.date)}`), h('span', { class: 'if-spacer' }),
+          h('button', { class: 'btn if-action', disabled: !s, onclick: () => s && openReview(s, c.ref, c.name) }, 'Review'));
+      }));
+      if (!all && e.data.unreviewed.length > list.length) {
+        wrap.append(h('button', { class: 'if-more-btn-text', onclick: () => { allReviews.more.add(e.data.repo); renderGit(); } },
+          `${e.data.unreviewed.length - list.length} more`));
+      }
+    }
+  }
+
+  const keep = body.querySelector('.reviews-tab')?.scrollTop ?? 0;
+  body.replaceChildren(wrap);
+  wrap.scrollTop = keep;
+}
+
+/** A review's card: its branch (and repository), who's on it, where it stands, and the button that moves it on. */
+function reviewCard(r, showRepo) {
+  const s = repoSession(r.e, r.branch);
+  const open = () => s && r.rs.ref && openReview(s, r.rs.ref, r.branch);
+  const more = (e) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    showMenu(rect.left, rect.bottom + 2, [
+      r.rs.ref && s && { label: 'Open review', action: open },
+      r.rs.ref && s && { label: 'Show in graph', action: () => expandBranch(s, { ref: r.rs.ref, name: r.branch }) },
+      '-',
+      s && { label: 'Forget this review', action: () => forgetReview(s, r.branch) },
+      // Merged and still here: the branch has done its job.
+      s && r.stage === 'done' && r.rs.merged && r.rs.tip && r.rs.ref?.startsWith('refs/heads/') && { label: 'Delete branch…', danger: true, action: () => deleteBranch(s, r.rs.ref.slice(11)) },
+    ]);
+  };
+  const sessions = [...state.byId.values()].filter((x) => x.git?.branch === r.branch && x.git?.root && r.e.roots.has(normPath(x.git.root)));
+  return h('div', { class: `if-card kind-${branchKind(r.branch)}` },
+    h('div', { class: 'if-line' },
+      showRepo && h('span', { class: 'review-repo', title: r.e.data.repo }, r.e.name),
+      h('button', { class: 'if-name focusable', disabled: !r.rs.ref || !s, title: r.rs.ref ? `Open the review of ${r.branch}` : r.branch, onclick: open }, r.branch),
+      ...sessions.map((x) => h('button', { class: 'if-session', title: `${x.name}: ${statusText(x)}\nClick to go to it`, onclick: () => expand(x.id) }, statusDot(x), x.name)),
+      h('span', { class: 'if-spacer' }),
+      h('button', { class: 'icon-btn if-more-btn', title: 'More', onclick: more, html: icon('more') })),
+    h('div', { class: 'if-line if-next' },
+      h('span', { class: 'if-status' + (r.tone ? ' ' + r.tone : r.stage === 'approved' ? ' ok' : '') }, r.text),
+      r.stage === 'done'
+        ? h('button', { class: 'btn if-action', disabled: !s, onclick: () => s && forgetReview(s, r.branch) }, 'Forget')
+        : h('button', { class: 'btn if-action' + (r.stage === 'yours' ? ' primary' : ''), disabled: !r.rs.ref || !s, onclick: open },
+          r.stage === 'yours' && r.rs.reviewedTip ? 'Review changes' : r.stage === 'yours' ? 'Continue' : 'Open')),
+    h('div', { class: 'if-line if-meta' },
+      r.rs.open > 0 && h('span', {}, plural(r.rs.open, 'open comment')),
+      r.rs.viewed > 0 && h('span', {}, `${plural(r.rs.viewed, 'file')} reviewed`),
+      r.rs.updated && h('span', { class: 'if-dim' }, `last touched ${relTime(r.rs.updated)}`)));
+}
+
+/** Git Changes: the current branch's review, a click away (not on the base branch). */
+function reviewStrip(s) {
+  const g = s.git;
+  const base = baseNameOf(s);
+  if (!g.branch || g.branch.startsWith('(') || [base, 'main', 'master'].includes(g.branch)) return null;
+  loadReviews(s);
+  const rs = s.reviews?.[g.branch];
+  const st = rs && reviewStage(rs, base || 'main');
+  return h('div', { class: 'review-strip' },
+    iconEl('check'),
+    h('span', { class: 'review-strip-text' + (st?.tone ? ' ' + st.tone : '') }, st ? st.text : `Review ${g.branch} before it goes into ${base || 'main'}`),
+    h('button', { class: 'btn' + (st?.stage === 'yours' || !st ? ' primary' : ''), onclick: () => openReview(s, 'refs/heads/' + g.branch, g.branch) },
+      !st ? 'Review this branch' : st.stage === 'yours' && rs.reviewedTip ? 'Review changes' : 'Open review'));
+}
+
+async function loadReview(tab, quiet = false) {
+  if (tab.loading) return;
+  tab.loading = true;
+  if (!quiet) renderReview(tab);
+  try {
+    const data = await request('git.review', { id: tab.sessionId, ref: tab.ref });
+    const changed = !tab.data || tab.data.tip !== data.tip || JSON.stringify(tab.data.comments) !== JSON.stringify(data.comments);
+    tab.data = data;
+    tab.error = null;
+    if (!data.since && tab.mode === 'since') tab.mode = 'all';
+    if (quiet && !changed) return;
+  } catch (e) {
+    tab.error = e.message;
+  } finally {
+    tab.loading = false;
+  }
+  if (docs.shown === tab) renderReview(tab);
+}
+
+function showReview(tab) {
+  if (!tab.data || tab.error) loadReview(tab); else renderReview(tab);
+  loadReview(tab, true);   // what's there may have moved on since
+}
+
+setInterval(() => {
+  const tab = shownDoc();
+  if (isReviewTab(tab) && !document.hidden && !tab.loading) loadReview(tab, true);
+}, REVIEW_POLL_MS);
+
+/** What to look at closely, what to fold away (lockfiles, generated files), and the rest. */
+function reviewRisk(f) {
+  const p = f.path.toLowerCase();
+  const name = p.split('/').pop();
+  if (/^(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|packages\.lock\.json|cargo\.lock|poetry\.lock|gemfile\.lock|composer\.lock|go\.sum)$/.test(name) || name.endsWith('.lock')) return { group: 'folded', why: 'lockfile' };
+  if (/\.min\.(js|css)$|\.generated\.|\.g\.cs$|\.designer\.cs$|(^|\/)(dist|out)\/|__snapshots__\/|\.snap$/.test(p)) return { group: 'folded', why: 'generated' };
+  if (/^\.github\/workflows\/|azure-pipelines|\.gitlab-ci|^\.circleci\/|jenkinsfile/.test(p)) return { group: 'risk', why: 'CI' };
+  if (/(^|\/)migrations?\//.test(p)) return { group: 'risk', why: 'migration' };
+  if (/auth|security|crypto|secret|token|password|permission|trust/.test(p)) return { group: 'risk', why: 'security' };
+  if (/\.(csproj|props|targets)$|(^|\/)dockerfile$|(^|\/)package\.json$|appsettings[^/]*\.json$|(^|\/)\.env|\.config$/.test(p)) return { group: 'risk', why: 'config' };
+  if (f.status === 'D') return { group: 'risk', why: 'deleted' };
+  if (f.removed >= 150) return { group: 'risk', why: `−${f.removed}` };
+  return { group: 'changes', why: null };
+}
+const isTestPath = (p) => /(^|\/)(tests?|specs?|__tests__)\/|[._-](test|tests|spec)\.[a-z0-9]+$/i.test(p);
+const isDocPath = (p) => /\.(md|txt|rst|adoc)$|(^|\/)docs?\//i.test(p);
+
+const reviewViewed = (d, f) => d.viewed[f.path] === f.blob;
+const reviewFiles = (tab) => (tab.mode === 'since' && tab.data.since ? tab.data.since.files : tab.data.files);
+const openComments = (d) => d.comments.filter((c) => c.comment.state !== 'resolved');
+
+/** The files in the order they're reviewed: what to look at closely, then the rest, then the folded ones. */
+function reviewOrder(files) {
+  const rank = { risk: 0, changes: 1, folded: 2 };
+  return files.map((f) => ({ f, risk: reviewRisk(f) })).sort((a, b) => rank[a.risk.group] - rank[b.risk.group] || a.f.path.localeCompare(b.f.path));
+}
+
+/** Something in the review changed: the summaries (Reviews, In flight, Git Changes) are asked for again. */
+function reviewTouched(tab) {
+  const s = state.byId.get(tab.sessionId);
+  if (s) s.reviewsAt = 0;
+  loadAllReviews(true);   // which also brings each session's own summary up to date
+}
+
+function setViewed(tab, f, on) {
+  reviewTouched(tab);
+  const d = tab.data;
+  if (on) d.viewed[f.path] = f.blob; else delete d.viewed[f.path];
+  request('git.reviewUpdate', { id: tab.sessionId, ref: tab.ref, op: 'viewed', path: f.path, blob: on ? f.blob : null }).catch((e) => toast(e.message, true));
+  // Ticking the file you're on moves on to the next one not viewed yet.
+  if (on && tab.file === f.path) {
+    const next = reviewOrder(reviewFiles(tab)).find((x) => !reviewViewed(d, x.f) && x.risk.group !== 'folded');
+    if (next) tab.file = next.f.path;
+  }
+  renderReview(tab);
+}
+
+function renderReview(tab) {
+  if (docs.shown !== tab) return;
+  const s = state.byId.get(tab.sessionId);
+  const d = tab.data;
+  const bar = $('#reviewBar');
+  if (!d) {
+    fill(bar, h('span', { class: 'diff-summary' }, 'Review'), h('span', { class: 'dim' }, tab.name));
+    fill($('#reviewFiles'));
+    fill($('#reviewFileHead'));
+    $('#reviewEmpty').hidden = false;
+    $('#reviewEmpty').textContent = tab.error ? `Could not load the review: ${tab.error}` : 'Loading…';
+    $('#reviewEditor').hidden = true;
+    return;
+  }
+  const files = reviewFiles(tab);
+  const ordered = reviewOrder(files);
+  if (!files.some((f) => f.path === tab.file)) tab.file = (ordered.find((x) => !reviewViewed(d, x.f) && x.risk.group !== 'folded') ?? ordered[0])?.f.path ?? null;
+  const viewedCount = files.filter((f) => reviewViewed(d, f)).length;
+  const sessions = [...state.byId.values()].filter((x) => x.git?.branch === d.branch);
+  const base = d.baseBranch?.replace(/^[^/]+\//, '') || 'main';
+
+  // The bar: the branch, who's on it, all or since your review, and how far through it you are.
+  const seg = (mode, label, title) => h('button', {
+    class: 'seg-btn' + (tab.mode === mode ? ' active' : ''), title,
+    onclick: () => { tab.mode = mode; tab.file = null; renderReview(tab); },
+  }, label);
+  fill(bar,
+    h('span', { class: 'diff-summary' }, 'Review'),
+    h('b', { class: 'review-branch' }, d.branch),
+    ...sessions.map((x) => h('button', { class: 'if-session', title: `${x.name}: ${statusText(x)}\nClick to go to it`, onclick: () => expand(x.id) }, statusDot(x), x.name)),
+    h('span', { class: 'dim', title: `${plural(d.ahead, 'commit')} ${base} doesn't have; ${plural(d.behind, 'commit')} on ${base} it doesn't have` }, `↑${d.ahead} ↓${d.behind} against ${base}`),
+    d.approvedTip && h('span', { class: 'review-badge ok' }, d.approvedTip === d.tip ? 'Approved' : 'Approved earlier'),
+    h('span', { class: 'spacer' }),
+    d.since && h('div', { class: 'seg' },
+      seg('all', `All changes · ${d.files.length}`, `Everything ${d.branch} changes against ${base}`),
+      seg('since', `Since your review · ${d.since.files.length}`, `Only what changed since you reviewed it ${relTime(d.since.at)}`)),
+    h('div', { class: 'review-progress', title: `${viewedCount} of ${plural(files.length, 'file')} ticked as reviewed` },
+      h('span', {}, `${viewedCount} of ${plural(files.length, 'file')} reviewed`),
+      h('span', { class: 'review-meter' }, h('span', { style: `width:${files.length ? Math.round((viewedCount / files.length) * 100) : 0}%` }))),
+    h('span', { class: 'sep' }),
+    reviewActions(tab, s),
+    h('button', { class: 'icon-btn', title: 'Refresh', onclick: () => loadReview(tab), html: icon('refresh') }));
+
+  // The files
+  const list = $('#reviewFiles');
+  const keep = list.scrollTop;
+  const commentCount = (path) => openComments(d).filter((c) => c.comment.path === path).length;
+  const row = ({ f, risk }) => {
+    const viewed = reviewViewed(d, f);
+    const was = !viewed && d.viewed[f.path] != null;
+    const n = commentCount(f.path);
+    const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/') + 1) : '';
+    return h('div', {
+      class: 'review-file' + (tab.file === f.path ? ' selected' : '') + (viewed ? ' viewed' : ''),
+      title: `${f.origPath ? `${f.origPath} → ` : ''}${f.path}${f.binary ? '\nBinary' : `\n+${f.added} −${f.removed}`}${was ? '\nChanged since you reviewed it' : ''}`,
+      onclick: (e) => { if (e.target.tagName !== 'INPUT') { tab.file = f.path; renderReview(tab); } },
+    },
+    h('input', { type: 'checkbox', checked: viewed, 'aria-label': `Reviewed ${f.path}`, title: 'Reviewed', onchange: (e) => setViewed(tab, f, e.target.checked) }),
+    h('span', { class: 'review-status st-' + f.status }, f.status),
+    h('span', { class: 'review-path' }, h('span', { class: 'dim' }, dir), f.path.slice(dir.length)),
+    n > 0 && h('span', { class: 'review-count', title: plural(n, 'open comment') }, String(n)),
+    was ? h('span', { class: 'review-why warn' }, 'changed')
+      : risk.why ? h('span', { class: 'review-why' + (risk.group === 'risk' ? ' warn' : '') }, risk.why)
+      : !f.binary && h('span', { class: 'review-why' }, h('span', { class: 'add' }, `+${f.added}`), ' ', h('span', { class: 'del' }, `−${f.removed}`)));
+  };
+  const group = (title, items, cls) => items.length > 0 && [h('div', { class: 'review-group ' + (cls || '') }, title, h('span', { class: 'dim' }, ` ${items.length}`)), ...items.map(row)];
+  const risky = ordered.filter((x) => x.risk.group === 'risk');
+  const rest = ordered.filter((x) => x.risk.group === 'changes');
+  const folded = ordered.filter((x) => x.risk.group === 'folded');
+  tab.showFolded ??= false;
+  // Source changed with no test changed: worth asking about.
+  const code = d.files.filter((f) => !isTestPath(f.path) && !isDocPath(f.path) && reviewRisk(f).group === 'changes' && f.status !== 'D');
+  const untested = code.length > 0 && !d.files.some((f) => isTestPath(f.path));
+  fill(list,
+    tab.mode === 'since' && d.since && h('div', { class: 'review-since' },
+      h('b', {}, `Since you reviewed it ${relTime(d.since.at)}`),
+      h('div', {}, `${plural(d.since.commits, 'commit')} on ${d.branch}`),
+      d.since.baseCommits > 0 && h('div', { class: 'dim' }, `${base} merged in (${plural(d.since.baseCommits, 'commit')}): left out`)),
+    !files.length && h('div', { class: 'git-message' }, tab.mode === 'since' ? `None of ${d.branch}'s own files changed since your review.` : `${d.branch} has no changes against ${base}.`),
+    group('Look closely', risky, 'warn'),
+    group(risky.length ? 'Changes' : 'Files', rest),
+    folded.length > 0 && h('div', { class: 'review-group folded', onclick: () => { tab.showFolded = !tab.showFolded; renderReview(tab); } },
+      iconEl(tab.showFolded ? 'chevD' : 'chevR'), 'Folded away', h('span', { class: 'dim' }, ` ${folded.length} lockfiles and generated files`)),
+    tab.showFolded && folded.map(row),
+    untested && h('div', { class: 'review-note' }, iconEl('warn'), h('span', {}, `No test changed, though ${plural(code.length, 'file')} of code did: `,
+      h('span', { class: 'dim' }, fileList(code.map((f) => f.path), 3)))));
+  list.scrollTop = keep;
+
+  showReviewFile(tab);
+}
+
+/** The diff of the selected file, with its comments between the lines. */
+async function showReviewFile(tab) {
+  const d = tab.data;
+  const f = reviewFiles(tab).find((x) => x.path === tab.file);
+  const head = $('#reviewFileHead');
+  $('#reviewEmpty').hidden = !!f;
+  $('#reviewEditor').hidden = !f;
+  if (!f) { fill(head); $('#reviewEmpty').textContent = reviewFiles(tab).length ? 'Pick a file.' : ''; review.loadedKey = null; return; }
+  const parent = tab.mode === 'since' && d.since ? d.since.tip : d.from;
+  const viewed = reviewViewed(d, f);
+  fill(head,
+    h('b', {}, f.path), f.origPath && h('span', { class: 'dim' }, ` from ${f.origPath}`),
+    !f.binary && [h('span', { class: 'add' }, ` +${f.added}`), h('span', { class: 'del' }, ` −${f.removed}`)],
+    tab.mode === 'since' && h('span', { class: 'dim' }, ' since your review'),
+    h('span', { class: 'spacer' }),
+    h('button', { class: 'btn', title: 'A comment on the whole file', onclick: () => startDraft(tab, f.path, 0) }, 'Comment on file'),
+    h('button', { class: 'btn', title: 'Open the file in your editor', onclick: () => request('openFile', { id: tab.sessionId, path: f.path }).catch((e) => toast(e.message, true)) }, 'Open file'),
+    h('label', { class: 'review-viewed' + (viewed ? ' on' : ''), title: 'Tick this file off as reviewed and go on to the next. It comes unticked if it changes again' },
+      h('input', { type: 'checkbox', checked: viewed, onchange: (e) => setViewed(tab, f, e.target.checked) }), 'Reviewed'));
+
+  const key = [tab.key, d.tip, parent, f.path].join('|');
+  if (review.loadedKey === key) { layoutReviewZones(tab); return; }
+  review.loadedKey = key;
+  const seq = ++review.seq;
+  let result;
+  try {
+    await loadMonaco();
+    ensureReviewEditor();
+    result = await request('git.diff', { id: tab.sessionId, mode: 'commit', commit: d.tip, parent, path: f.path, origPath: f.origPath });
+  } catch (e) {
+    if (seq === review.seq) { review.loadedKey = null; toast(e.message, true); }
+    return;
+  }
+  if (seq !== review.seq || docs.shown !== tab) return;
+  const old = review.editor.getModel();
+  const lang = languageFor(f.path);
+  review.editor.setModel({ original: monaco.editor.createModel(result.original, lang), modified: monaco.editor.createModel(result.modified, lang) });
+  old?.original.dispose();
+  old?.modified.dispose();
+  review.editor.getModifiedEditor().setScrollTop(0);
+  layoutReviewZones(tab);
+  // Its first change in view, once the diff is worked out.
+  const once = review.editor.onDidUpdateDiff(() => {
+    once.dispose();
+    const c = review.editor.getLineChanges()?.[0];
+    if (c && seq === review.seq) review.editor.getModifiedEditor().revealLineNearTop(Math.max(1, (c.modifiedStartLineNumber || 1) - 3));
+  });
+}
+
+function ensureReviewEditor() {
+  if (review.editor) return;
+  review.editor = monaco.editor.createDiffEditor($('#reviewEditor'), {
+    theme: diffTheme(), automaticLayout: true, readOnly: true, originalEditable: false,
+    renderSideBySide: diffState.sideBySide, ignoreTrimWhitespace: diffState.ignoreWs, renderIndicators: true, renderOverviewRuler: true,
+    enableSplitViewResizing: true, useInlineViewWhenSpaceIsLimited: true,
+    fontFamily: '"Cascadia Mono", Consolas, Menlo, "DejaVu Sans Mono", monospace', fontSize: 13,
+    scrollBeyondLastLine: false, minimap: { enabled: false }, glyphMargin: true, folding: false,
+    renderLineHighlight: 'line', stickyScroll: { enabled: false }, diffAlgorithm: 'advanced',
+  });
+  const ed = review.editor.getModifiedEditor();
+  const T = monaco.editor.MouseTargetType;
+  // A + in the margin of the line under the pointer: click it (or the line number) to comment on that line.
+  ed.onMouseMove((e) => {
+    const line = e.target.position?.lineNumber;
+    review.hover = ed.deltaDecorations(review.hover, line ? [{ range: new monaco.Range(line, 1, line, 1), options: { glyphMarginClassName: 'review-add-glyph', glyphMarginHoverMessage: { value: 'Comment on this line' } } }] : []);
+  });
+  ed.onMouseLeave(() => { review.hover = ed.deltaDecorations(review.hover, []); });
+  ed.onMouseDown((e) => {
+    if (e.target.type !== T.GUTTER_GLYPH_MARGIN && e.target.type !== T.GUTTER_LINE_NUMBERS) return;
+    const tab = shownDoc();
+    const line = e.target.position?.lineNumber;
+    if (isReviewTab(tab) && line) startDraft(tab, tab.file, line);
+  });
+  ed.onDidScrollChange(placeReviewZones);
+  ed.onDidLayoutChange(() => layoutReviewZones(shownDoc()));
+}
+
+function startDraft(tab, path, line) {
+  tab.draft = { path, line, text: tab.draft?.path === path && tab.draft.line === line ? tab.draft.text : '' };
+  tab.editing = null;
+  layoutReviewZones(tab);
+  setTimeout(() => document.querySelector('.review-zone textarea')?.focus(), 0);
+}
+
+async function addComment(tab) {
+  const t = tab.draft;
+  const text = t?.text.trim();
+  if (!text) return;
+  const model = review.editor?.getModel()?.modified;
+  const lineText = t.line > 0 && model && t.line <= model.getLineCount() ? model.getLineContent(t.line) : null;
+  try {
+    const c = await request('git.reviewUpdate', { id: tab.sessionId, ref: tab.ref, op: 'add', path: t.path, line: t.line, lineText, text });
+    tab.data.comments.push({ comment: c, line: t.line, changed: false, gone: false });
+    tab.draft = null;
+    reviewTouched(tab);
+    renderReview(tab);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function changeComment(tab, cv, change) {
+  try {
+    if (change === 'delete') {
+      await request('git.reviewUpdate', { id: tab.sessionId, ref: tab.ref, op: 'delete', commentId: cv.comment.id });
+      tab.data.comments = tab.data.comments.filter((x) => x !== cv);
+    } else {
+      await request('git.reviewUpdate', { id: tab.sessionId, ref: tab.ref, op: 'edit', commentId: cv.comment.id, ...change });
+      cv.comment = { ...cv.comment, ...change };
+    }
+    tab.editing = null;
+    reviewTouched(tab);
+    renderReview(tab);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+/** One comment between the lines: what it says, where it stands, and what you can do with it. */
+function commentBox(tab, cv) {
+  const c = cv.comment;
+  if (tab.editing === c.id) {
+    const area = h('textarea', { rows: 3, 'aria-label': 'Comment' });
+    area.value = c.text;
+    return h('div', { class: 'review-comment' }, area,
+      h('div', { class: 'review-comment-actions' },
+        h('button', { class: 'btn', onclick: () => { tab.editing = null; layoutReviewZones(tab); } }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: () => changeComment(tab, cv, { text: area.value }) }, 'Save')));
+  }
+  const badge = c.state === 'pending' ? h('span', { class: 'review-badge warn' }, cv.changed ? 'Pending · lines changed since' : 'Pending')
+    : c.state === 'resolved' ? h('span', { class: 'review-badge' }, 'Resolved')
+    : cv.changed ? h('span', { class: 'review-badge ok', title: 'The lines around it changed since you sent it: check whether that addressed it' }, 'Changed since sent: check it')
+    : h('span', { class: 'review-badge', title: `Sent ${relTime(c.sentAt)}; these lines haven't changed since` }, 'Sent · not changed yet');
+  return h('div', { class: 'review-comment ' + c.state + (cv.changed && c.state === 'sent' ? ' changed' : '') },
+    h('div', { class: 'review-comment-head' }, badge, c.line === 0 && h('span', { class: 'dim' }, 'the whole file')),
+    h('div', { class: 'review-comment-text' }, c.text),
+    h('div', { class: 'review-comment-actions' },
+      c.state === 'pending' && [
+        h('button', { class: 'btn', onclick: () => { tab.editing = c.id; tab.draft = null; layoutReviewZones(tab); } }, 'Edit'),
+        h('button', { class: 'btn', onclick: () => changeComment(tab, cv, 'delete') }, 'Delete')],
+      c.state === 'sent' && [
+        h('button', { class: 'btn', title: 'Send it again with your next review', onclick: () => changeComment(tab, cv, { state: 'pending' }) }, 'Ask again'),
+        h('button', { class: 'btn' + (cv.changed ? ' primary' : ''), onclick: () => changeComment(tab, cv, { state: 'resolved' }) }, 'Resolve')],
+      c.state === 'resolved' && h('button', { class: 'btn', onclick: () => changeComment(tab, cv, { state: 'sent' }) }, 'Reopen')));
+}
+
+/** The comments of the file shown (and a draft), each in a gap opened after its line. */
+function layoutReviewZones(tab) {
+  if (!review.editor || !isReviewTab(tab) || docs.shown !== tab) return;
+  const ed = review.editor.getModifiedEditor();
+  const old = review.zones;
+  review.zones = [];
+  ed.changeViewZones((acc) => { for (const z of old) acc.removeZone(z.zoneId); });
+  for (const z of old) ed.removeOverlayWidget(z.widget);
+  const model = ed.getModel();
+  if (!model || !tab.data) return;
+  const lines = model.getLineCount();
+  const byLine = new Map();
+  const put = (line, el) => { const at = Math.min(Math.max(0, line), lines); byLine.set(at, [...(byLine.get(at) || []), el]); };
+  for (const cv of tab.data.comments) if (cv.comment.path === tab.file && cv.comment.state !== 'resolved') put(cv.line, commentBox(tab, cv));
+  const t = tab.draft;
+  if (t && t.path === tab.file) {
+    const area = h('textarea', { rows: 3, placeholder: t.line ? `Comment on line ${t.line}…` : 'Comment on the whole file…', 'aria-label': 'Comment',
+      oninput: (e) => { t.text = e.target.value; },
+      onkeydown: (e) => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); addComment(tab); }
+        if (e.key === 'Escape') { e.preventDefault(); tab.draft = null; layoutReviewZones(tab); }
+      } });
+    area.value = t.text;
+    put(t.line, h('div', { class: 'review-comment draft' },
+      h('div', { class: 'review-comment-head dim' }, t.line ? `Line ${t.line}` : 'The whole file', ' · goes to the agent with your review'), area,
+      h('div', { class: 'review-comment-actions' },
+        h('button', { class: 'btn', onclick: () => { tab.draft = null; layoutReviewZones(tab); } }, 'Cancel'),
+        h('button', { class: 'btn primary', title: 'Ctrl+Enter', onclick: () => addComment(tab) }, 'Add to review'))));
+  }
+  const info = ed.getLayoutInfo();
+  for (const [line, els] of byLine) {
+    const node = h('div', { class: 'review-zone', style: `width:${Math.max(200, info.contentWidth - info.verticalScrollbarWidth - 24)}px` }, els);
+    // An overlay widget placed by coordinates over a gap (a view zone) opened after the line: Monaco keeps a zone's own
+    // contents from taking clicks and typing, so the comment sits over it instead.
+    const z = { line, node, top: -9999, left: info.contentLeft };
+    z.widget = { getId: () => 'review-zone-' + line, getDomNode: () => node, getPosition: () => ({ preference: { top: z.top, left: z.left } }) };
+    ed.addOverlayWidget(z.widget);
+    z.height = (node.offsetHeight || 96) + 10;   // measured as it's placed (unmeasured while the page is hidden)
+    ed.changeViewZones((acc) => { z.zoneId = acc.addZone({ afterLineNumber: line, heightInPx: z.height, domNode: h('div') }); });
+    review.zones.push(z);
+  }
+  placeReviewZones();
+}
+
+/** Puts each comment over its gap, wherever the diff has scrolled to. */
+function placeReviewZones() {
+  if (!review.editor) return;
+  const ed = review.editor.getModifiedEditor();
+  const lineHeight = ed.getOption(monaco.editor.EditorOption.lineHeight);
+  const scroll = ed.getScrollTop();
+  const height = ed.getLayoutInfo().height;
+  for (const z of review.zones) {
+    // A gap after line n starts where line n ends (n 0: at the very top).
+    z.top = (z.line > 0 ? ed.getTopForLineNumber(z.line) + lineHeight : 0) - scroll + 5;
+    z.node.style.display = z.top > height || z.top + z.height < 0 ? 'none' : '';
+    ed.layoutOverlayWidget(z.widget);
+  }
+}
+
+/**
+ * What applies to the whole review, in the bar at the top: where its comments stand, and finishing for now, approving,
+ * or sending the comments. (What applies to one file sits on the line below, above its diff.)
+ */
+function reviewActions(tab, s) {
+  const d = tab.data;
+  const pending = d.comments.filter((c) => c.comment.state === 'pending');
+  const sent = d.comments.filter((c) => c.comment.state === 'sent');
+  const changed = sent.filter((c) => c.changed).length;
+  const gone = openComments(d).filter((c) => c.gone);
+  const finish = (approve) => markReviewed(tab, [], approve);
+  const status = [
+    sent.length && `${sent.length} sent${changed ? `, ${changed} to check` : ''}`,
+    gone.length && `${gone.length} on files no longer changed`,
+  ].filter(Boolean).join(' · ');
+  return [
+    status && h('span', { class: 'dim review-status-text', title: 'Comments sent to the agent, and those whose lines have changed since' }, status),
+    h('button', { class: 'btn', title: `Finish reviewing ${d.branch} for now, without approving it or sending anything: the whole branch as it is now counts as reviewed, so what changes after this shows under Since your review`,
+      onclick: () => finish(false) }, 'Finish for now'),
+    h('button', { class: 'btn', title: `Approve the whole of ${d.branch} as it is now`, disabled: d.approvedTip === d.tip, onclick: () => finish(true) },
+      d.approvedTip === d.tip ? 'Approved' : 'Approve'),
+    h('button', { class: 'btn primary', disabled: !pending.length, title: pending.length ? 'Send your comments to the agent as one prompt' : 'Comments you write wait here until you send them',
+      onclick: () => sendReviewDialog(tab, s) }, pending.length ? `Send ${plural(pending.length, 'comment')}…` : 'Send comments'),
+  ];
+}
+
+async function markReviewed(tab, sent, approve) {
+  try {
+    await request('git.reviewUpdate', { id: tab.sessionId, ref: tab.ref, op: 'reviewed', sent, approve });
+    tab.mode = 'all';
+    const s = state.byId.get(tab.sessionId);
+    reviewTouched(tab);
+    if (s && state.repoView === 'inflight') loadInFlight(s);   // its card says where the review stands
+    await loadReview(tab, true);
+    renderReview(tab);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+/** The prompt a review goes to the agent as: each comment with its file, line and the line it's on. */
+function reviewPrompt(d, comments, note) {
+  const items = comments.map((cv, i) => {
+    const c = cv.comment;
+    const where = cv.line > 0 ? `${c.path}:${cv.line}` : `${c.path} (the whole file)`;
+    const quote = cv.line > 0 && c.lineText ? `\n   > ${c.lineText}` : '';
+    return `${i + 1}. ${where}${quote}\n   ${c.text.replace(/\n/g, '\n   ')}`;
+  });
+  return `Review of ${d.branch} at ${d.tip.slice(0, 7)}. Please address these comments, then commit:\n\n${items.join('\n\n')}${note ? `\n\n${note}` : ''}`;
+}
+
+function sendReviewDialog(tab, s) {
+  const d = tab.data;
+  const pending = d.comments.filter((c) => c.comment.state === 'pending');
+  // The sessions on this branch first, then the project's others.
+  const on = [...state.byId.values()].filter((x) => x.git?.branch === d.branch);
+  const others = [...state.byId.values()].filter((x) => !on.includes(x) && s && groupOf(x) === groupOf(s));
+  const targets = [...on, ...others];
+  let note = '';
+  const preview = h('pre', { class: 'review-prompt' }, reviewPrompt(d, pending, note));
+  const select = h('select', { class: 'review-target', 'aria-label': 'Send to' },
+    targets.map((x) => h('option', { value: x.id }, `${x.name} · ${statusText(x)}${on.includes(x) ? ` · on ${d.branch}` : ''}`)));
+  const send = async () => {
+    const target = state.byId.get(select.value);
+    if (!target) return;
+    if (!target.running) { toast(`"${target.name}" isn't running. Start it, then send again.`, true); return; }
+    closeModal();
+    typeReview(target, reviewPrompt(d, pending, note));
+    await markReviewed(tab, pending.map((c) => c.comment.id), false);
+    toast(`Sent ${plural(pending.length, 'comment')} to ${target.name}.`);
+  };
+  openModal('Send your review', h('div', { class: 'review-send' },
+    h('p', {}, `The comments go to the session you pick as one prompt, each with its file and line. Afterwards each one shows whether the lines around it changed.`),
+    targets.length ? h('label', { class: 'review-field' }, h('span', { class: 'dim' }, 'Send to'), select)
+      : h('p', { class: 'dim' }, `No session is open in this project. Copy the review and paste it where you like.`),
+    h('div', { class: 'dim' }, 'What it will read'),
+    preview,
+    h('label', { class: 'review-field' }, h('span', { class: 'dim' }, 'A note at the end (optional)'),
+      h('input', { type: 'text', placeholder: 'Otherwise looks good.', oninput: (e) => { note = e.target.value.trim(); preview.textContent = reviewPrompt(d, pending, note); } }))),
+  [
+    h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
+    h('button', { class: 'btn', title: 'Copy the review as text; nothing is sent or marked', onclick: () => { navigator.clipboard.writeText(reviewPrompt(d, pending, note)); toast('Copied the review.'); } }, 'Copy'),
+    targets.length > 0 && h('button', { class: 'btn primary', onclick: send }, `Send ${plural(pending.length, 'comment')}`),
+  ]);
+}
+
+/** Types the review into the session and sends it, waiting for a pause if you're typing in it (as controlPrompt does). */
+function typeReview(target, text, tries = 0) {
+  if (!target.running) return;
+  if (performance.now() - target.act.lastIn < 5000) {
+    if (tries < 60) setTimeout(() => typeReview(target, text, tries + 1), 1000);
+    else toast(`The review wasn't sent to "${target.name}": you were typing in it. Send it again from the Review tab.`, true);
+    return;
+  }
+  target.term.paste(typeable(text, '\n\t'));
+  enterAfterTyping(target);
+}
 
 // ------------------------------------------------------------------ conversation rail and Conversation tab
 // In its full-screen mode Claude keeps no terminal scrollback, so the rail outlines the conversation from the agent's own
@@ -11510,7 +13548,7 @@ $('#docTabs').addEventListener('contextmenu', (e) => {
     if (!partner) return;
     const split = sideTab() && docs.side === partner.key;
     showMenu(e.clientX, e.clientY, [
-      { header: 'Beside ' + (isConvTab(partner) ? 'the Conversation' : isPluginTab(partner) ? pluginCaption(partner.pluginId) : partner.spec.path.split('/').pop()) },
+      { header: 'Beside ' + (isConvTab(partner) ? 'the Conversation' : isReviewTab(partner) ? `the review of ${partner.name}` : isPluginTab(partner) ? pluginCaption(partner.pluginId) : partner.spec.path.split('/').pop()) },
       ...Object.entries(TERMINAL_SIDES).map(([dir, label]) => ({
         label, checked: !!split && DOCK_SIDES[docs.dir].across === dir, action: () => splitTerminal(dir),
       })),
@@ -11535,7 +13573,7 @@ $('#docTabs').addEventListener('contextmenu', (e) => {
 });
 
 // While split, the side you click or tab into has your attention (see attend).
-for (const id of ['#diffDoc', '#convDoc', '#pluginDoc', '#permsDoc', '#galleryDoc']) {
+for (const id of ['#diffDoc', '#convDoc', '#pluginDoc', '#permsDoc', '#galleryDoc', '#reviewDoc']) {
   for (const type of ['pointerdown', 'focusin']) $(id).addEventListener(type, () => attend(docs.side), true);
 }
 for (const type of ['pointerdown', 'focusin']) $('#termPane').addEventListener(type, () => attend('terminal'), true);

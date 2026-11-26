@@ -527,19 +527,35 @@ git(main, ['remote', 'add', 'origin', remote]);
 commit(main, 'Initial project scaffold', {
   'package.json': F['package.json']('4.19.2'), 'tsconfig.json': F['tsconfig.json'], 'README.md': F['README.md'](), 'src/server.ts': F['src/server.ts'](),
 }, { who: 'maya', daysAgo: 21 });
-commit(main, 'Add cart API with in-memory store', { 'src/routes/cart.ts': F['src/routes/cart.ts'] }, { who: 'sam', daysAgo: 18 });
-commit(main, 'Add order model and totals', { 'src/orders.ts': F['src/orders.ts']() }, { who: 'sam', daysAgo: 15 });
+// A branch merged into main through a pull request, as Git Repository's Focused view shows it: one row per merge.
+function merged(name, pr, commits, opts) {
+  git(main, ['checkout', '-q', '-b', name]);
+  for (const [msg, files, o] of commits) commit(main, msg, files, o);
+  git(main, ['checkout', '-q', 'main']);
+  git(main, ['merge', '-q', '--no-ff', '--no-edit', '-m', `Merge pull request #${pr} from acme/${name}`, name], opts);
+  git(main, ['branch', '-q', '-d', name]);
+}
+
+merged('feature/cart-api', 12, [
+  ['Add cart API with in-memory store', { 'src/routes/cart.ts': F['src/routes/cart.ts'] }, { who: 'sam', daysAgo: 18 }],
+  ['Add order model and totals', { 'src/orders.ts': F['src/orders.ts']() }, { who: 'sam', daysAgo: 15 }],
+], { who: 'maya', daysAgo: 14.5 });
 commit(main, 'Checkout: charge cards through the legacy billing gateway', {
   'src/routes/payments.ts': F['src/routes/payments.ts'], 'src/lib/legacy-billing.ts': F['src/lib/legacy-billing.ts'],
 }, { who: 'priya', daysAgo: 12 });
-commit(main, 'Add cart summary and checkout button components', {
-  'web/components/CartSummary.tsx': F['web/components/CartSummary.tsx'](), 'web/components/CheckoutButton.tsx': F['web/components/CheckoutButton.tsx'](),
-  'web/format.ts': F['web/format.ts'],
-}, { who: 'leo', daysAgo: 9 });
-commit(main, 'Add Stripe client wrapper', { 'src/lib/stripe.ts': F['src/lib/stripe.ts']() }, { who: 'priya', daysAgo: 6 });
-commit(main, 'Test the payments route', { 'tests/payments.test.ts': F['tests/payments.test.ts']() }, { who: 'maya', daysAgo: 4 });
+merged('feature/cart-ui', 15, [
+  ['Add cart summary and checkout button components', {
+    'web/components/CartSummary.tsx': F['web/components/CartSummary.tsx'](), 'web/components/CheckoutButton.tsx': F['web/components/CheckoutButton.tsx'](),
+    'web/format.ts': F['web/format.ts'],
+  }, { who: 'leo', daysAgo: 9 }],
+], { who: 'sam', daysAgo: 8.5 });
+merged('feature/stripe-client', 18, [
+  ['Add Stripe client wrapper', { 'src/lib/stripe.ts': F['src/lib/stripe.ts']() }, { who: 'priya', daysAgo: 6 }],
+  ['Test the payments route', { 'tests/payments.test.ts': F['tests/payments.test.ts']() }, { who: 'maya', daysAgo: 4 }],
+], { who: 'priya', daysAgo: 3.8 });
+git(main, ['tag', 'v0.3.0']);
 commit(main, 'Bump express to 4.21', { 'package.json': F['package.json']('4.21.0') }, { who: 'sam', daysAgo: 2 });
-git(main, ['push', '-q', '-u', 'origin', 'main']);
+git(main, ['push', '-q', '-u', 'origin', 'main', '--tags']);
 
 // ------------------------------------------------------------------ branches & worktrees
 

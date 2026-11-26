@@ -126,14 +126,33 @@ await js(`${reset} expand('payments');
   await new Promise((r) => setTimeout(r, 2500));`);
 await shot('diff');
 
-// 4. Git Repository history with a commit selected.
+// 4. Git Repository's Focused graph: main with its merges, the session's branch open (it opens by itself), one merged
+// branch and one open branch opened too, and a commit selected.
 await js(`${reset} expand('checkout');
   const s = state.byId.get('checkout');
-  s.log = null; activateTab(dock.groups[0], 'repo');
-  for (let i = 0; i < 20 && !s.log; i++) await new Promise((r) => setTimeout(r, 200));
-  await selectCommit(s, s.log[1].sha);
+  state.gitWidth = 720; applyGitVisibility(); layout(true);   // wide enough for the graph's lines and its badges
+  const wait = async (ok) => { for (let i = 0; i < 50 && !ok(); i++) await new Promise((r) => setTimeout(r, 200)); };
+  state.repoView = 'graph'; store.set('repoView', 'graph'); setGraphScope('main');
+  s.drill = null; activateTab(dock.groups[0], 'repo');
+  const dr = () => drillState(s);
+  await wait(() => dr().data && [...dr().expanded.values()].some((e) => e.data));
+  const merge = dr().data.commits.find((c) => /feature\\/stripe-client/.test(c.subject));
+  if (merge) await expandBranch(s, { merge: merge.sha, name: 'feature/stripe-client' }, { select: false, scroll: false });
+  await expandBranch(s, { ref: 'refs/heads/refactor/payments', name: 'refactor/payments' }, { select: false, scroll: false });
+  const tip = dr().expanded.get('refs/heads/feature/stripe-webhooks')?.data?.commits[0];
+  if (tip) await selectCommit(s, tip.sha);
+  document.querySelector('.repo-log.drill').scrollTop = 0;
   await new Promise((r) => setTimeout(r, 500));`);
 await shot('history');
+
+// 4b. In flight: each branch not merged yet as a card.
+await js(`state.repoView = 'inflight'; store.set('repoView', 'inflight'); renderGit();
+  const s = state.byId.get('checkout');
+  for (let i = 0; i < 100 && !(s.inflight && !s.inflightLoading); i++) await new Promise((r) => setTimeout(r, 200));
+  renderGit();
+  await new Promise((r) => setTimeout(r, 1000));`);
+await shot('in-flight');
+await js(`state.repoView = 'graph'; store.set('repoView', 'graph'); renderGit();`);
 
 // 5. Resuming a saved conversation (fake conversations from the demo's CLAUDE_CONFIG_DIR).
 await js(`${reset} showGit('checkout');

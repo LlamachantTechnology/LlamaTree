@@ -49,6 +49,16 @@ Click the branch name on the Git toolbar, or in Git Changes' status bar, for the
 - **Switching with uncommitted changes** asks first: bring the changes with you, or stash them and continue. If the switch fails, the stash is put back.
 - **The status bar** under Git Changes shows the outgoing and incoming counts (click for Git Repository), the number of changed files and the branch.
 
+## Deleting a branch
+
+Any local branch can be deleted, merged or not: from the bin on its row in the branch picker (or its right-click menu), a branch card's ⋯ menu in In flight, a branch badge's right-click menu in the graph, **Delete…** in an open branch's summary, or a merged branch's ⋯ menu under Reviews' *Done*.
+
+- **It says what goes with it first.** A merged branch loses nothing. For one that isn't merged, the dialog counts the commits that would be lost: those neither main nor the branch's copy on the remote has.
+- **Also delete its remote copy.** When the branch is on the remote (its upstream, or the same name on `origin`), a box offers to delete that too, and remembers your choice. If the remote can't be reached, the local branch is still deleted and the message says why the remote one wasn't.
+- **Not while it's checked out.** A branch checked out in a worktree can't be deleted; the dialog names the worktree, so you can switch it to another branch first.
+- **main can go too**, after a stronger warning: In flight, Reviews and the graph compare every branch with it.
+- **A branch only on the remote** (In flight's *On the remote only*, or the picker's *Remotes* tab) can be deleted there, after a confirm. It goes for everyone who uses that remote.
+
 ## Repositories that can run programs
 
 A repository's own settings (its `.git/config`, a file that config includes, a submodule's config, its hooks) can tell git to run a program: a filter, an ssh command, a credential helper, a hook. LlamaTree runs git by itself, on start and every few seconds, so a folder you copied or unpacked could otherwise run something you never looked at. Your own global and system git settings always apply as usual.
@@ -64,9 +74,61 @@ Repositories without such settings, such as a plain clone, never ask.
 
 ## Git Repository
 
-Outgoing commits and history, with each commit's files. Click a file for that commit's diff.
+The history as a commit graph, with each commit's files. Click a file for that commit's diff.
 
-![Git Repository with outgoing commits and history](images/history.png)
+![Git Repository's Focused graph: main with one row per merge, and three branches open as lines beside it](images/history.png)
+
+**Graph** and **In flight**, at the top, switch between the history and the branches still to land (remembered). In the graph, the switch above the list chooses what it shows (remembered too):
+
+- **Focused** (the default): the repository's main branch (*main*, *master* or whatever `origin/HEAD` points at), its own line, one row per merge, with branch and tag badges where they point. A tag or branch on commits folded away shows on the fold's row. A merge whose dot shows **+** opens the branch it brought in as a line beside main (**−** hides it again). Each branch not merged yet has one row among main's commits, at the date of its newest commit, with how many commits it has and where it started; click its **+** to open it as a line down to where it forked, growing from where the row was. A branch older than the commits shown appears once you show older ones. The chips above the graph (*feature/*, *fix/*, *dependabot/*…) hide or show the branches with that prefix. Any branch opens by name in **Find a branch**. **Expand all** opens every branch listed; **Collapse all** hides them all.
+
+Point at a line in the graph, or a branch's badge, to follow that branch: its line and commits stay, main stays faintly, and the rest fade. A **+** that opens a branch doesn't, and nor does a branch you've just opened until you point somewhere else. Once a branch is open, the stretches of main in between fold into one row each; click one to unfold it. The current branch starts open. Without a main or master branch, this is the current branch's history instead.
+- **Everything**: every local and remote branch and tag, newest first. Each branch has its own coloured line from where it forks off to where it's merged. A merge is a small dot where two lines meet.
+
+Branch and tag badges sit on the commit they point at, edged in the colour of their line. A branch that matches its remote branch shows one badge with a cloud. Outgoing commits, not pushed yet, have hollow dots, and their count shows beside the heading.
+
+## In flight
+
+**In flight**, beside Graph in Git Repository, shows every branch not in main yet, from every worktree, with what each one needs next.
+
+![In flight: a card for each branch not merged yet, grouped by what it needs next](images/in-flight.png)
+
+Each branch is a card: its sessions (click one to go to it), what it needs next and the button that does it, commits ahead of and behind main, files changed, and whether it's pushed, reviewed or has a pull request. Click the name to open it in the graph; its ⋯ menu has the rest (Review, Push, the pull request, Copy branch name, Delete). The cards are grouped:
+
+- **Needs attention**: a session waiting for your answer, or a branch that conflicts with main.
+- **In progress**: a session is working on it, or it has changes not committed yet.
+- **Not pushed**: commits only on this computer (**Push**).
+- **Ready for review**: pushed and up to date; **Review** opens its [review](#review), and once approved, its pull request.
+- **Stale**: no commits for three weeks, and no session on it.
+- **On the remote only**: a branch nobody has here.
+
+Below the cards:
+
+- **Collisions between branches**: pairs that change the same files, those that would conflict first.
+- **Suggested merge order**: an order to land them in, with which need a rebase after another lands.
+- **Landed since you last looked**: what's been merged into main since you last clicked *Got it*. Click a merge to open its branch in the graph.
+
+Conflicts are checked with a merge done in memory, which never touches a worktree; that needs Git 2.38 or later, and a [trusted](#repositories-that-can-run-programs) repository.
+
+## Review
+
+Reviews are in beta, marked *(Beta)* on their tab.
+
+Start a review with **Review this branch** in Git Changes (for the branch you're on), **Review** on any branch's card in *In flight*, or from the **Reviews** tab.
+
+The **Reviews** tab, in the side panel beside Git Changes and Git Repository, lists every review under way in every repository your sessions are in, with a count of those waiting on you. **By status** puts what needs you first: *Your turn* (new commits since your review, or comments not sent yet), *Waiting for changes*, *Approved* and *Done* (merged, or the branch deleted: **Forget** clears it). **By repository** lists each repository with its reviews. Below them, **Start a review** offers each repository's branches with work main doesn't have and no review yet. Like the Git tabs, it can be turned off from the ▾ beside the side panel button.
+
+A review opens as a tab, the branch's changes against main file by file:
+
+- **The files** come riskiest first: under **Look closely**, CI, configuration, migrations, anything to do with security, deleted files and large deletions; then the rest; lockfiles and generated files are folded away. When code changed and no test did, it says so.
+- **Reviewed:** tick a file off (beside it, or **Reviewed** above its diff) and the next one opens. A tick stays only while the file is as you saw it: once the agent changes it again, it's unticked and marked *changed*.
+- **Comments:** click the speech bubble beside a line (or its number), or **Comment on file**, write, and **Add to review** (Ctrl+Enter). Comments wait until you send them.
+- The bar along the top is for the whole review: **Finish for now**, **Approve** and **Send comments**. The line below it is for the file shown.
+- **Send** puts them in one prompt, each with its file, line and the line itself, and sends it to the session you pick: one on that branch comes first. **Copy** gives you the same text to paste anywhere.
+- **Since your review:** once you've sent a review, approved it or finished it for now, the switch at the top shows only what changed since, leaving out what came in from main. Each comment you sent says whether the lines around it have changed since (*check it*, then **Resolve**), or not yet (**Ask again** sends it with your next review).
+- **Approve** marks the branch approved as it is; *In flight* says so until it changes, and then offers its pull request.
+
+Reviews are kept on this computer, by repository and branch, so a branch's review is the same from any of its worktrees. Nothing is posted to GitHub or Azure DevOps.
 
 ## Pull requests
 
