@@ -137,14 +137,24 @@ internal static class HostEndpoint
     public static bool IsListening => OperatingSystem.IsWindows() || File.Exists(Name);
 
     /// <summary>A server end, waiting for a window. More can be made, so a new window can connect while one is still attached.</summary>
-    public static NamedPipeServerStream Listen()
+    public static NamedPipeServerStream Listen() => Listen(Name);
+
+    /// <summary>The socket paths this process has listened on (macOS and Linux).</summary>
+    private static readonly HashSet<string> listenedOn = [];
+
+    internal static NamedPipeServerStream Listen(string name)
     {
-        if (!OperatingSystem.IsWindows() && File.Exists(Name))
+        bool first;
+        lock (listenedOn) first = listenedOn.Add(name);
+        // A socket file there before this process first listens was left behind by a host that ended without tidying up
+        // (this host holds the host lock, so it's no one's). After that it's this host's own: .NET listens on one socket
+        // for all of a path's server ends, so deleting the file for the next one would leave the host listening at a
+        // path that no longer exists, and nothing else could connect while a window was attached.
+        if (first && !OperatingSystem.IsWindows() && File.Exists(name))
         {
-            // Left behind by a host that ended without tidying up; this host holds the host lock, so it's no one's.
-            try { File.Delete(Name); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            try { File.Delete(name); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
-        return new NamedPipeServerStream(Name, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
+        return new NamedPipeServerStream(name, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
             PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
     }
 

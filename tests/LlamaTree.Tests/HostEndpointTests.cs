@@ -41,6 +41,36 @@ public class HostEndpointTests : IDisposable
     /// <summary>A data folder too deep for a socket's path.</summary>
     private string LongData() => Path.Combine(root, new string('d', 60), new string('e', 40), "run");
 
+    private static async Task<System.IO.Pipes.NamedPipeClientStream> AttachAsync(string path)
+    {
+        var client = new System.IO.Pipes.NamedPipeClientStream(".", path, System.IO.Pipes.PipeDirection.InOut,
+            System.IO.Pipes.PipeOptions.Asynchronous | System.IO.Pipes.PipeOptions.CurrentUserOnly);
+        await client.ConnectAsync(5000);
+        return client;
+    }
+
+    [UnixFact]
+    public async Task The_host_can_still_be_reached_while_a_window_is_attached()
+    {
+        // A server's bridge connecting while that computer's own window is open, or a second window.
+        var path = Path.Combine(Folder("run", OwnerOnly), Sock);
+        File.WriteAllText(path, "left by a host that ended without tidying up");
+
+        using var first = HostEndpoint.Listen(path);
+        var accepting = first.WaitForConnectionAsync();
+        using var window = await AttachAsync(path);
+        await accepting;
+
+        // Ready for the next one, with the window still attached: the socket file is the host's own now, and stays.
+        using var next = HostEndpoint.Listen(path);
+        Assert.True(File.Exists(path));
+        accepting = next.WaitForConnectionAsync();
+        using var bridge = await AttachAsync(path);
+        await accepting;
+        Assert.True(next.IsConnected);
+        Assert.True(first.IsConnected);
+    }
+
     private string PathFor(string?[] runtime, string dataFolder, uint? uid = null) =>
         HostEndpoint.SocketPath(Sock, runtime, () => dataFolder, sharedRoot, uid ?? Me, LinuxLimit);
 
