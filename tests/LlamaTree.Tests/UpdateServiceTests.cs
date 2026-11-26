@@ -147,6 +147,60 @@ public sealed class UpdateServiceTests
             finish.Replace('\\', '/'));
     }
 
+    /// <summary>What macOS 27's diskutil info says of a mounted disk image (41 lines, its disk near the top).</summary>
+    private const string DiskutilInfo = """
+           Device Identifier:         disk5s1
+           Device Node:               /dev/disk5s1
+           Whole:                     No
+           Part of Whole:             disk5
+
+           Volume Name:               LlamaTree
+           Mounted:                   Yes
+           Mount Point:               /private/var/folders/_6/sfsg984j4k781dvh350n_0zw0000gn/T/tmp.KAyRLXBg07
+
+           Partition Type:            Apple_HFS
+           File System Personality:   HFS+
+           Type (Bundle):             hfs
+           Name (User Visible):       Mac OS Extended
+           Owners:                    Disabled
+
+           OS Can Be Installed:       No
+           Media Type:                Generic
+           Protocol:                  Disk Image
+           SMART Status:              Not Supported
+           Volume UUID:               75071EB8-AD45-315E-BC77-6AAE124062A3
+           Disk / Partition UUID:     97020B6F-8FDB-4600-8AD9-0A87F25FA256
+           Partition Offset:          20480 Bytes (40 512-Byte-Device-Blocks)
+
+           Disk Size:                 133.3 MB (133259264 Bytes) (exactly 260272 512-Byte-Units)
+           Device Block Size:         512 Bytes
+
+           Volume Total Space:        133.3 MB (133259264 Bytes) (exactly 260272 512-Byte-Units)
+           Volume Used Space:         115.4 MB (115404800 Bytes) (exactly 225400 512-Byte-Units) (86.6%)
+           Volume Free Space:         17.9 MB (17854464 Bytes) (exactly 34872 512-Byte-Units) (13.4%)
+           Allocation Block Size:     4096 Bytes
+
+           Media OS Use Only:         No
+           Media Read-Only:           Yes
+           Volume Read-Only:          Yes (read-only mount flag set)
+
+           Device Location:           External
+           Removable Media:           Removable
+           Media Removal:             Software-Activated
+
+           Solid State:               Yes
+        """;
+
+    [Fact]
+    public void The_mac_update_ejects_its_disk_image_by_the_whole_disk_diskutil_names()
+    {
+        // All of diskutil's answer is read: the disk is on its fourth line (the first Mac test kept only the last six,
+        // and left the image attached).
+        Assert.Equal("disk5", MacUpdate.WholeDisk(DiskutilInfo));
+        Assert.Equal("disk5", MacUpdate.WholeDisk(DiskutilInfo.Replace("\n", "\r\n")));
+        Assert.Null(MacUpdate.WholeDisk("Could not find disk: /tmp/nothing"));
+    }
+
     [Fact]
     public void The_linux_packages_are_named_as_the_packaging_tool_names_them()
     {

@@ -95,13 +95,13 @@ internal static class MacUpdate
                 throw new InvalidOperationException($"The LlamaTree.app in the update isn't signed by {Publisher.Name}'s Developer ID ({Team}), so it wasn't installed.");
             var (accepted, why) = await RunAsync("/usr/sbin/spctl", ["--assess", "--type", "execute", inImage], ct);
             if (!accepted)
-                throw new InvalidOperationException($"macOS doesn't accept the LlamaTree.app in the update (it should be notarized by Apple), so it wasn't installed.\n{why}");
+                throw new InvalidOperationException($"macOS doesn't accept the LlamaTree.app in the update (it should be notarized by Apple), so it wasn't installed.\n{Tail(why)}");
 
             Directory.CreateDirectory(staging);
             var copy = Path.Combine(staging, "LlamaTree.app");
             // ditto keeps the signatures, some of which are in extended attributes.
             var (copied, error) = await RunAsync("/usr/bin/ditto", [inImage, copy], ct);
-            if (!copied) throw new InvalidOperationException($"The update couldn't be copied beside LlamaTree.\n{error}");
+            if (!copied) throw new InvalidOperationException($"The update couldn't be copied beside LlamaTree.\n{Tail(error)}");
             if (!await SignedByUsAsync(copy, deep: true, ct))
                 throw new InvalidOperationException("The copied update doesn't check out as the one that was downloaded, so it wasn't installed.");
             return FinishCommands(app, staging);
@@ -170,7 +170,7 @@ internal static class MacUpdate
         var (ok, error) = await HasDiskutilImageAsync(ct)
             ? await RunAsync("/usr/sbin/diskutil", ["image", "attach", "--readOnly", "--nobrowse", "--mountPoint", mount, image], ct)
             : await RunAsync("/usr/bin/hdiutil", ["attach", image, "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount], ct);
-        if (!ok) throw new InvalidOperationException($"The downloaded disk image couldn't be opened.\n{error}");
+        if (!ok) throw new InvalidOperationException($"The downloaded disk image couldn't be opened.\n{Tail(error)}");
     }
 
     /// <summary>Ejects the image at <paramref name="mount"/>; forcibly when something still has a file open in it.</summary>
@@ -180,8 +180,7 @@ internal static class MacUpdate
         {
             // By its whole disk: once unmounted, the mount point no longer names it.
             var (_, info) = await RunAsync("/usr/sbin/diskutil", ["info", mount], default);
-            var disk = info.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.StartsWith("Part of Whole:", StringComparison.Ordinal))?["Part of Whole:".Length..].Trim();
-            if (string.IsNullOrEmpty(disk)) return;
+            var disk = WholeDisk(info) ?? mount;   // not found: by its mount point, which works while it's mounted
             if ((await RunAsync("/usr/sbin/diskutil", ["eject", disk], default)).Ok) return;
             await RunAsync("/usr/sbin/diskutil", ["unmountDisk", "force", disk], default);
             await RunAsync("/usr/sbin/diskutil", ["eject", disk], default);
@@ -192,7 +191,12 @@ internal static class MacUpdate
         }
     }
 
-    /// <summary>Runs a program to the end (at most five minutes): whether it succeeded, and its last lines of output.</summary>
+    /// <summary>The whole disk ("disk5") in what <c>diskutil info</c> says of a volume, or null.</summary>
+    internal static string? WholeDisk(string info) =>
+        info.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.StartsWith("Part of Whole:", StringComparison.Ordinal))?["Part of Whole:".Length..].Trim()
+            is { Length: > 0 } disk ? disk : null;
+
+    /// <summary>Runs a program to the end (at most five minutes): whether it succeeded, and all it printed.</summary>
     private static async Task<(bool Ok, string Output)> RunAsync(string program, string[] args, CancellationToken ct)
     {
         var psi = new ProcessStartInfo(program) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -208,9 +212,11 @@ internal static class MacUpdate
             try { p.Kill(true); } catch (InvalidOperationException) { }
             return (false, $"{Path.GetFileName(program)} took too long.");
         }
-        var text = ((await output) + (await errors)).Trim();
-        return (p.ExitCode == 0, string.Join('\n', text.Split('\n').TakeLast(6)));
+        return (p.ExitCode == 0, ((await output) + (await errors)).Trim());
     }
+
+    /// <summary>The last few lines of a program's output, for a message.</summary>
+    private static string Tail(string output) => string.Join('\n', output.Split('\n').TakeLast(6));
 
     /// <summary>
     /// Whether this user may change what's in <paramref name="folder"/>, by asking the system (access(2)), not by
