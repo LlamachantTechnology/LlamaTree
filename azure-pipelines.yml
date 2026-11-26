@@ -254,12 +254,6 @@ jobs:
             WINDOWS: ${{ parameters.windows }}
             LINUX: ${{ parameters.linux }}
 
-      # Copies from before the rename (Claude Terminals 1.1.x) only look for an installer under the old name: the same
-      # signed file goes on the release under that name too, until they have all updated.
-      - ${{ if parameters.windows }}:
-        - powershell: Copy-Item "artifacts/LlamaTree-Setup-$(AppVersion).exe" "artifacts/ClaudeTerminals-Setup-$(AppVersion).exe"
-          displayName: 'Copy the installer under its old name'
-
       # The macOS job's disk images, signed and notarized there.
       - ${{ if parameters.macOS }}:
         - task: DownloadPipelineArtifact@2
@@ -281,7 +275,7 @@ jobs:
           script: |
             $v = '$(AppVersion)'
             $files = @()
-            if ($env:WINDOWS -eq 'True') { $files += "artifacts/LlamaTree-Setup-$v.exe", "artifacts/ClaudeTerminals-Setup-$v.exe" }
+            if ($env:WINDOWS -eq 'True') { $files += "artifacts/LlamaTree-Setup-$v.exe" }
             if ($env:LINUX -eq 'True') { $files += "artifacts/linux/llamatree_${v}_amd64.deb", "artifacts/linux/llamatree-$v-1.x86_64.rpm", "artifacts/linux/LlamaTree-$v-linux-x64.tar.gz" }
             if ($env:MACOS -eq 'True') { $files += "artifacts/macos/LlamaTree-$v-macos-arm64.dmg", "artifacts/macos/LlamaTree-$v-macos-x64.dmg" }
             foreach ($file in $files) { if (-not (Test-Path $file)) { throw "This run made no $file." } }
