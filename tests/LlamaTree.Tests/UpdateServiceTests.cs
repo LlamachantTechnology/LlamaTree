@@ -36,17 +36,9 @@ public sealed class UpdateServiceTests
     }
 
     [Fact]
-    public void An_installer_under_the_name_from_before_the_rename_is_used_when_its_the_only_one()
+    public void An_installer_under_the_name_from_before_the_rename_is_not_used()
     {
-        var u = UpdateService.Parse(Release(asset: "ClaudeTerminals-Setup-1.0.8.exe"));
-        Assert.Equal("ClaudeTerminals-Setup-1.0.8.exe", u?.AssetName);
-    }
-
-    [Fact]
-    public void With_the_installer_under_both_names_the_new_one_is_chosen()
-    {
-        var json = Release(asset: "ClaudeTerminals-Setup-1.0.8.exe").Replace("\"name\":\"notes.txt\"", "\"name\":\"LlamaTree-Setup-1.0.8.exe\"");
-        Assert.Equal("LlamaTree-Setup-1.0.8.exe", UpdateService.Parse(json)?.AssetName);
+        Assert.Null(UpdateService.Parse(Release(asset: "ClaudeTerminals-Setup-1.0.8.exe")));
     }
 
     [Fact]

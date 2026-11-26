@@ -177,16 +177,15 @@ internal static partial class UpdateService
         version = Normalize(version);
         if (!r.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array) return null;
 
-        // The installer for this version. Releases also carry it under its name from before the rename, for copies that
-        // only know that one, so it is the fallback. On Linux, the package for how this copy was installed comes first, and
-        // on a Mac the disk image for its processor; the Windows installer still shows the release exists without them.
+        // The installer for this version. On Linux, the package for how this copy was installed comes first, and on a Mac
+        // the disk image for its processor; the Windows installer still shows the release exists without them.
         string[] ours = kind switch
         {
             InstallKind.Windows => [],
             InstallKind.Mac => [MacUpdate.AssetName(version)],
             _ => LinuxUpdate.AssetName(kind, version) is { } linux ? [linux] : [],
         };
-        string[] wanted = [.. ours, $"LlamaTree-Setup-{version}.exe", $"ClaudeTerminals-Setup-{version}.exe"];
+        string[] wanted = [.. ours, $"LlamaTree-Setup-{version}.exe"];
         JsonElement? asset = null;
         var matched = -1;
         for (var i = 0; i < wanted.Length && asset == null; i++)
