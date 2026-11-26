@@ -747,6 +747,18 @@ internal sealed partial class AppHost
     }
 
     /// <summary>
+    /// For an agent that serves its own API (OpenCode), follows it while this start of the session runs: the page is told
+    /// what it's doing ("agent.state", taken as an OSC 7501 state), and its conversation is read from it.
+    /// </summary>
+    private void FollowAgent(TerminalSession s)
+    {
+        if (s.Server is not { } server || s.Agent is not { } agent) return;
+        var id = s.Id;
+        _ = Task.Run(() => agent.Follow(server, () => s.IsRunning && s.Server == server,
+            state => RunOnUi(() => { if (s.Server == server) Post(new { type = "agent.state", id, state }); })));
+    }
+
+    /// <summary>
     /// Moves the session's folder on disk to <paramref name="to"/> (see <see cref="FolderMove"/>), and every session here
     /// in that folder or inside it with it, their agents' saved conversations included. Their programs hold the folder, so
     /// running ones are stopped first, and only when <paramref name="stop"/> says the person agreed; otherwise nothing
@@ -968,6 +980,7 @@ internal sealed partial class AppHost
                 tails[s.Id].Clear();
                 var prompted = s.FirstPromptOnce != null;   // starts on a prompt: its first output is work, not start-up
                 s.Start(Int(msg, "cols"), Int(msg, "rows"), OptStr(msg, "theme"), PanelLinkFor(s));
+                FollowAgent(s);
                 NoteRunning(s, true);
                 RunningChanged?.Invoke();
                 return new { prompted };
@@ -1003,6 +1016,7 @@ internal sealed partial class AppHost
                 tails[s.Id].Clear();
                 var prompted = s.FirstPromptOnce != null;
                 s.Start(Int(msg, "cols"), Int(msg, "rows"), OptStr(msg, "theme"), PanelLinkFor(s));
+                FollowAgent(s);
                 NoteRunning(s, true);
                 RunningChanged?.Invoke();
                 return new { prompted };

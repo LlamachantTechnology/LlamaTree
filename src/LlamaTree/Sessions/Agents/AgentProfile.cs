@@ -7,9 +7,10 @@ namespace LlamaTree.Sessions;
 /// <param name="Panels">How the agent reaches the app's panel server, or null when panels are unavailable.</param>
 /// <param name="NewConversation">Start a new conversation (a session started from a panel), whatever the session was in.</param>
 /// <param name="FirstPrompt">The prompt that new conversation starts with, when it can go on the command line exactly.</param>
+/// <param name="Server">Where the agent serves its own API for this start (see <see cref="AgentProfile.NewServer"/>), or null.</param>
 internal sealed record Launch(
     string Directory, string? Conversation = null, string? ResumeOnce = null, string? Theme = null, PanelLink? Panels = null,
-    bool NewConversation = false, string? FirstPrompt = null);
+    bool NewConversation = false, string? FirstPrompt = null, AgentServer? Server = null);
 
 /// <summary>
 /// How the page tells, from the terminal's screen, that an agent is asking you something (JavaScript regex sources, tried
@@ -73,6 +74,23 @@ internal abstract class AgentProfile
     /// <summary>Anything only this agent adds to an interactive start (Claude's theme --settings), after the first prompt.</summary>
     public virtual IEnumerable<string> ExtraArguments(Launch launch, ParsedCommand parsed) => [];
 
+    /// <summary>Anything only this agent adds to its environment for a start (OpenCode's server password).</summary>
+    protected virtual void ExtraEnvironment(IDictionary<string, string> env, Launch launch) { }
+
+    /// <summary>
+    /// Where a start of <paramref name="command"/> serves the agent's own API on this computer (OpenCode's --port), which
+    /// the app reads its conversation and state from; null for an agent with none, or a command that isn't its
+    /// interactive interface.
+    /// </summary>
+    public virtual AgentServer? NewServer(string command) => null;
+
+    /// <summary>
+    /// Follows <paramref name="server"/> while <paramref name="running"/> says its session runs, telling
+    /// <paramref name="report"/> what the agent is doing as an OSC 7501 state would ("working", "blocked", "done",
+    /// "idle"); for an agent with no server, nothing.
+    /// </summary>
+    public virtual Task Follow(AgentServer server, Func<bool> running, Action<string> report) => Task.CompletedTask;
+
     // ---------------------------------------------------------------- one-off prompts
 
     /// <summary>
@@ -131,7 +149,11 @@ internal abstract class AgentProfile
     public string CommandLine(string command, Launch launch) => CommandBuilder.Build(this, command, launch, new StoreFacts(Conversations, launch.Directory));
 
     /// <summary>Anything the agent needs in its environment for this start (e.g. the panel token).</summary>
-    public void AddEnvironment(IDictionary<string, string> env, Launch launch) => Panels.AddEnvironment(env, launch.Panels);
+    public void AddEnvironment(IDictionary<string, string> env, Launch launch)
+    {
+        Panels.AddEnvironment(env, launch.Panels);
+        ExtraEnvironment(env, launch);
+    }
 
     /// <summary>Whether it reads the panel server from a file written for the session (Claude's --mcp-config).</summary>
     public bool PanelsFromFile => Panels.NeedsConfigFile;
@@ -179,8 +201,9 @@ internal static class Agents
     public static readonly CodexAgent Codex = new();
     public static readonly AntigravityAgent Antigravity = new();
     public static readonly GrokAgent Grok = new();
+    public static readonly OpenCodeAgent OpenCode = new();
 
-    public static IReadOnlyList<AgentProfile> All { get; } = [Claude, Codex, Antigravity, Grok];
+    public static IReadOnlyList<AgentProfile> All { get; } = [Claude, Codex, Antigravity, Grok, OpenCode];
 
     /// <summary>The agent <paramref name="command"/> starts, from its first word, or null for any other command.</summary>
     public static AgentProfile? For(string? command)

@@ -5,7 +5,7 @@ LlamaTree is a desktop app that runs your AI agents side by side, shows which on
 ## What you need
 
 - **Windows 10 (1809 or later) or Windows 11**, x64; or a **64-bit Linux desktop** (x86-64, Intel or AMD).
-- At least one [supported AI agent](agents.md) (Claude Code, Codex, Antigravity or Grok), installed and signed in, on your `PATH`. Check by running it in a terminal: `claude`, `codex`, `agy` or `grok`.
+- At least one [supported AI agent](agents.md) (Claude Code, Codex, Antigravity, Grok or OpenCode), installed and signed in, on your `PATH`. Check by running it in a terminal: `claude`, `codex`, `agy`, `grok` or `opencode`.
 - **Git.**
 - On Windows, the **WebView2 runtime**, which setup takes care of (see [Windows](#windows)).
 

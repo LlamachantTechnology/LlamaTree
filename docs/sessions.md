@@ -67,7 +67,7 @@ A new Claude session's command is just `claude` (plus any options you add). Llam
 - Commands with their own `--resume`, `--session-id` or `--fork-session` are left alone.
 - **Older sessions:** a session made with `claude --continue` (the previous default) starts on the folder's latest conversation once, then keeps that one. A plain `claude` session saved before 1.1.0 never told the app which conversation it was in, so it gets a new one of its own, and the app says once which sessions those are; *Resume a different conversation…* takes one back to an earlier conversation.
 
-Codex, Antigravity and Grok sessions work the same way, with a few differences: see [Codex](agents.md#codex), [Antigravity](agents.md#antigravity) and [Grok](agents.md#grok).
+Codex, Antigravity, Grok and OpenCode sessions work the same way, with a few differences: see [Codex](agents.md#codex), [Antigravity](agents.md#antigravity), [Grok](agents.md#grok) and [OpenCode](agents.md#opencode).
 
 ### Resuming a conversation
 

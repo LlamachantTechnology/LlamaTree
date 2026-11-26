@@ -57,6 +57,9 @@ internal sealed partial class TerminalSession : IDisposable
     /// <summary>When the current process started (UTC): a Codex conversation started after it is this session's (see <see cref="CodexConversations.Live"/>).</summary>
     public DateTime StartedUtc { get; private set; }
 
+    /// <summary>Where the current process serves its agent's own API (OpenCode's), or null; see <see cref="AgentProfile.NewServer"/>.</summary>
+    public AgentServer? Server { get; private set; }
+
     /// <param name="theme">"light" or "dark": the agent is started in the theme that matches the terminal, if it can be.</param>
     /// <param name="panels">How the session's agent reaches the app's panel server, or null when panels are unavailable.</param>
     public void Start(int cols, int rows, string? theme = null, PanelLink? panels = null)
@@ -81,12 +84,15 @@ internal sealed partial class TerminalSession : IDisposable
             var firstPrompt = FirstPromptOnce;
             var onCommandLine = firstPrompt != null && CommandLineResolver.RunsDirectly(Info.Command, env);
             var command = Info.Command;
+            Server = null;
             if (Agent is { } agent)
             {
+                var server = agent.NewServer(command);
                 var launch = new Launch(Info.Directory, Info.Conversation, ResumeOnce, theme, panels,
-                    NewConversation: firstPrompt != null, FirstPrompt: onCommandLine ? firstPrompt : null);
+                    NewConversation: firstPrompt != null, FirstPrompt: onCommandLine ? firstPrompt : null, Server: server);
                 command = agent.CommandLine(command, launch);
                 agent.AddEnvironment(env, launch);
+                Server = server;
             }
             ResumeOnce = null;
             FirstPromptOnce = null;
@@ -108,14 +114,23 @@ internal sealed partial class TerminalSession : IDisposable
     /// <summary>The agent the session's command runs, or null for any other command.</summary>
     public AgentProfile? Agent => Agents.For(Info.Command);
 
-    /// <summary>A conversation id the agents accept: a GUID.</summary>
-    internal static bool IsConversationId(string? id) => id != null && Guid.TryParse(id, out _) && IsPlainId(id);
+    /// <summary>
+    /// A conversation id the agents use: a GUID, or OpenCode's "ses_" and letters and digits
+    /// (ses_debee343cffeBUP0e53Xg6Dt6K). Both go on a command line as they are.
+    /// </summary>
+    internal static bool IsConversationId(string? id) => id != null && (Guid.TryParse(id, out _) && IsPlainId(id) || OpenCodeId().IsMatch(id));
 
-    /// <summary>Letters, digits and dashes only, so it can go on a command line as it is.</summary>
+    /// <summary>A regex source for <see cref="IsConversationId"/>'s ids, to find one in a command.</summary>
+    internal const string ConversationIdPattern = "[0-9A-Fa-f-]{36}|ses_[A-Za-z0-9]{20,40}";
+
+    /// <summary>Letters, digits, dashes and underscores only, so it can go on a command line as it is.</summary>
     internal static bool IsPlainId(string id) => PlainId().IsMatch(id);
 
-    [System.Text.RegularExpressions.GeneratedRegex("^[A-Za-z0-9-]{1,100}$")]
+    [System.Text.RegularExpressions.GeneratedRegex("^[A-Za-z0-9_-]{1,100}$")]
     private static partial System.Text.RegularExpressions.Regex PlainId();
+
+    [System.Text.RegularExpressions.GeneratedRegex("^ses_[A-Za-z0-9]{20,40}$")]
+    private static partial System.Text.RegularExpressions.Regex OpenCodeId();
 
     /// <summary>Whether the app can look after this command's conversation (see <see cref="AgentProfile.CanTrackConversation"/>).</summary>
     internal static bool CanTrackConversation(string command) => Agents.For(command)?.CanTrackConversation(command) == true;

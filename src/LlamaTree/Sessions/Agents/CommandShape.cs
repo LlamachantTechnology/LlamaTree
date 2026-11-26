@@ -57,10 +57,10 @@ internal sealed record CommandShape
 
     private Regex? takeResume;
 
-    /// <summary>Finds "--resume &lt;id&gt;", "--resume=&lt;id&gt;" or "resume &lt;id&gt;" with a conversation id.</summary>
+    /// <summary>Finds "--resume &lt;id&gt;", "--resume=&lt;id&gt;" or "resume &lt;id&gt;" with a conversation id (see <see cref="TerminalSession.IsConversationId"/>).</summary>
     internal Regex TakeResume => takeResume ??= new Regex(
         @"\s+(?:" + string.Join("|", Resume.Names.Select(Regex.Escape)) + ")" + (Resume.IsSubcommand ? @"\s+" : @"(?:=|\s+)") +
-        @"([0-9A-Fa-f-]{36})(?=\s|$)", RegexOptions.IgnoreCase);
+        "(" + TerminalSession.ConversationIdPattern + @")(?=\s|$)", RegexOptions.IgnoreCase);
 }
 
 /// <summary>A command read with its agent's <see cref="CommandShape"/>.</summary>

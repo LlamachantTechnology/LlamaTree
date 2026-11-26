@@ -283,6 +283,8 @@ host.addEventListener('message', (e) => {
     case 'control.ask': askSpawn(m.request); break;
     case 'control.settled': spawnSettled(m.id); break;
     case 'agent.ready': { const s = state.byId.get(m.id); if (s) s.readyAt = performance.now(); break; }
+    // What an agent that serves its own API (OpenCode) is doing, read from it by the host: as if it had said so in OSC 7501.
+    case 'agent.state': { const s = state.byId.get(m.id); if (s?.running) reportState(s, m.state); break; }
     case 'control.start': { const s = state.byId.get(m.id); if (s && !s.started) startSession(s); break; }
     case 'control.prompt': controlPrompt(m.id, m.text); break;
     case 'plugins.grants': applyGrants(m.grants); break;
@@ -4397,6 +4399,11 @@ const AGENT_INSTALLS = [
     name: 'Grok', guide: 'https://github.com/xai-org/grok-build',
     windows: 'irm https://x.ai/cli/install.ps1 | iex',
     unix: 'curl -fsSL https://x.ai/cli/install.sh | bash',
+  },
+  {
+    name: 'OpenCode', guide: 'https://opencode.ai/docs/',
+    windows: 'npm install -g opencode-ai',
+    unix: 'curl -fsSL https://opencode.ai/install | bash',
   },
 ];
 

@@ -289,6 +289,7 @@ internal sealed partial class AppHost
             case "exited":
             case "git.status":
             case "typePrompt":
+            case "agent.state":
             {
                 if (FindServerSession(c.Target, obj["id"]?.GetValue<string>()) is not { } ss) break;
                 obj["id"] = ss.Info.Id;
