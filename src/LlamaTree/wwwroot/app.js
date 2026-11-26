@@ -831,6 +831,7 @@ function projectMenu(p, x, y) {
   if (p.unknown) {   // a group, not a project: nothing to rename, move or delete
     showMenu(x, y, [
       ...projectNewSessionItems(UNKNOWN),
+      ...stopProjectItems(UNKNOWN),
       '-',
       { label: 'Project view: its worktrees side by side', action: () => openProjectView(UNKNOWN) },
       '-',
@@ -845,6 +846,7 @@ function projectMenu(p, x, y) {
   const across = state.navLayout === 'top';   // a row of tabs; down the left, a list
   showMenu(x, y, [
     ...projectNewSessionItems(p.id),
+    ...stopProjectItems(p.id),
     '-',
     { label: 'Project view: its worktrees side by side', action: () => openProjectView(p.id) },
     '-',
@@ -2617,7 +2619,7 @@ function sessionPlus(sessions, where, projectId = null) {
   }, iconEl('plus'));
   return h('button', {
     class: 'icon-btn small session-add', 'aria-label': `New session ${where}`,
-    title: `New session ${where}: in the same folder as ${like.name}${like.git?.isRepo ? ", in a new worktree" : ""}, or in a different folder`,
+    title: `New session ${where}: in the same folder as ${like.name}${like.git?.isRepo ? ", in a new worktree" : ""}, in a different folder, or resuming a conversation`,
     onclick: (e) => quickAddMenu(like, e.currentTarget),
   }, iconEl('plus'));
 }
@@ -4844,6 +4846,7 @@ function newSessionItems(s) {
     s.git?.isRepo && { label: 'In a new worktree…', action: () => showWorktreeDialog(s) },   // worktrees need a Git repository
     '-',
     { label: 'A different folder…', action: () => showAddDialog('new', { directory: s.directory, project: s.project ?? null, server: s.server ?? null }) },
+    { label: 'Resume an existing conversation…', action: () => showAddDialog('resume', { project: s.project ?? null, server: s.server ?? null }) },
   ];
 }
 
@@ -4855,7 +4858,27 @@ function projectNewSessionItems(projectId) {
   const members = state.sessions.filter((s) => groupOf(s) === projectId);
   const like = members.find((s) => s.id === state.currentId) || members[0];
   if (like) return newSessionItems(like);
-  return [{ label: 'New session…', action: () => showAddDialog('new', { project: projectId === UNKNOWN ? null : projectId }) }];
+  const project = projectId === UNKNOWN ? null : projectId;
+  return [
+    { label: 'New session…', action: () => showAddDialog('new', { project }) },
+    { label: 'Resume an existing conversation…', action: () => showAddDialog('resume', { project }) },
+  ];
+}
+
+/**
+ * Stops all of a project's running sessions at once, after asking. Nothing while none is running (a stopped session
+ * starts again from its own menu).
+ */
+function stopProjectItems(projectId) {
+  const running = projectMembers(projectId).filter((s) => s.running);
+  if (!running.length) return [];
+  const names = running.map((s) => `"${s.name}"`).join(', ');
+  return [{
+    label: 'Stop All Sessions…',
+    action: () => confirmDialog('Stop All Sessions',
+      `Stop ${running.length === 1 ? `${names}, the running session` : `all ${running.length} running sessions (${names})`} in ${projectName(projectId)}? ${running.length === 1 ? 'Its running process' : 'Their running processes'} will be terminated.`,
+      'Stop all', true, () => running.forEach((s) => request('stop', { id: s.id }).catch((e) => toast(`${s.name}: ${e.message}`, true)))),
+  }];
 }
 
 /** The session's command without anything that picks a conversation: a new session gets one of its own. */

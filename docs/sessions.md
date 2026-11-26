@@ -153,8 +153,10 @@ Projects group sessions, for example one product across its worktrees. Tick proj
   - *In the same folder…* asks for the new session's name (the next free one is filled in, so Enter takes it) and adds it there, with a conversation of its own.
   - *In a new worktree…* (only in a Git repository) creates a worktree on a new branch, next to the repository by default, and opens a session there, unless you untick *Start a session in it*.
   - *A different folder…* opens New session with the project chosen.
+  - *Resume an existing conversation…* opens New session on *Resume existing conversation*, with the project (and the session's computer) chosen: pick one of the agents' saved conversations to carry on in a new session of the project.
 
-  A shown project with no sessions yet still has its group and its **+** (in the list down the left, beneath the project's name), so you can add its first one; with no session to work from, it opens New session with the project chosen, as its right-click › *New session…* does.
+  A shown project with no sessions yet still has its group and its **+** (in the list down the left, beneath the project's name), so you can add its first one; with no session to work from, it opens New session with the project chosen, as its right-click › *New session…* does (or *Resume an existing conversation…*). A project's right-click menu also has the **+** menu's choices.
+- **Stop a project's sessions** with right-click › *Stop All Sessions…*: it stops every running session in the project, after asking. It's there only while one of them is running; to stop just one session, use its own menu's *Stop session*. A stopped session keeps its conversation: start it again from its ⋯ menu (*Start session*) or by pressing Enter in it.
 
 ## Project view
 
