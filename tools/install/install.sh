@@ -356,6 +356,30 @@ openssl_checks_cms() {
     have openssl && openssl version 2>/dev/null | grep -q '^OpenSSL' && openssl cms -help >/dev/null 2>&1
 }
 
+# Disk images: macOS 27 has `diskutil image attach` and `diskutil eject`, and calls hdiutil's attach and detach
+# deprecated; older versions have only hdiutil.
+has_diskutil_image() { diskutil image --help >/dev/null 2>&1; }
+
+attach_image() {   # image mount-point: read only, and not shown in Finder
+    if has_diskutil_image; then
+        diskutil image attach --readOnly --nobrowse --mountPoint "$2" "$1" >/dev/null
+    else
+        hdiutil attach "$1" -nobrowse -readonly -noautoopen -mountpoint "$2" >/dev/null
+    fi
+}
+
+detach_image() {   # mount-point; forcibly when asked nicely fails (something still has a file open in it)
+    if has_diskutil_image; then
+        # By its whole disk (disk5, say): once unmounted, the mount point no longer names it.
+        image_disk=$(diskutil info "$1" 2>/dev/null | awk -F': *' '/Part of Whole/ { print $2; exit }')
+        [ -n "$image_disk" ] || return 1
+        diskutil eject "$image_disk" >/dev/null 2>&1 ||
+            { diskutil unmountDisk force "$image_disk" >/dev/null 2>&1 && diskutil eject "$image_disk" >/dev/null 2>&1; }
+    else
+        hdiutil detach "$1" -quiet 2>/dev/null || hdiutil detach "$1" -force -quiet 2>/dev/null
+    fi
+}
+
 # Installs LlamaTree.app from the release's disk image, in /Applications, or ~/Applications when this user can't write
 # there. Gatekeeper doesn't look at what curl downloads, so the image and the app in it are checked here: signed by our
 # Developer ID (MAC_REQUIREMENT), and notarized by Apple (spctl, as Gatekeeper would). The signed SHA256SUMS is
@@ -396,8 +420,7 @@ install_mac() {
     }
     mounted="$tmp/image"
     mkdir "$mounted"
-    hdiutil attach "$file" -nobrowse -readonly -noautoopen -mountpoint "$mounted" >/dev/null ||
-        { mounted=""; die "Couldn't open $asset."; }
+    attach_image "$file" "$mounted" || { mounted=""; die "Couldn't open $asset."; }
     new="$mounted/LlamaTree.app"
     [ -d "$new" ] || die "The disk image isn't laid out as expected, so nothing was installed."
     codesign --verify --deep --strict -R="=$MAC_REQUIREMENT" "$new" 2>"$tmp/codesign.log" || {
@@ -455,9 +478,13 @@ launch() {   # command
 # Runs on any exit, and does its work once: a second Ctrl-C or TERM meanwhile can't cut the restore short.
 cleanup() {
     trap '' HUP INT TERM
-    # The Mac disk image, mounted inside $tmp: let go of it before $tmp is removed.
+    # The Mac disk image, mounted inside $tmp: let go of it before $tmp is removed. If it won't let go, $tmp is left
+    # (rm -rf would only fail on the read-only image, noisily).
     if [ -n "${mounted-}" ]; then
-        hdiutil detach "$mounted" -quiet 2>/dev/null || hdiutil detach "$mounted" -force -quiet 2>/dev/null || true
+        if ! detach_image "$mounted"; then
+            warn "Couldn't eject the disk image mounted at $mounted: eject it in Finder, and delete $tmp."
+            tmp=""
+        fi
         mounted=""
     fi
     if [ -n "${staging-}" ]; then

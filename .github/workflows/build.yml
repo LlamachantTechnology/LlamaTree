@@ -74,13 +74,18 @@ jobs:
         run: |
           mount="$RUNNER_TEMP/llamatree-dmg"
           mkdir -p "$mount" "$RUNNER_TEMP/llamatree-data"
-          hdiutil attach artifacts/macos/LlamaTree-0.0.0-macos-*.dmg -nobrowse -readonly -mountpoint "$mount"
+          # diskutil image on macOS 27 and later, where hdiutil attach and detach are deprecated; hdiutil before.
+          if diskutil image --help >/dev/null 2>&1; then
+            diskutil image attach --readOnly --nobrowse --mountPoint "$mount" "$PWD"/artifacts/macos/LlamaTree-0.0.0-macos-*.dmg
+          else
+            hdiutil attach artifacts/macos/LlamaTree-0.0.0-macos-*.dmg -nobrowse -readonly -mountpoint "$mount"
+          fi
           codesign --verify --deep --strict "$mount/LlamaTree.app"
           set +e
           LLAMATREE_DATA="$RUNNER_TEMP/llamatree-data" perl -e 'alarm 20; exec @ARGV' "$mount/LlamaTree.app/Contents/MacOS/LlamaTree" --host
           code=$?
           set -e
-          hdiutil detach "$mount"
+          if diskutil image --help >/dev/null 2>&1; then diskutil eject "$mount"; else hdiutil detach "$mount"; fi
           echo "Exit code $code"
           [ "$code" = 0 ] || [ "$code" = 142 ]
 

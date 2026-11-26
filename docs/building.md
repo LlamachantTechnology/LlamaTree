@@ -56,7 +56,7 @@ winget install JRSoftware.InnoSetup   # once
 
 ## macOS app
 
-[`tools/package-macos.sh`](../tools/package-macos.sh) makes `LlamaTree-<version>-macos-<arm64|x64>.dmg` from a self-contained `osx-arm64` or `osx-x64` publish. It runs on a Mac, since codesign, hdiutil and notarytool are Apple's:
+[`tools/package-macos.sh`](../tools/package-macos.sh) makes `LlamaTree-<version>-macos-<arm64|x64>.dmg` from a self-contained `osx-arm64` or `osx-x64` publish. It runs on a Mac, since codesign, diskutil (or hdiutil) and notarytool are Apple's:
 
 ```sh
 dotnet publish src/LlamaTree -f net10.0 -c Release -r osx-arm64 --self-contained -p:DebugType=None -o artifacts/osx-arm64
