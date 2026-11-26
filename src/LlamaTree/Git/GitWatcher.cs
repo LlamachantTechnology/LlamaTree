@@ -19,13 +19,29 @@ internal sealed class GitWatcher : IDisposable
     /// <summary>Watchers created and not yet disposed (lets tests detect a leaked watcher).</summary>
     internal static int Live => Volatile.Read(ref live);
 
-    public GitWatcher(string worktree, string? externalGitDir)
+    /// <summary>The safety poll for a session on screen, and for one that isn't (the file watcher still catches changes at once).</summary>
+    public const int ForegroundPollMs = 15000, BackgroundPollMs = 60000;
+
+    public GitWatcher(string worktree, string? externalGitDir, bool foreground = true)
     {
         Interlocked.Increment(ref live);
         debounce = new System.Threading.Timer(_ => Raise(), null, Timeout.Infinite, Timeout.Infinite);
-        poll = new System.Threading.Timer(_ => Raise(), null, 15000, 15000);
+        var every = foreground ? ForegroundPollMs : BackgroundPollMs;
+        poll = new System.Threading.Timer(_ => Raise(), null, every, every);
         TryWatch(worktree, true);
         if (externalGitDir != null) TryWatch(externalGitDir, false);
+    }
+
+    /// <summary>Polls at the on-screen rate, or the slower one. Coming on screen polls at once, to catch up on anything missed.</summary>
+    public void SetForeground(bool foreground)
+    {
+        if (disposed) return;
+        try
+        {
+            if (foreground) poll.Change(0, ForegroundPollMs);
+            else poll.Change(BackgroundPollMs, BackgroundPollMs);
+        }
+        catch (ObjectDisposedException) { /* disposed meanwhile */ }
     }
 
     private void TryWatch(string path, bool recursive)

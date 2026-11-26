@@ -17,6 +17,21 @@ internal sealed partial class TerminalSession : IDisposable
     private readonly object gitLock = new();
     private int gitGeneration;
     private bool disposed;
+    private bool foreground = true;   // until the page says otherwise
+
+    /// <summary>
+    /// Whether the session is on screen (selected, or in a side-by-side pane, with the window open): Git status is then
+    /// polled every 15 seconds, otherwise every minute. Either way the file watcher picks up changes as they happen.
+    /// </summary>
+    public void SetForeground(bool value)
+    {
+        lock (gitLock)
+        {
+            if (foreground == value) return;
+            foreground = value;
+            watcher?.SetForeground(value);
+        }
+    }
     private int statusRunning;
     private int statusDirty;
 
@@ -197,7 +212,7 @@ internal sealed partial class TerminalSession : IDisposable
             // Watch the session folder even if it isn't a repo yet, so a later `git init` is picked up.
             if (Directory.Exists(Info.Directory))
             {
-                watcher = new GitWatcher(RepoRoot ?? Info.Directory, external);
+                watcher = new GitWatcher(RepoRoot ?? Info.Directory, external, foreground);
                 watcher.Changed += () => _ = RefreshStatusAsync();
             }
         }
