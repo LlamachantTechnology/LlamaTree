@@ -2,10 +2,13 @@
 # prompt, which stays clear at every size (the full llama icon, LlamaTree-Icon.svg, blurs when small).
 # Microsoft Edge renders the SVG once at 1024 px; each icon size is scaled down from that. The ICO holds PNG entries
 # (16-256 px), which Windows has read since Vista.
+# It also writes installer/macos/LlamaTree.icns, the Mac app's icon: the same drawing a little smaller, since macOS
+# draws icons within an 824 px body on a 1024 px canvas, in PNG entries (16-1024 px), which macOS has read since 10.7.
 param(
     [string]$Svg = "$PSScriptRoot\..\docs\brand\LlamaTree-Terminal-Icon.svg",
     [string]$Out = "$PSScriptRoot\..\src\LlamaTree\app.ico",
-    [string]$Png = "$PSScriptRoot\..\src\LlamaTree\app.png"
+    [string]$Png = "$PSScriptRoot\..\src\LlamaTree\app.png",
+    [string]$Icns = "$PSScriptRoot\..\installer\macos\LlamaTree.icns"
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -30,14 +33,16 @@ try {
     if (-not (Test-Path $big)) { throw "Edge did not render $Svg." }
     $source = [System.Drawing.Bitmap]::FromFile($big)
 
-    function Get-Scaled([int]$size) {
+    # $fill: how much of the square the drawing takes, centred.
+    function Get-Scaled([int]$size, [double]$fill = 1) {
         $bmp = [System.Drawing.Bitmap]::new($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
         $g = [System.Drawing.Graphics]::FromImage($bmp)
         $g.InterpolationMode = 'HighQualityBicubic'
         $g.PixelOffsetMode = 'HighQuality'
         $g.CompositingQuality = 'HighQuality'
         $g.Clear([System.Drawing.Color]::Transparent)
-        $g.DrawImage($source, 0, 0, $size, $size)
+        $drawn = $size * $fill
+        $g.DrawImage($source, [single](($size - $drawn) / 2), [single](($size - $drawn) / 2), [single]$drawn, [single]$drawn)
         $g.Dispose()
         $ms = [IO.MemoryStream]::new()
         $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -65,8 +70,29 @@ try {
     foreach ($img in $images) { $w.Write($img) }
     $w.Flush()
     [IO.File]::WriteAllBytes($Out, $ico.ToArray())
+
+    # The frame's outer edge spans 116 of the SVG's 128 units; on a Mac it spans 824 of 1024 px.
+    $macFill = (824 / 1024) / (116 / 128)
+    # ICNS: "icns" and the file's length, then per image its type, its length (with those 8 bytes) and the PNG; big-endian.
+    $types = [ordered]@{ icp4 = 16; icp5 = 32; ic11 = 32; ic12 = 64; ic07 = 128; ic13 = 256; ic08 = 256; ic14 = 512; ic09 = 512; ic10 = 1024 }
+    function Get-BigEndian([int]$n) { $b = [BitConverter]::GetBytes([UInt32]$n); [Array]::Reverse($b); , $b }
+    $entries = [IO.MemoryStream]::new()
+    foreach ($type in $types.Keys) {
+        $img = Get-Scaled $types[$type] $macFill
+        $entries.Write([Text.Encoding]::ASCII.GetBytes($type), 0, 4)
+        $entries.Write((Get-BigEndian ($img.Length + 8)), 0, 4)
+        $entries.Write($img, 0, $img.Length)
+    }
+    $icnsData = [IO.MemoryStream]::new()
+    $icnsData.Write([Text.Encoding]::ASCII.GetBytes('icns'), 0, 4)
+    $icnsData.Write((Get-BigEndian ($entries.Length + 8)), 0, 4)
+    $entries.WriteTo($icnsData)
+    $Icns = [IO.Path]::GetFullPath($Icns)
+    New-Item -ItemType Directory -Force (Split-Path $Icns) | Out-Null
+    [IO.File]::WriteAllBytes($Icns, $icnsData.ToArray())
+
     $source.Dispose()
-    Write-Host "Wrote $Out ($($sizes -join ', ') px) and $Png"
+    Write-Host "Wrote $Out ($($sizes -join ', ') px), $Png and $Icns"
 }
 finally {
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
