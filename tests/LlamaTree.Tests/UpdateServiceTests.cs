@@ -103,6 +103,51 @@ public sealed class UpdateServiceTests
     }
 
     [Fact]
+    public void A_mac_copy_updates_from_the_disk_image_for_its_processor()
+    {
+        var name = MacUpdate.AssetName(new Version(1, 0, 8));
+        Assert.Matches(@"^LlamaTree-1\.0\.8-macos-(arm64|x64)\.dmg$", name);
+        var json = Release(asset: name).Replace("\"name\":\"notes.txt\"", "\"name\":\"LlamaTree-Setup-1.0.8.exe\"");
+
+        var u = UpdateService.Parse(json, InstallKind.Mac);
+
+        Assert.Equal(name, u?.AssetName);
+        Assert.True(u?.ForThisMachine);
+    }
+
+    [Fact]
+    public void A_release_without_the_mac_disk_image_is_shown_to_a_mac_but_not_installed()
+    {
+        var u = UpdateService.Parse(Release(), InstallKind.Mac);
+        Assert.Equal("LlamaTree-Setup-1.0.8.exe", u?.AssetName);
+        Assert.False(u?.ForThisMachine);
+    }
+
+    [Theory]
+    [InlineData("/Applications/LlamaTree.app/Contents/MacOS/", "/Applications/LlamaTree.app")]
+    [InlineData("/Users/me/Applications/LlamaTree 2.app/Contents/MacOS", "/Users/me/Applications/LlamaTree 2.app")]
+    [InlineData("/Users/me/src/LlamaTree/bin/Debug/net10.0/", null)]   // run from source
+    [InlineData("/Applications/LlamaTree.app/Contents/Resources/", null)]
+    [InlineData("/Volumes/x/Contents/MacOS/", null)]                    // not a .app
+    public void A_mac_copy_knows_its_app_bundle_from_where_it_runs(string programFolder, string? bundle)
+    {
+        if (OperatingSystem.IsWindows()) return;   // the paths are Unix ones
+        Assert.Equal(bundle, MacUpdate.BundleOf(programFolder));
+    }
+
+    [Fact]
+    public void The_mac_swap_moves_the_old_app_aside_puts_it_back_if_the_new_one_fails_and_reopens_the_app()
+    {
+        var finish = MacUpdate.FinishCommands("/Applications/LlamaTree.app", "/Applications/.llamatree-update-1a2b3c4d");
+        Assert.Equal(
+            "if mv '/Applications/LlamaTree.app' '/Applications/.llamatree-update-1a2b3c4d/previous.app'; " +
+            "then mv '/Applications/.llamatree-update-1a2b3c4d/LlamaTree.app' '/Applications/LlamaTree.app' || " +
+            "mv '/Applications/.llamatree-update-1a2b3c4d/previous.app' '/Applications/LlamaTree.app'; fi; " +
+            "rm -rf '/Applications/.llamatree-update-1a2b3c4d'; exec /usr/bin/open '/Applications/LlamaTree.app'",
+            finish.Replace('\\', '/'));
+    }
+
+    [Fact]
     public void The_linux_packages_are_named_as_the_packaging_tool_names_them()
     {
         if (System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture != System.Runtime.InteropServices.Architecture.X64) return;

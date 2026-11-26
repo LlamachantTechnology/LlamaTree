@@ -9,7 +9,7 @@ namespace LlamaTree.Updates;
 /// <summary>How this copy of LlamaTree was installed, which decides how it updates itself.</summary>
 public enum InstallKind
 {
-    /// <summary>Can't update itself (macOS, run from source, or a Linux copy it can't replace): the release page is linked.</summary>
+    /// <summary>Can't update itself (run from source, or a copy it can't replace): the release page is linked.</summary>
     None,
     /// <summary>The Windows installer.</summary>
     Windows,
@@ -19,6 +19,8 @@ public enum InstallKind
     Rpm,
     /// <summary>The .tar.gz, unpacked into a folder this user can write to: the folder is swapped for the new one.</summary>
     Tar,
+    /// <summary>The Mac app, in a folder this user can write to: the app is swapped for the new one (see MacUpdate).</summary>
+    Mac,
 }
 
 /// <summary>
