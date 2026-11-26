@@ -1674,6 +1674,50 @@ internal sealed partial class AppHost
                 return await BranchFocusService.GetManyAsync(GitDir(msg), refs);
             }
 
+            case "git.review":
+                return await ReviewService.GetAsync(GitDir(msg), Str(msg, "ref"));
+
+            case "git.reviewSummary":
+                return await ReviewService.SummariesAsync(GitDir(msg));
+
+            case "git.reviewList":
+                return await ReviewService.ListAsync(GitDir(msg));
+
+            case "git.reviewUpdate":
+            {
+                var dir = GitDir(msg);
+                var refName = Str(msg, "ref");
+                switch (Str(msg, "op"))
+                {
+                    case "start":
+                        await ReviewService.StartAsync(dir, refName);
+                        return true;
+                    case "forget":
+                        await ReviewService.ForgetAsync(dir, Str(msg, "branch"));
+                        return true;
+                    case "viewed":
+                        await ReviewService.SetViewedAsync(dir, refName, Str(msg, "path"), OptStr(msg, "blob"));
+                        return true;
+                    case "add":
+                        return await ReviewService.AddCommentAsync(dir, refName, Str(msg, "path"), Int(msg, "line"), OptStr(msg, "lineText"), Str(msg, "text"));
+                    case "edit":
+                        await ReviewService.EditCommentAsync(dir, refName, Str(msg, "commentId"), OptStr(msg, "text"), OptStr(msg, "state"));
+                        return true;
+                    case "delete":
+                        await ReviewService.DeleteCommentAsync(dir, refName, Str(msg, "commentId"));
+                        return true;
+                    case "reviewed":
+                    {
+                        var sent = msg.TryGetProperty("sent", out var ids) && ids.ValueKind == JsonValueKind.Array
+                            ? ids.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToHashSet() : [];
+                        await ReviewService.MarkReviewedAsync(dir, refName, sent, Bool(msg, "approve"));
+                        return true;
+                    }
+                    default:
+                        throw new InvalidOperationException("Unknown review change.");
+                }
+            }
+
             case "git.mainline":
             {
                 var include = msg.TryGetProperty("include", out var inc) && inc.ValueKind == JsonValueKind.Array
@@ -1872,6 +1916,29 @@ internal sealed partial class AppHost
                 var text = string.Join('\n', new[] { result.Error, result.Text.Trim() }.Where(t => !string.IsNullOrWhiteSpace(t)));
                 if (!result.Ok) throw new InvalidOperationException(text.Length > 0 ? text : "push failed");
                 return text;
+            }
+            case "git.branchDeleteInfo":
+                // For Delete branch's confirm dialog: a local branch, or with remote set, a remote one ("origin/feature/x").
+                return Bool(msg, "remote")
+                    ? await GitService.RemoteBranchDeleteInfoAsync(GitDir(msg), Str(msg, "branch"))
+                    : await GitService.BranchDeleteInfoAsync(GitDir(msg), Str(msg, "branch"));
+            case "git.deleteBranch":
+            {
+                var dir = GitDir(msg);
+                var branch = Str(msg, "branch");
+                if (Bool(msg, "remote"))
+                {
+                    var pushed = NeedsTrust(await GitService.DeleteRemoteBranchAsync(dir, branch));
+                    foreach (var x in sessions.Values) _ = x.RefreshStatusAsync();
+                    if (!pushed.Ok) throw new InvalidOperationException(pushed.Error.Trim().Length > 0 ? pushed.Error.Trim() : "The push failed.");
+                    return new { ok = true, message = $"Deleted {branch} on the remote.", deleted = false, remoteDeleted = true, remoteError = (string?)null };
+                }
+                var result = await GitService.DeleteBranchAsync(dir, branch, Bool(msg, "deleteRemote"), OptStr(msg, "tip"));
+                if (result.NeedsTrust) throw new RepoTrustRequiredException(result.Message);
+                // Whichever worktree tracked it, and every history that showed it, follow.
+                foreach (var x in sessions.Values) _ = x.RefreshStatusAsync();
+                if (!result.Ok) throw new InvalidOperationException(result.Message);
+                return result;
             }
             case "git.fetch":
             case "git.pull":

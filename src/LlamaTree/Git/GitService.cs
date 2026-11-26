@@ -82,6 +82,32 @@ internal sealed record BranchResult(bool Ok, string Message, string? Stash = nul
     public bool NeedsTrust { get; init; }
 }
 
+/// <summary>What deleting a local branch would mean (see <see cref="GitService.BranchDeleteInfoAsync"/>).</summary>
+/// <param name="Exists">It's a local branch; when false nothing else is filled in.</param>
+/// <param name="Worktree">The worktree it's checked out in, if any: it can't be deleted until that worktree switches.</param>
+/// <param name="BaseBranch">The base branch by its local name (main, say), or null when the repository has none.</param>
+/// <param name="IsBase">It is the base branch itself.</param>
+/// <param name="Merged">Everything on it is on the base branch.</param>
+/// <param name="Lost">Commits that would go with it: on it, but not on the base nor on its remote copy.</param>
+/// <param name="Remote">The remote its copy is on (origin, say), or null when it has none.</param>
+/// <param name="RemoteBranch">Its copy's name on that remote.</param>
+/// <param name="Tip">The commit it points at, so the delete can check nothing came in since.</param>
+internal sealed record BranchDeleteInfo(string Branch, bool Exists, string? Worktree, string? BaseBranch, bool IsBase, bool Merged, int Lost,
+    string? Remote, string? RemoteBranch, string? Tip);
+
+/// <summary>What <see cref="GitService.DeleteBranchAsync"/> did. Ok with a <paramref name="RemoteError"/>: the local branch went, its remote copy didn't.</summary>
+internal sealed record BranchDeleteResult(bool Ok, string Message, bool Deleted = false, bool RemoteDeleted = false, string? RemoteError = null)
+{
+    /// <summary>See <see cref="GitResult.NeedsTrust"/>.</summary>
+    public bool NeedsTrust { get; init; }
+}
+
+/// <summary>What deleting a branch on its remote would mean (see <see cref="GitService.RemoteBranchDeleteInfoAsync"/>).</summary>
+/// <param name="Name">As In flight names it: origin/feature/x.</param>
+/// <param name="IsBase">It is the base branch (origin/main, say).</param>
+/// <param name="Lost">Its commits that neither the base nor any local branch has.</param>
+internal sealed record RemoteBranchDeleteInfo(string Name, bool Exists, string? Remote, string? Branch, bool IsBase, int Lost);
+
 internal sealed record DiffContent(string Original, string Modified, string OriginalLabel, string ModifiedLabel, string? Notice);
 
 /// <summary>Thin wrapper over git.exe. All calls are read-only unless the method name says otherwise.</summary>
@@ -1230,6 +1256,136 @@ internal static class GitService
             ? Failed("This repository has no remote to push to.")
             : await RunRemoteAsync(dir, ["push", "--set-upstream", "--end-of-options", remote, $"refs/heads/{branch}:refs/heads/{branch}"]);
     }
+
+    /// <summary>
+    /// What deleting a local branch would mean, for its confirm dialog (see <see cref="BranchDeleteInfo"/>). Read-only. A
+    /// name that isn't a local branch, or that starts with "-", comes back with <see cref="BranchDeleteInfo.Exists"/> false
+    /// and is never given to git.
+    /// </summary>
+    public static async Task<BranchDeleteInfo> BranchDeleteInfoAsync(string dir, string branch)
+    {
+        var none = new BranchDeleteInfo(branch, false, null, null, false, false, 0, null, null, null);
+        if (branch.StartsWith('-')) return none;
+        var tip = await RunAsync(dir, ["rev-parse", "--verify", "--quiet", "refs/heads/" + branch]);
+        if (!tip.Ok) return none;
+
+        var worktree = (await GetWorktreesAsync(dir)).FirstOrDefault(w => w.Branch == branch)?.Path;
+        var (remote, remoteBranch) = await RemoteCopyAsync(dir, branch);
+        var remoteRef = remote == null ? null : $"refs/remotes/{remote}/{remoteBranch}";
+
+        // The base by its local name: origin/main is the base for the local main too.
+        var baseBranch = await GetBaseBranchAsync(dir);
+        var baseName = baseBranch == null ? null
+            : (await RunAsync(dir, ["rev-parse", "--verify", "--quiet", "refs/heads/" + baseBranch])).Ok || !baseBranch.Contains('/') ? baseBranch
+            : baseBranch[(baseBranch.IndexOf('/') + 1)..];
+        var baseTip = baseBranch == null ? null : (await RunAsync(dir, ["rev-parse", "--verify", "--quiet", baseBranch + "^{commit}"])) is { Ok: true } b ? b.Text.Trim() : null;
+        var isBase = branch == baseName;
+
+        // The commits that would go with it. For an ordinary branch: those neither the base nor its remote copy has. For the
+        // base itself (or with no base at all): those no other branch, tag or remote branch has.
+        string[] count = isBase || baseTip == null
+            ? ["rev-list", "--count", "refs/heads/" + branch, "--not", "--exclude=refs/heads/" + branch, "--all"]
+            : ["rev-list", "--count", "refs/heads/" + branch, "--not", baseTip, .. remoteRef == null ? Array.Empty<string>() : [remoteRef]];
+        var lost = await RunAsync(dir, count);
+        var merged = !isBase && baseTip != null && (await RunAsync(dir, ["merge-base", "--is-ancestor", "refs/heads/" + branch, baseTip])).Ok;
+        return new BranchDeleteInfo(branch, true, worktree, baseName, isBase, merged,
+            lost.Ok && int.TryParse(lost.Text.Trim(), out var n) ? n : 0, remote, remoteBranch, tip.Text.Trim());
+    }
+
+    /// <summary>
+    /// The branch's copy on a remote: its upstream when that's a branch on a remote and git has a copy of it, else the
+    /// same name on the default remote ("origin") when git has that. (null, null) when there's none.
+    /// </summary>
+    private static async Task<(string? Remote, string? Branch)> RemoteCopyAsync(string dir, string branch)
+    {
+        var upstream = (await RunAsync(dir, ["config", "--get", $"branch.{branch}.remote"])).Text.Trim();
+        var merge = (await RunAsync(dir, ["config", "--get", $"branch.{branch}.merge"])).Text.Trim();
+        if (upstream.Length > 0 && upstream != "." && merge.StartsWith("refs/heads/"))
+        {
+            var name = merge["refs/heads/".Length..];
+            return (await RunAsync(dir, ["rev-parse", "--verify", "--quiet", $"refs/remotes/{upstream}/{name}"])).Ok ? (upstream, name) : (null, null);
+        }
+        var remote = await DefaultRemoteAsync(dir);
+        return remote != null && (await RunAsync(dir, ["rev-parse", "--verify", "--quiet", $"refs/remotes/{remote}/{branch}"])).Ok
+            ? (remote, branch) : (null, null);
+    }
+
+    /// <summary>
+    /// Deletes a local branch, merged or not, then its copy on the remote when <paramref name="deleteRemote"/> asks and it
+    /// has one. Refuses a branch checked out in a worktree (git would too, without saying which), and one whose tip isn't
+    /// <paramref name="expectedTip"/> when that's given: the commits the person agreed to lose are the ones it had then.
+    /// The local branch is deleted with -D, as the person has seen what goes with it. A remote that can't be reached
+    /// doesn't undo the local delete: the result says the remote copy is still there, and why.
+    /// </summary>
+    public static async Task<BranchDeleteResult> DeleteBranchAsync(string dir, string branch, bool deleteRemote, string? expectedTip = null)
+    {
+        if (await TrustGateAsync(dir, "delete a branch") is { } refused) return new BranchDeleteResult(false, refused.Error) { NeedsTrust = true };
+        var info = await BranchDeleteInfoAsync(dir, branch);
+        if (!info.Exists) return new BranchDeleteResult(false, $"There's no local branch named \"{branch}\".");
+        if (info.Worktree != null)
+            return new BranchDeleteResult(false, $"{branch} is checked out in the worktree {info.Worktree}. Switch that worktree to another branch first.");
+        if (expectedTip != null && expectedTip != info.Tip)
+            return new BranchDeleteResult(false, $"{branch} has changed since you looked: it has other commits now. Nothing was deleted; try again.");
+
+        var local = await RunAsync(dir, ["branch", "-D", "--end-of-options", branch]);
+        if (!local.Ok) return new BranchDeleteResult(false, local.Error.Trim().Length > 0 ? local.Error.Trim() : $"Couldn't delete {branch}.");
+        if (!deleteRemote || info.Remote == null) return new BranchDeleteResult(true, $"Deleted {branch}.", Deleted: true);
+
+        var remote = await DeleteOnRemoteAsync(dir, info.Remote, info.RemoteBranch!);
+        return remote.Ok
+            ? new BranchDeleteResult(true, $"Deleted {branch} and {info.Remote}/{info.RemoteBranch}.", Deleted: true, RemoteDeleted: true)
+            : new BranchDeleteResult(true, $"Deleted {branch}, but {info.Remote}/{info.RemoteBranch} is still on the remote.", Deleted: true,
+                RemoteError: remote.Error.Trim().Length > 0 ? remote.Error.Trim() : "The push failed.");
+    }
+
+    /// <summary>
+    /// A remote branch as In flight names it ("origin/feature/x"): its remote and branch, when git has a copy of it under
+    /// refs/remotes; null otherwise, and for a name starting with "-" or the remote's HEAD.
+    /// </summary>
+    private static async Task<(string Remote, string Branch)?> ParseRemoteBranchAsync(string dir, string name)
+    {
+        if (name.StartsWith('-')) return null;
+        var remotes = (await RunAsync(dir, ["remote"])).Text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        // The longest remote name that fits, as a remote's name may hold a "/" too.
+        foreach (var remote in remotes.Where(r => name.StartsWith(r + "/")).OrderByDescending(r => r.Length))
+        {
+            var branch = name[(remote.Length + 1)..];
+            if (branch.Length == 0 || branch == "HEAD" || branch.StartsWith('-')) continue;
+            if ((await RunAsync(dir, ["rev-parse", "--verify", "--quiet", $"refs/remotes/{remote}/{branch}"])).Ok) return (remote, branch);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// What deleting a branch on the remote would mean ("origin/feature/x", say), for its confirm dialog. Lost counts the
+    /// commits neither the base nor any local branch has. Read-only.
+    /// </summary>
+    public static async Task<RemoteBranchDeleteInfo> RemoteBranchDeleteInfoAsync(string dir, string name)
+    {
+        if (await ParseRemoteBranchAsync(dir, name) is not { } found) return new RemoteBranchDeleteInfo(name, false, null, null, false, 0);
+        var (remote, branch) = found;
+        var full = $"refs/remotes/{remote}/{branch}";
+        var baseBranch = await GetBaseBranchAsync(dir);
+        var baseTip = baseBranch == null ? null : (await RunAsync(dir, ["rev-parse", "--verify", "--quiet", baseBranch + "^{commit}"])) is { Ok: true } b ? b.Text.Trim() : null;
+        var lost = await RunAsync(dir, ["rev-list", "--count", full, "--not", "--branches", .. baseTip == null ? Array.Empty<string>() : [baseTip]]);
+        // origin/main is the base whether the base is known as origin/main or as the local main.
+        var isBase = baseBranch != null && (baseBranch == name || baseBranch == branch);
+        return new RemoteBranchDeleteInfo(name, true, remote, branch, isBase,
+            lost.Ok && int.TryParse(lost.Text.Trim(), out var n) ? n : 0);
+    }
+
+    /// <summary>Deletes a branch on its remote, by the name In flight gives it ("origin/feature/x"); refuses one git has no copy of.</summary>
+    public static async Task<GitResult> DeleteRemoteBranchAsync(string dir, string name)
+    {
+        if (await TrustGateAsync(dir, "push") is { } refused) return refused;
+        return await ParseRemoteBranchAsync(dir, name) is { } found
+            ? await DeleteOnRemoteAsync(dir, found.Remote, found.Branch)
+            : Failed($"There's no remote branch named \"{name}\".");
+    }
+
+    /// <summary>A push of nothing to the branch, by its full name, so the name is never read as an option or a pattern. Git drops its own copy too.</summary>
+    private static Task<GitResult> DeleteOnRemoteAsync(string dir, string remote, string branch) =>
+        RunRemoteAsync(dir, ["push", "--end-of-options", remote, ":refs/heads/" + branch]);
 
     /// <summary>"origin" if it exists, otherwise the first remote, or null when there are none.</summary>
     private static async Task<string?> DefaultRemoteAsync(string dir)

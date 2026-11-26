@@ -932,18 +932,28 @@ button.if-name { font: inherit; font-size: 12.5px; background: none; border: non
 .graph svg .dot-sign { stroke-width: 1.6; stroke-linecap: round; fill: none; }
 .drill-dot:hover svg .dot-expand { stroke-width: 2.5; }
 .drill-dot:hover svg .dot-sign { stroke-width: 2.2; }
-.drill-open { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 0 8px 6px; }
+.graph svg .dot-loading { stroke-width: 2; transform-box: fill-box; transform-origin: center; animation: spin .8s linear infinite; }
 .drill-tools { display: flex; align-items: center; gap: 8px; padding: 0 8px 6px; min-height: 22px; }
 .drill-tools-gap { flex: 1; }
-.drill-open-toggle { display: inline-flex; align-items: center; gap: 3px; min-width: 0; font: inherit; font-size: 12px; padding: 1px 6px 1px 2px; border: none; border-radius: 4px; background: none; color: var(--text); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.drill-open-toggle:hover { background: var(--hover); }
-.drill-open-toggle svg.ic { width: 12px; height: 12px; flex: none; color: var(--text-dim); }
-.drill-open { max-height: 76px; overflow-y: auto; }
-.drill-chip { font: inherit; font-size: 11.5px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-.drill-chip:hover { color: var(--text); background: var(--hover); }
-.drill-chip.on { color: var(--text); border-color: var(--c); background: color-mix(in srgb, var(--c) 22%, transparent); }
-.drill-chip.small { flex: none; font-size: 10.5px; padding: 0 6px; }
-.drill-starts { flex: none; font-size: 11px; }
+.drill-open-count { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* Open branches not shown yet, one folded row each at the date of their newest commit */
+.drill-stub .commit-subject { color: var(--text-dim); }
+.drill-stub-what { flex: none; font-size: 11px; white-space: nowrap; }
+/* Prefix filter: one chip per prefix, struck through while its branches are hidden */
+.prefix-chips { display: flex; gap: 4px; min-width: 0; overflow: hidden; }
+.prefix-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; font: inherit; font-size: 11px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--border); background: none; color: var(--text); cursor: pointer; white-space: nowrap; }
+.prefix-chip:hover { background: var(--hover); }
+.prefix-chip .prefix-count { color: var(--text-dim); }
+.prefix-chip.off { color: var(--text-dim); text-decoration: line-through; border-style: dashed; }
+/* Following a branch: its line and rows stay, main stays faintly, the rest fade */
+.repo-log.drill .graph svg > *, .repo-log.drill .commit-row > :not(.graph) { transition: opacity .12s; }
+.repo-log.drill.hl .graph svg > * { opacity: .12; }
+.repo-log.drill.hl .graph svg > .l0 { opacity: .4; }
+.repo-log.drill.hl .commit-row > :not(.graph) { opacity: .45; }
+.repo-log.drill.hl .commit-row.hl-row > :not(.graph), .repo-log.drill.hl .commit-row.hl-row .graph svg > .gdot { opacity: 1; }
+.repo-log.drill[data-hl="0"] .graph svg > .l0, .repo-log.drill[data-hl="1"] .graph svg > .l1, .repo-log.drill[data-hl="2"] .graph svg > .l2,
+.repo-log.drill[data-hl="3"] .graph svg > .l3, .repo-log.drill[data-hl="4"] .graph svg > .l4, .repo-log.drill[data-hl="5"] .graph svg > .l5,
+.repo-log.drill[data-hl="6"] .graph svg > .l6, .repo-log.drill[data-hl="7"] .graph svg > .l7 { opacity: 1; }
 .drill-more { padding: 8px 10px; }
 .ref .ref-close { display: inline-flex; vertical-align: -2px; margin-left: 4px; padding: 0; border: none; background: none; color: inherit; opacity: .6; cursor: pointer; }
 .ref .ref-close:hover { opacity: 1; }
@@ -1007,7 +1017,7 @@ button.if-name { font: inherit; font-size: 12.5px; background: none; border: non
 .ref.own { background: color-mix(in srgb, var(--c) 26%, transparent); color: var(--text); box-shadow: inset 3px 0 0 var(--c); padding-left: 7px; }
 .ref.plain { background: transparent; color: var(--text-dim); box-shadow: inset 0 0 0 1px var(--border-strong); }
 .ref.head::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: var(--ref-head-fg); vertical-align: 1px; }
-.ref-remote svg.ic { width: 11px; height: 11px; margin-left: 4px; vertical-align: -2px; opacity: .8; }
+.ref-remote svg.ic { display: inline-block; width: 11px; height: 11px; margin-left: 4px; vertical-align: -2px; opacity: .8; }
 .group-label { padding: 6px 8px 2px; color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .3px; }
 .details-head { padding: 8px 10px; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
 .details-head .k { color: var(--text-dim); }
@@ -1047,6 +1057,98 @@ button.if-name { font: inherit; font-size: 12.5px; background: none; border: non
 #diffDoc.inline .diff-labels div + div { display: none; }
 #diffEditor { flex: 1; min-height: 0; }
 #diffNotice { position: absolute; top: 120px; left: 0; right: 0; text-align: center; color: var(--text-dim); font-size: 14px; }
+
+/* Review: a branch's files on the left, the selected one's diff (comments between its lines), the review along the bottom. */
+#reviewDoc { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--editor-bg); }
+#reviewBar { gap: 8px; height: auto; min-height: 38px; flex-wrap: wrap; padding: 4px 8px; row-gap: 4px; }
+#reviewBar .seg { align-self: center; }
+#reviewBar .seg-btn { padding: 2px 12px; font-size: 12px; white-space: nowrap; }
+.review-branch { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.review-progress { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--text-dim); white-space: nowrap; }
+.review-meter { display: block; width: 130px; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.review-meter span { display: block; height: 100%; background: var(--accent); }
+.review-main { flex: 1; min-height: 0; display: flex; }
+#reviewFiles { width: 300px; flex: none; overflow-y: auto; border-right: 1px solid var(--border-soft); background: var(--panel); padding-bottom: 12px; outline: none; }
+.review-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+#reviewFileHead { display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 10px; border-bottom: 1px solid var(--border-soft); background: var(--chrome); flex: none; }
+#reviewFileHead:empty { display: none; }
+#reviewFileHead > b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+#reviewFileHead .btn { height: 22px; padding: 0 10px; font-size: 12px; }
+#reviewFileHead .spacer, #reviewBar .spacer { flex: 1; }
+#reviewDoc .add { color: var(--st-a); }
+#reviewDoc .del { color: var(--st-d); }
+#reviewEditor { flex: 1; min-height: 0; }
+#reviewEmpty { padding: 24px; }
+.review-viewed { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.review-viewed.on { border-color: var(--accent); color: var(--text); }
+.review-group { padding: 10px 12px 3px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; color: var(--text-dim); display: flex; align-items: center; gap: 4px; }
+.review-group.warn { color: var(--working); }
+.review-group.folded { cursor: pointer; text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 12px; }
+.review-group.folded:hover { color: var(--text); }
+.review-group svg.ic { width: 12px; height: 12px; }
+.review-file { display: flex; align-items: center; gap: 7px; padding: 3px 10px 3px 12px; cursor: pointer; font-size: 12.5px; }
+.review-file:hover { background: var(--hover); }
+.review-file.selected { background: var(--select); box-shadow: inset 2px 0 0 var(--accent); }
+.review-file.viewed .review-path { color: var(--text-dim); text-decoration: line-through; text-decoration-color: var(--border); }
+.review-file input { margin: 0; flex: none; }
+.review-status { width: 12px; flex: none; font-weight: 600; font-size: 11px; color: var(--st-m); }
+.review-status.st-A { color: var(--st-a); }
+.review-status.st-D { color: var(--st-d); }
+.review-path { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.review-path > * { direction: ltr; unicode-bidi: isolate; }
+.review-why { flex: none; font-size: 11px; color: var(--text-dim); }
+.review-why.warn { color: var(--working); }
+.review-count { flex: none; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent-strong); color: #fff; font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.review-since { margin: 10px 10px 2px; padding: 8px 10px; border-radius: 5px; background: var(--panel-2); font-size: 12px; display: flex; flex-direction: column; gap: 2px; }
+.review-note { margin: 12px 10px 0; display: flex; gap: 6px; align-items: flex-start; font-size: 12px; color: var(--working); }
+.review-note svg.ic { flex: none; margin-top: 2px; }
+.review-zone { display: flex; flex-direction: column; gap: 6px; z-index: 5; }
+.review-comment { border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; font-family: inherit; font-size: 13px; white-space: normal; box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
+.review-comment.draft { border-color: var(--accent); }
+.review-comment.changed { border-color: var(--ok); }
+.review-comment textarea { font: inherit; font-size: 13px; color: var(--text); background: var(--editor-bg); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; resize: none; outline: none; }
+.review-comment textarea:focus { border-color: var(--accent); }
+.review-comment-head { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+.review-comment-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-comment-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.review-comment-actions:empty { display: none; }
+.review-comment-actions .btn { height: 24px; padding: 0 10px; font-size: 12px; }
+.review-badge { font-size: 11px; padding: 0 7px; border-radius: 8px; background: var(--hover-strong); color: var(--text-dim); white-space: nowrap; }
+.review-badge.warn { color: var(--working); background: color-mix(in srgb, var(--working) 16%, transparent); }
+.review-badge.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.review-add-glyph { cursor: pointer; }
+/* A speech bubble in the margin of the line under the pointer, as Azure DevOps does: click it to comment on that line. */
+.review-add-glyph::before {
+  content: ""; display: block; width: 16px; height: 16px; margin: 2px 0 0 3px; background: var(--accent);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.5 2h11A1.5 1.5 0 0 1 15 3.5v7a1.5 1.5 0 0 1-1.5 1.5H8.2l-3.4 2.7A.5.5 0 0 1 4 14.3V12H2.5A1.5 1.5 0 0 1 1 10.5v-7A1.5 1.5 0 0 1 2.5 2Z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.5 2h11A1.5 1.5 0 0 1 15 3.5v7a1.5 1.5 0 0 1-1.5 1.5H8.2l-3.4 2.7A.5.5 0 0 1 4 14.3V12H2.5A1.5 1.5 0 0 1 1 10.5v-7A1.5 1.5 0 0 1 2.5 2Z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.review-add-glyph:hover::before { background: var(--accent-strong); }
+#reviewBar .btn { height: 24px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
+#reviewBar .sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; flex: none; }
+.review-status-text { font-size: 12px; white-space: nowrap; }
+.review-send { display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
+.review-send p { margin: 0; }
+.review-field { display: flex; flex-direction: column; gap: 4px; }
+.review-field select, .review-field input { font: inherit; color: var(--text); background: var(--editor-bg); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; }
+.review-prompt { margin: 0; max-height: 260px; overflow: auto; padding: 10px 12px; border-radius: 5px; background: var(--editor-bg); border: 1px solid var(--border-soft); font-size: 12px; white-space: pre-wrap; }
+.review-strip { display: flex; align-items: center; gap: 8px; margin: 6px 8px 2px; padding: 6px 8px 6px 10px; border-radius: 5px; background: var(--panel-2); font-size: 12.5px; flex: none; }
+.review-strip svg.ic { flex: none; color: var(--accent); }
+.review-strip-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.review-strip-text.warn { color: var(--working); }
+.review-strip .btn { height: 24px; padding: 0 10px; font-size: 12px; flex: none; }
+/* The Reviews tab: a repository's name on each card when there are several, and under Start a review. */
+.review-repo { flex: none; font-size: 11px; padding: 0 6px; border-radius: 3px; background: var(--hover-strong); color: var(--text-dim); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-repo-label { padding: 6px 12px 2px; font-size: 11.5px; font-weight: 600; color: var(--text-dim); }
+.review-sub { font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.if-more-btn-text { margin: 2px 12px 6px; padding: 0; border: none; background: none; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
+.if-more-btn-text:hover { text-decoration: underline; }
+.review-start { display: flex; align-items: center; }
+.review-start .if-spacer { flex: 1; }
+.if-review { font: inherit; font-size: 11.5px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; }
+.if-review:hover { background: var(--hover); color: var(--text); }
+.if-review.approved { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+.if-review.new { color: var(--working); border-color: color-mix(in srgb, var(--working) 50%, transparent); }
 
 /* ---------------------------------------------------------------- modal / menu / toast */
 #modalHost { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; z-index: 100; }
@@ -1868,6 +1970,10 @@ svg.sparkline circle { fill: var(--accent); }
 .bp-row.elsewhere { color: var(--text-dim); }
 .bp-row .bp-note { margin-left: auto; padding-left: 16px; color: var(--text-faint); flex: none; }
 .bp-row:hover .bp-note, .bp-row.active .bp-note { color: #ddd; }
+/* Delete shows on the row under the pointer or the keyboard, at the far right. */
+.bp-row .bp-del { visibility: hidden; flex: none; margin-left: 6px; color: inherit; }
+.bp-row .bp-name + .bp-del { margin-left: auto; }
+.bp-row:hover .bp-del, .bp-row.active .bp-del { visibility: visible; }
 .bp-list .git-message { padding: 10px 6px; }
 
 /* Git Changes' status bar (after Visual Studio's): ↑↓, changed files, branch ^ */

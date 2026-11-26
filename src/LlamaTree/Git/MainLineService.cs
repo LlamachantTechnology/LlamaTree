@@ -7,10 +7,14 @@ namespace LlamaTree.Git;
 internal sealed record MainCommit(string Sha, string Author, string Date, string Subject, IReadOnlyList<string> Parents, IReadOnlyList<string> Files);
 
 /// <summary>A branch not merged into the base yet, and the base commit it started from.</summary>
-internal sealed record OpenBranch(string Name, string Ref, string Tip, string? Fork, string Date, string Subject);
+/// <param name="Ahead">Its commits the base doesn't have (null with git before 2.41, which can't count them in one call).</param>
+internal sealed record OpenBranch(string Name, string Ref, string Tip, string? Fork, string Date, string Subject, int? Ahead = null);
 
 /// <param name="More">The base's line goes on beyond <paramref name="Commits"/>.</param>
-internal sealed record MainLine(string? BaseBranch, string? BaseTip, List<MainCommit> Commits, bool More, List<OpenBranch> Open);
+/// <param name="Refs">Every branch, remote branch and tag by the commit it points at (a tag's commit, not the tag object), for
+/// the badges on whichever rows show those commits.</param>
+internal sealed record MainLine(string? BaseBranch, string? BaseTip, List<MainCommit> Commits, bool More, List<OpenBranch> Open,
+    Dictionary<string, List<string>>? Refs = null);
 
 /// <summary>
 /// Git Repository's Main graph: the base branch's own line, one commit per merge, which the page drills into branch by
@@ -33,6 +37,7 @@ internal static class MainLineService
         if (baseTip == null) return new(baseName, null, [], false, []);
 
         var openTask = OpenAsync(dir, baseTip);
+        var refsTask = RefsAsync(dir);
         var wanted = include.Where(x => Sha.IsMatch(x)).ToHashSet(StringComparer.Ordinal);
         count = Math.Clamp(count, 1, MaxCommits);
         var n = count;
@@ -47,7 +52,7 @@ internal static class MainLineService
             {
                 var keep = Math.Max(count, reached < 0 ? 0 : reached + 1 + ContextBefore);
                 var more = commits.Count > keep;
-                return new(baseName, baseTip, commits.Take(keep).ToList(), more, await openTask);
+                return new(baseName, baseTip, commits.Take(keep).ToList(), more, await openTask, await refsTask);
             }
             n = Math.Min(MaxCommits, n * 3);
         }
@@ -69,18 +74,41 @@ internal static class MainLineService
         return list;
     }
 
+    /// <summary>Every branch, remote branch and tag by its commit (an annotated tag by the commit it tags), from one call.</summary>
+    private static async Task<Dictionary<string, List<string>>> RefsAsync(string dir)
+    {
+        var r = await GitService.RunAsync(dir, ["for-each-ref", "--format=%(objectname) %(*objectname) %(refname)", "refs/heads", "refs/remotes", "refs/tags"],
+            maxOutputBytes: 16 << 20);
+        var map = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var line in r.Ok ? r.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries) : [])
+        {
+            // "<object> <peeled or empty> <ref>": a lightweight ref leaves the middle empty, so there are two spaces.
+            var f = line.TrimEnd('\r').Split(' ', 3);
+            if (f.Length < 3 || f[2].EndsWith("/HEAD", StringComparison.Ordinal)) continue;
+            var sha = f[1].Length > 0 ? f[1] : f[0];
+            if (!Sha.IsMatch(sha)) continue;
+            if (!map.TryGetValue(sha, out var list)) map[sha] = list = [];
+            list.Add(f[2]);
+        }
+        return map;
+    }
+
     /// <summary>
     /// Branches not merged into the base, newest first (the first <see cref="MaxOpen"/>): local ones, and remote ones with
     /// no local branch of the same name. Each with the base commit it started from.
     /// </summary>
     private static async Task<List<OpenBranch>> OpenAsync(string dir, string baseTip)
     {
-        var r = await GitService.RunAsync(dir, ["for-each-ref", "--no-merged=" + baseTip, "--sort=-committerdate",
-            "--format=%(refname)%09%(objectname)%09%(committerdate:iso-strict)%09%(subject)", "refs/heads", "refs/remotes"]);
+        // The count before the subject, so the subject (which may hold tabs) stays last. Git before 2.41 has no
+        // ahead-behind, so it's asked again without.
+        string[] Args(string count) => ["for-each-ref", "--no-merged=" + baseTip, "--sort=-committerdate",
+            $"--format=%(refname)%09%(objectname)%09%(committerdate:iso-strict)%09{count}%09%(subject)", "refs/heads", "refs/remotes"];
+        var r = await GitService.RunAsync(dir, Args($"%(ahead-behind:{baseTip})"));
+        if (!r.Ok) r = await GitService.RunAsync(dir, Args(""));
         var refs = (r.Ok ? r.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries) : [])
-            .Select(l => l.TrimEnd('\r').Split('\t', 4)).Where(p => p.Length == 4 && !p[0].EndsWith("/HEAD"))
+            .Select(l => l.TrimEnd('\r').Split('\t', 5)).Where(p => p.Length == 5 && !p[0].EndsWith("/HEAD"))
             .Select(p => (Ref: p[0], Local: p[0].StartsWith("refs/heads/"), Name: p[0].StartsWith("refs/heads/") ? p[0]["refs/heads/".Length..] : p[0]["refs/remotes/".Length..],
-                Tip: p[1], Date: p[2], Subject: p[3]))
+                Tip: p[1], Date: p[2], Ahead: int.TryParse(p[3].Split(' ')[0], out var a) ? a : (int?)null, Subject: p[4]))
             .ToList();
         var locals = refs.Where(x => x.Local).Select(x => x.Name).ToHashSet(StringComparer.Ordinal);
         var shown = refs.Where(x => x.Local || !locals.Contains(x.Name[(x.Name.IndexOf('/') + 1)..])).Take(MaxOpen).ToList();
@@ -95,6 +123,6 @@ internal static class MainLineService
             }
             finally { gate.Release(); }
         }));
-        return shown.Select((x, i) => new OpenBranch(x.Name, x.Ref, x.Tip, forks[i], x.Date, x.Subject)).ToList();
+        return shown.Select((x, i) => new OpenBranch(x.Name, x.Ref, x.Tip, forks[i], x.Date, x.Subject, x.Ahead)).ToList();
     }
 }

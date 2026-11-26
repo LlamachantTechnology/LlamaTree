@@ -40,12 +40,26 @@ public sealed class MainLineTests : IDisposable
     }
 
     [Fact]
+    public async Task Gives_every_branch_and_tag_by_the_commit_it_points_at()
+    {
+        repo.Git("tag", "v1", "main~1");                       // lightweight
+        repo.Git("tag", "-a", "-m", "Release 2", "v2", "main");   // annotated: by the commit it tags, not the tag object
+
+        var refs = (await MainLineService.GetAsync(repo.Root, 300, [])).Refs!;
+
+        Assert.Contains("refs/tags/v1", refs[Sha("main~1")]);
+        Assert.Equal(["refs/heads/main", "refs/tags/v2"], refs[Sha("main")].Order());
+        Assert.Contains("refs/heads/feature/open", refs[Sha("feature/open")]);
+    }
+
+    [Fact]
     public async Task Lists_open_branches_with_where_they_started()
     {
         var line = await MainLineService.GetAsync(repo.Root, 300, []);
 
         var open = Assert.Single(line.Open);
         Assert.Equal(("feature/open", "refs/heads/feature/open", Sha("main~2")), (open.Name, open.Ref, open.Fork));
+        Assert.Equal(1, open.Ahead);   // its own commits: what the collapsed row above main counts
     }
 
     [Fact]
