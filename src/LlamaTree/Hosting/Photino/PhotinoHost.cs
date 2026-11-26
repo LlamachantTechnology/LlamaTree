@@ -48,7 +48,7 @@ internal sealed class PhotinoHost : HostLink.IWindow
     private PhotinoHost()
     {
         context = new UiContext(this);
-        site = LocalSite.Start(Path.Combine(AppContext.BaseDirectory, "wwwroot"), bridgeToken);
+        site = LocalSite.Start(Path.Combine(AppFiles.Folder, "wwwroot"), bridgeToken);
         window = new PhotinoWindow
         {
             Title = HostLink.WindowTitle,
@@ -71,7 +71,7 @@ internal sealed class PhotinoHost : HostLink.IWindow
 #endif
             LogVerbosity = 0,
         };
-        var icon = Path.Combine(AppContext.BaseDirectory, "app.png");
+        var icon = Path.Combine(AppFiles.Folder, "app.png");
         if (!OperatingSystem.IsWindows() && File.Exists(icon)) window.IconFile = icon;
         if (OperatingSystem.IsWindows())   // WebView2 keeps its data here, apart from the Windows build's
             window.TemporaryFilesPath = Path.Combine(AppProfile.CustomFolder != null ? Sessions.SessionStore.AppDataFolder : AppProfile.LocalFolder, "Photino");

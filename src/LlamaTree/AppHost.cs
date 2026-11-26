@@ -502,7 +502,7 @@ internal sealed partial class AppHost
 
     /// <summary>Themes of your own (see <see cref="Themes.ThemeCatalog"/>); the app's own are in wwwroot/themes.</summary>
     private static string ThemeFolder => Path.Combine(SessionStore.AppDataFolder, "themes");
-    private static string BuiltInThemeFolder => Path.Combine(AppContext.BaseDirectory, "wwwroot", "themes");
+    private static string BuiltInThemeFolder => Path.Combine(AppFiles.Folder, "wwwroot", "themes");
 
     /// <summary>Where Get plugins unpacks a plugin before it goes in the plugins folder (beside it, so it moves rather than copies).</summary>
     private static string GalleryStaging => Path.Combine(SessionStore.AppDataFolder, "downloads");
@@ -1794,12 +1794,15 @@ internal sealed partial class AppHost
                 }
                 else
                 {
-                    // Installed (or unpacked) now, while a failure can still be shown; the app reopens once it has closed.
+                    // Installed (or unpacked, or on a Mac copied beside the app) now, while a failure can still be shown;
+                    // the app reopens once it has closed.
+                    var mac = UpdateService.Install == InstallKind.Mac;
                     string finish;
-                    try { finish = await LinuxUpdate.PrepareAsync(UpdateService.Install, installer); }
+                    try { finish = mac ? await MacUpdate.PrepareAsync(installer) : await LinuxUpdate.PrepareAsync(UpdateService.Install, installer); }
                     finally { try { Directory.Delete(Path.GetDirectoryName(installer)!, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
                     NoteConversationsForResume();
-                    LinuxUpdate.FinishAfterExit(finish, processes);
+                    if (mac) MacUpdate.FinishAfterExit(finish, processes);
+                    else LinuxUpdate.FinishAfterExit(finish, processes);
                 }
                 // Close once this reply is on its way, and end the host: setup waits for both.
                 RunOnUi(() => { window.Close(); QuitRequested?.Invoke(); });

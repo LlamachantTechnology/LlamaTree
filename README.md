@@ -48,13 +48,13 @@ It runs the agents you already have, unchanged, in real terminals, with your own
 powershell -c "irm https://github.com/LlamachantTechnology/LlamaTree/releases/latest/download/install.ps1 | iex"
 ```
 
-**Linux:**
+**Linux and macOS:**
 
 ```sh
 curl -fsSL https://github.com/LlamachantTechnology/LlamaTree/releases/latest/download/install.sh | sh
 ```
 
-Each downloads the latest release, checks it against the checksums we sign for every release with our code signing certificate (and, on Windows, the installer's own signature), and installs it. Both scripts are in [tools/install](tools/install) if you'd like to read them first. You can also download the Windows setup, or the `.deb`, `.rpm` or `.tar.gz`, from the [latest release](https://github.com/LlamachantTechnology/LlamaTree/releases/latest).
+Each downloads the latest release, checks that it's ours, and installs it: against the checksums we sign for every release with our code signing certificate, plus the installer's own signature on Windows; on a Mac, by our Developer ID signature and Apple's notarization (and the signed checksums too where OpenSSL is installed). Both scripts are in [tools/install](tools/install) if you'd like to read them first. You can also download the Windows setup, the `.deb`, `.rpm` or `.tar.gz`, or the Mac disk image from the [latest release](https://github.com/LlamachantTechnology/LlamaTree/releases/latest).
 
 You need at least one [supported AI agent](docs/agents.md) (Claude Code, Codex, Antigravity, Grok or OpenCode), installed and signed in, plus Git. LlamaTree runs on Windows 10 1809+ and Windows 11 (x64) and on 64-bit Linux; on macOS it runs built from source for now. See [Getting started](docs/getting-started.md) for the details.
 

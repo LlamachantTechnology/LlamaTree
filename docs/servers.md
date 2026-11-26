@@ -5,7 +5,7 @@ Run agents on another machine (a build box, a cloud VM, a beefy desktop) and wor
 ## What you need
 
 - **`ssh` on this computer.** Windows 10 and 11 have it built in, as do macOS and Linux.
-- **A Linux server** (x86-64), **or another Windows PC** (see [A Windows PC as the server](#a-windows-pc-as-the-server)), that you can reach with SSH. LlamaTree can't be installed on a Mac server yet.
+- **A Linux server** (x86-64), **another Windows PC** (see [A Windows PC as the server](#a-windows-pc-as-the-server)) **or a Mac** (see [A Mac as the server](#a-mac-as-the-server)), that you can reach with SSH.
 - **Key or ssh-agent sign-in.** LlamaTree can't type a password. Connect once from a terminal first (`ssh user@server`) so the server's host key is known. If you haven't set up a key, see [Setting up SSH](#setting-up-ssh).
 - **Claude Code, Codex, Antigravity, Grok or OpenCode on the server**, installed and signed in, since that's where they run. For Antigravity and Grok, the server's LlamaTree adds itself to their MCP servers there, as it does locally (see [Antigravity](agents.md#antigravity)), so their panels and messages work too.
 - **LlamaTree on the server.** It gives the `llamatree` command that LlamaTree runs there. If it isn't there yet, LlamaTree says so and offers *Install LlamaTree on `<server>`…* (see [below](#installing-llamatree-on-the-server)). The server doesn't need a desktop.
@@ -128,6 +128,16 @@ LlamaTree --remote user@server
 ```
 
 That opens a window for just that server's sessions. They run on the server, in its folders, and keep running there when the window closes or the connection drops; the window reconnects by itself when the connection comes back. The server can also be `ssh://user@server:port` or a `Host` from your SSH config.
+
+## A Mac as the server
+
+A Mac with LlamaTree installed (see [macOS](getting-started.md#macos)) can be the server, including one you use with LlamaTree open on its own screen: its sessions show in both windows.
+
+1. On the Mac, turn on **System Settings › General › Sharing › Remote Login**, which is macOS's SSH server. Under its *i*, allow your account.
+2. Put your other computer's public key in the Mac's `~/.ssh/authorized_keys` (see [Put the key on the server](#2-put-the-key-on-the-server)), and connect once from a terminal so its host key is known.
+3. Add a session with *Computer* set to `you@the-mac`.
+
+LlamaTree finds the app in `/Applications` or `~/Applications` on the Mac. *Install LlamaTree on `<server>`…* installs it there too, with the install command. The Mac's copy updates itself from its own window, not from yours. Sessions run as they would in Terminal, so the agents need to be installed and signed in on the Mac, and macOS may ask on the Mac's screen before a session works in Documents, Desktop or Downloads.
 
 ## A Windows PC as the server
 

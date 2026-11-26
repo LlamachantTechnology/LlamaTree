@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The hardened runtime's exceptions LlamaTree.app is signed with (tools/package-macos.sh). Each one widens what the
+     process may do, so keep to what's needed. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- .NET compiles to machine code as it runs (the JIT). -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <!-- And, on Intel Macs, writes some of it to memory it maps itself rather than through MAP_JIT. -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- A command in a session (an agent's osascript, say) that drives another app asks as LlamaTree, which macOS only
+         allows an app with this entitlement; the user still says yes or no to each app (NSAppleEventsUsageDescription). -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>

@@ -1,7 +1,11 @@
 #!/bin/sh
-# Installs LlamaTree on Linux from the latest GitHub release:
+# Installs LlamaTree on Linux or macOS from the latest GitHub release:
 #
 #   curl -fsSL https://github.com/LlamachantTechnology/LlamaTree/releases/latest/download/install.sh | sh
+#
+# On a Mac it installs LlamaTree.app, from the release's disk image for this Mac's processor, in /Applications (or
+# ~/Applications when this user can't write there), once the image and the app are shown to be signed by our Developer
+# ID and notarized by Apple (see install_mac). The rest of this is about Linux.
 #
 # With apt-get, dnf or zypper and administrator rights (root, or sudo: it asks for the password when there's a
 # terminal to ask in), it installs the .deb or .rpm, which brings WebKitGTK and libnotify with it. Otherwise it unpacks
@@ -334,8 +338,122 @@ restore_previous() {
 # connection from another machine (--attach). Not knowing (no ps that takes -u) counts as not open; a second copy
 # started anyway only says it's already running and exits.
 app_open() {
+    # macOS's ps gives the program's whole path (.../LlamaTree.app/Contents/MacOS/LlamaTree); Linux's, its name.
     ps -u "$(id -u)" -o comm= -o args= 2>/dev/null |
-        awk '$1 == "LlamaTree" && $0 !~ / --(host|attach)( |$)/ { found = 1 } END { exit !found }'
+        awk '$1 ~ /(^|\/)LlamaTree$/ && $0 !~ / --(host|attach)( |$)/ { found = 1 } END { exit !found }'
+}
+
+# ---------------------------------------------------------------- macOS
+
+# What a Mac app of ours is signed as, in codesign's terms: a Developer ID Application certificate (the two Apple
+# extensions), from Apple, issued to our team. Apple's own designated requirement for a Developer ID app, with our team.
+MAC_TEAM=N83JJRC3Y5
+MAC_REQUIREMENT="anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$MAC_TEAM\""
+
+# Whether this openssl can check SHA256SUMS.p7s: OpenSSL's own (Homebrew's, say), not the LibreSSL macOS comes with,
+# which has no cms.
+openssl_checks_cms() {
+    have openssl && openssl version 2>/dev/null | grep -q '^OpenSSL' && openssl cms -help >/dev/null 2>&1
+}
+
+# Disk images: macOS 27 has `diskutil image attach` and `diskutil eject`, and calls hdiutil's attach and detach
+# deprecated; older versions have only hdiutil.
+has_diskutil_image() { diskutil image --help >/dev/null 2>&1; }
+
+attach_image() {   # image mount-point: read only, and not shown in Finder
+    if has_diskutil_image; then
+        diskutil image attach --readOnly --nobrowse --mountPoint "$2" "$1" >/dev/null
+    else
+        hdiutil attach "$1" -nobrowse -readonly -noautoopen -mountpoint "$2" >/dev/null
+    fi
+}
+
+detach_image() {   # mount-point; forcibly when asked nicely fails (something still has a file open in it)
+    if has_diskutil_image; then
+        # By its whole disk (disk5, say): once unmounted, the mount point no longer names it.
+        image_disk=$(diskutil info "$1" 2>/dev/null | awk -F': *' '/Part of Whole/ { print $2; exit }')
+        [ -n "$image_disk" ] || return 1
+        diskutil eject "$image_disk" >/dev/null 2>&1 ||
+            { diskutil unmountDisk force "$image_disk" >/dev/null 2>&1 && diskutil eject "$image_disk" >/dev/null 2>&1; }
+    else
+        hdiutil detach "$1" -quiet 2>/dev/null || hdiutil detach "$1" -force -quiet 2>/dev/null
+    fi
+}
+
+# Installs LlamaTree.app from the release's disk image, in /Applications, or ~/Applications when this user can't write
+# there. Gatekeeper doesn't look at what curl downloads, so the image and the app in it are checked here: signed by our
+# Developer ID (MAC_REQUIREMENT), and notarized by Apple (spctl, as Gatekeeper would). The signed SHA256SUMS is
+# checked too where there's an openssl that can.
+install_mac() {
+    if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ]; then arch=arm64   # Apple silicon, even under Rosetta
+    else arch=x64
+    fi
+
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/llamatree-install.XXXXXX")
+    staging=""; previous=""; mounted=""
+    trap cleanup EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    json="$tmp/release.json"
+    download "${LLAMATREE_UPDATE_URL:-https://api.github.com/repos/$REPO/releases/latest}" "$json" ||
+        die "Couldn't find LlamaTree's latest release on GitHub."
+    tag=$(json_field "$json" tag_name)
+    version=${tag#[vV]}
+    [ -n "$version" ] || die "Couldn't read the latest release's version."
+    asset="LlamaTree-${version}-macos-${arch}.dmg"
+    [ -n "$(json_field "$json" url "$asset")" ] ||
+        die "LlamaTree $version has no Mac build for this processor ($asset). See $RELEASES/latest"
+
+    say "Installing LlamaTree $version ($asset)."
+    if openssl_checks_cms; then
+        fetch_signed_sums
+    else
+        signed_sums=""   # Apple's signature and notarization are checked instead, below
+    fi
+    file=$(fetch_asset "$asset")
+
+    codesign --verify --strict -R="=$MAC_REQUIREMENT" "$file" 2>"$tmp/codesign.log" || {
+        head -n 3 "$tmp/codesign.log" >&2
+        die "$asset isn't signed by Llamachant Technology Ltd's Developer ID ($MAC_TEAM), so it wasn't installed."
+    }
+    mounted="$tmp/image"
+    mkdir "$mounted"
+    attach_image "$file" "$mounted" || { mounted=""; die "Couldn't open $asset."; }
+    new="$mounted/LlamaTree.app"
+    [ -d "$new" ] || die "The disk image isn't laid out as expected, so nothing was installed."
+    codesign --verify --deep --strict -R="=$MAC_REQUIREMENT" "$new" 2>"$tmp/codesign.log" || {
+        head -n 3 "$tmp/codesign.log" >&2
+        die "The LlamaTree.app in $asset isn't signed by Llamachant Technology Ltd's Developer ID ($MAC_TEAM), so it wasn't installed."
+    }
+    spctl --assess --type execute "$new" 2>"$tmp/spctl.log" || {
+        head -n 3 "$tmp/spctl.log" >&2
+        die "macOS doesn't accept the LlamaTree.app in $asset (it should be notarized by Apple), so it wasn't installed."
+    }
+
+    if [ -w /Applications ]; then folder=/Applications
+    else folder="$HOME/Applications"; mkdir -p "$folder"
+    fi
+    app="$folder/LlamaTree.app"
+    # Copied beside $app, then swapped in with two renames; until the new one is in place, cleanup puts the old one
+    # back (restore_previous). ditto keeps the signatures, which are partly in extended attributes.
+    staging=$(mktemp -d "$folder/.llamatree-install-XXXXXX")
+    previous="$staging/previous"
+    ditto "$new" "$staging/LlamaTree.app"
+    if [ -e "$app" ] || [ -L "$app" ]; then mv "$app" "$previous"; fi
+    mv "$staging/LlamaTree.app" "$app"
+    rm -rf "$staging"; staging=""; previous=""
+
+    say ""
+    say "LlamaTree $version is installed in $folder."
+    if [ "${LLAMATREE_NO_LAUNCH-}" = 1 ] || [ -n "${SSH_CONNECTION-}" ] || [ "$(id -u)" = 0 ]; then
+        say "Open it from Launchpad or $folder."
+    elif app_open; then
+        say "LlamaTree is already open: quit it and open it again to use this version."
+    else
+        open "$app" && say "LlamaTree is opening. Later, open it from Launchpad or $folder."
+    fi
 }
 
 # Opens the app just installed ($1: the command), detached from this script and its terminal, so closing the terminal
@@ -360,6 +478,15 @@ launch() {   # command
 # Runs on any exit, and does its work once: a second Ctrl-C or TERM meanwhile can't cut the restore short.
 cleanup() {
     trap '' HUP INT TERM
+    # The Mac disk image, mounted inside $tmp: let go of it before $tmp is removed. If it won't let go, $tmp is left
+    # (rm -rf would only fail on the read-only image, noisily).
+    if [ -n "${mounted-}" ]; then
+        if ! detach_image "$mounted"; then
+            warn "Couldn't eject the disk image mounted at $mounted: eject it in Finder, and delete $tmp."
+            tmp=""
+        fi
+        mounted=""
+    fi
     if [ -n "${staging-}" ]; then
         restore_previous && rm -rf "$staging"
         staging=""; previous=""
@@ -372,11 +499,8 @@ cleanup() {
 main() {
     case "$(uname -s)" in
         Linux) ;;
-        Darwin)
-            warn "There's no LlamaTree package for macOS yet: it's coming once the app can be signed for Apple."
-            warn "Until then, build it from source: see https://github.com/$REPO/blob/main/docs/building.md#macos-and-linux"
-            exit 1 ;;
-        *) die "This installs LlamaTree on Linux. On Windows, run in PowerShell:  irm $RELEASES/latest/download/install.ps1 | iex" ;;
+        Darwin) install_mac; return ;;
+        *) die "This installs LlamaTree on Linux and macOS. On Windows, run in PowerShell:  irm $RELEASES/latest/download/install.ps1 | iex" ;;
     esac
 
     case "$(uname -m)" in

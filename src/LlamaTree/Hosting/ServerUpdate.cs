@@ -40,8 +40,12 @@ internal static partial class ServerUpdate
             if (value.Length > 0 && !(hash ? Sha256() : UpdateService.Testing ? TestUrl() : SafeUrl()).IsMatch(value)) value = "";
             return $"{name}='{value}'";
         }
+        // A Mac's LlamaTree.app updates itself, from its own window: there's no package to install over SSH.
         var script = $$"""
             set -e
+            if [ "$(uname -s)" = Darwin ]; then
+              echo "This server is a Mac: update LlamaTree there (LlamaTree's menu, Check for updates), and its sessions here pick it up when it restarts." >&2; exit 3
+            fi
             case "$(uname -m)" in
               x86_64|amd64) arch=x64; {{Var("deb_url", $"llamatree_{version}_amd64.deb", false)}}; {{Var("deb_sha", $"llamatree_{version}_amd64.deb", true)}}
                             {{Var("rpm_url", $"llamatree-{version}-1.x86_64.rpm", false)}}; {{Var("rpm_sha", $"llamatree-{version}-1.x86_64.rpm", true)}} ;;

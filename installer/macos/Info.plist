@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- LlamaTree.app's Info.plist. tools/package-macos.sh puts the version in for __VERSION__. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>LlamaTree</string>
+    <key>CFBundleIconFile</key>
+    <string>LlamaTree</string>
+    <key>CFBundleIdentifier</key>
+    <string>dev.llamatree.LlamaTree</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>LlamaTree</string>
+    <key>CFBundleDisplayName</key>
+    <string>LlamaTree</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+    <!-- .NET 10's oldest supported macOS. -->
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>© LLAMACHANT TECHNOLOGY LTD</string>
+
+    <!-- What macOS shows when asking for these on LlamaTree's behalf: the agents and shells in its sessions are its
+         child processes, so a project in Documents, or a script an agent runs that drives another app, asks as
+         LlamaTree, as it would for a terminal. -->
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>LlamaTree's sessions work in the projects you open, including those in your Documents folder.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>LlamaTree's sessions work in the projects you open, including those on your Desktop.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>LlamaTree's sessions work in the projects you open, including those in your Downloads folder.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>LlamaTree's sessions work in the projects you open, including those on removable drives.</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>LlamaTree's sessions work in the projects you open, including those on network drives.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>A command run in one of LlamaTree's sessions wants to control another app.</string>
+</dict>
+</plist>

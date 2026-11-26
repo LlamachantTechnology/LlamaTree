@@ -71,14 +71,24 @@ To uninstall, see [Uninstalling](troubleshooting.md#uninstalling).
 
 ### macOS
 
-LlamaTree runs on macOS, but there's no signed app bundle yet, so for now you run it from source. You need the [.NET 10 or 11 SDK](https://dotnet.microsoft.com/download) and Node.js.
+In Terminal:
+
+```sh
+curl -fsSL https://github.com/LlamachantTechnology/LlamaTree/releases/latest/download/install.sh | sh
+```
+
+It downloads the disk image for your Mac (Apple silicon or Intel), checks that the image and the app in it are signed by our Developer ID (*Llamachant Technology Ltd*) and notarized by Apple, installs **LlamaTree** in Applications (or `~/Applications` if you can't write to Applications), and opens it. `LLAMATREE_NO_LAUNCH=1` installs without opening it, as on Linux.
+
+Or download `LlamaTree-<version>-macos-arm64.dmg` (Apple silicon: M1 and later) or `LlamaTree-<version>-macos-x64.dmg` (Intel) from the [latest release](https://github.com/LlamachantTechnology/LlamaTree/releases/latest), open it, and drag **LlamaTree** to Applications. It needs macOS 14 (Sonoma) or later.
+
+On a Mac, <kbd>⌘</kbd> does what <kbd>Ctrl</kbd> does on Windows. The first time a session works in a folder macOS protects (Documents, Desktop, Downloads), or runs something that controls another app, macOS asks whether LlamaTree may: your sessions' commands ask as LlamaTree, as they would as Terminal.
+
+To run it from source instead, you need the [.NET 10 or 11 SDK](https://dotnet.microsoft.com/download) and Node.js:
 
 ```sh
 git clone https://github.com/LlamachantTechnology/LlamaTree && cd LlamaTree
 (cd web && npm ci) && dotnet run --project src/LlamaTree
 ```
-
-On a Mac, <kbd>⌘</kbd> does what <kbd>Ctrl</kbd> does on Windows. A copy built from source doesn't update itself: *Check for updates* tells you when a new version is out and links its release.
 
 ## Your first sessions
 
@@ -109,12 +119,12 @@ Plain <kbd>Esc</kbd> always goes to the terminal, because Claude Code uses it to
 
 A few seconds after starting, and every 15 minutes, LlamaTree checks the latest GitHub release (an anonymous request; nothing about you or your sessions is sent). When there's a newer version, an **Update to x.y.z** button appears in the title bar, showing what's new.
 
-*Update and restart* downloads the new version, checks it against the checksum signed for the release with our code signing certificate and, on Windows, checks that the installer itself is signed by Llamachant Technology Ltd (it won't run a file that fails either), closes the app, installs it and reopens it. Running sessions carry on in the conversations they were in.
+*Update and restart* downloads the new version, checks it against the checksum signed for the release with our code signing certificate and, on Windows and macOS, checks that the download itself is signed by Llamachant Technology Ltd (the installer's own signature on Windows; our Developer ID and Apple's notarization on a Mac). It won't install a file that fails either. Then it closes the app, installs it and reopens it. Running sessions carry on in the conversations they were in.
 
 - **Windows:** the installer runs silently.
 - **Linux, from a package:** the `.deb` or `.rpm` you installed from is downloaded and checked the same way, then installed with apt, dnf or zypper behind your desktop's administrator password prompt. A cancelled prompt leaves things as they were.
 - **Linux, from a `.tar.gz`:** a copy unpacked into a folder you own is replaced by the new one.
-- **macOS** (for now): the button links the release instead.
+- **macOS:** the new LlamaTree.app is copied beside the one in Applications, and takes its place once the app has closed. A copy in a folder you can't change (installed by another user, or opened straight from the disk image) links the release instead. Copies of 1.4.1 and earlier don't have this yet: update those once by hand, from the release's disk image or the install command.
 
 The version is shown at the top right and in the window title. Click it for *Check for updates*, and untick *Check for updates automatically* to turn the automatic check off. *Count me among the users*, in the same menu, is the answer you gave to *May we count you?* (see [Counting users](privacy.md#counting-users)).
 
