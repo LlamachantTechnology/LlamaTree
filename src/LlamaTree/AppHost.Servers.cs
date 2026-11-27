@@ -93,10 +93,11 @@ internal sealed partial class AppHost
             switch (type)
             {
                 case "updateSession":
-                    // Its project is kept here; the rest (name, command, conversation) is the server's.
-                    if (msg.TryGetProperty("project", out _))
+                    // Its project and colour are kept here; the rest (name, command, conversation) is the server's.
+                    if (msg.TryGetProperty("project", out _) || msg.TryGetProperty("color", out _))
                     {
-                        ss.Info.Project = ProjectId(msg);
+                        if (msg.TryGetProperty("project", out _)) ss.Info.Project = ProjectId(msg);
+                        if (msg.TryGetProperty("color", out _)) ss.Info.Color = ProjectInfo.NormalizeColor(OptStr(msg, "color"));
                         SaveSessions();
                         Post(SessionList());
                     }
@@ -171,7 +172,7 @@ internal sealed partial class AppHost
         var wantsReply = obj.Remove("reqId");
         obj.Remove("server");
         if (remoteId != null) obj["id"] = remoteId;
-        if (obj["type"]?.GetValue<string>() == "updateSession") obj.Remove("project");
+        if (obj["type"]?.GetValue<string>() == "updateSession") { obj.Remove("project"); obj.Remove("color"); }
         if (obj["sessions"] is JsonArray items)
             foreach (var item in items.OfType<JsonObject>()) item.Remove("project");   // projects are this computer's
         if (!wantsReply)

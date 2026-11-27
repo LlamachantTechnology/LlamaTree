@@ -28,6 +28,11 @@ internal sealed class SessionInfo
     /// others, its project, and what it was last seen as (shown while the server can't be reached).
     /// </summary>
     public string? Server { get; set; }
+    /// <summary>
+    /// A colour of its own as #rrggbb (its name strip, cursor and border, to tell it from the others), or null for its
+    /// project's. Kept on this computer, as its project is, for a session on a server too.
+    /// </summary>
+    public string? Color { get; set; }
     /// <summary>The session's id on <see cref="Server"/>.</summary>
     public string? RemoteId { get; set; }
     /// <summary>The session whose agent started this one (start_session), which may drive it; null for one you made.</summary>
@@ -151,7 +156,11 @@ internal static class SessionStore
             .Where(s => !string.IsNullOrWhiteSpace(s.Id) && s.Directory != null && s.Command != null)
             .DistinctBy(s => s.Id)
             .ToList();
-        foreach (var s in sessions) s.Name ??= "";
+        foreach (var s in sessions)
+        {
+            s.Name ??= "";
+            s.Color = ProjectInfo.NormalizeColor(s.Color);   // it goes straight into a style, as a project's does
+        }
         return sessions;
     }
 

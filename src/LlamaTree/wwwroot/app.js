@@ -144,6 +144,7 @@ function toast(message, isError = false, ms = isError ? 7000 : 3500) {
   const el = h('div', { class: 'toast' + (isError ? ' error' : '') }, message);
   $('#toastHost').append(el);
   setTimeout(() => el.remove(), ms);
+  return el;
 }
 
 // ------------------------------------------------------------------ host bridge
@@ -347,6 +348,7 @@ const state = {
   panels: [],                // shown by Claude through the app's MCP server (their tabs live in the dock)
   panelsLoaded: false,       // until the host sends them, saved panel tabs keep their place
   fontSize: store.get('fontSize', 14),
+  paneFontSize: store.get('paneFontSize', null),   // side by side's own text size, or null for the same as fontSize
   surface: { w: 0, h: 0 },
   projects: [],                                        // [{ id, name }] in display order
   hiddenProjects: new Set(store.get('hiddenProjects', [])),   // hidden rather than shown, so new projects start visible
@@ -413,6 +415,91 @@ function projectTag(s) {
   const p = projectOf(s);
   if (!p) return null;
   return h('span', { class: 'proj-tag', style: `--proj:${projectColor(p)}`, title: `Project: ${p.name}` }, p.name);
+}
+
+// ---- telling the terminals apart
+//
+// So you type in the one you meant: each session has a colour (its own, else its project's), on its name strip under
+// the terminal, its cursor and its border while it has the keyboard; the panes side by side that don't have it are dimmed;
+// and its name shows for a moment when the keyboard moves to it. Each of those but the colour can be turned off (Theme menu).
+
+/** The session's colour: its own, else its project's; null for one in Unknown with none (the accent colour then). */
+const sessionColor = (s) => s.color ?? (projectOf(s) ? projectColor(projectOf(s)) : null);
+
+/**
+ * A session with a colour of its own has a stripe in it on its tab, its row down the left and its line in a view, to
+ * match its pane. Not one in its project's colour: its project's group and tag already show that.
+ */
+const ownColorClass = (s) => (s.color ? ' own-color' : '');
+const ownColorStyle = (s) => (s.color ? `--own:${s.color}` : null);
+
+/** The colours a session can pick (Colour ▸), named. */
+const COLOR_NAMES = ['Blue', 'Amber', 'Green', 'Pink', 'Red', 'Teal', 'Yellow', 'Violet'];
+
+const cues = {
+  strip: store.get('cueStrip', true),   // the name strip under each open terminal
+  dim: store.get('cueDim', true),       // side by side, the panes without the keyboard dimmed
+  flash: store.get('cueFlash', true),   // the name shown for a moment when the keyboard moves to another session
+};
+function applyCues() {
+  document.documentElement.toggleAttribute('data-name-strip', cues.strip);
+  document.documentElement.toggleAttribute('data-dim-panes', cues.dim);
+}
+applyCues();
+function setCue(name, on) {
+  cues[name] = on;
+  store.set('cue' + name[0].toUpperCase() + name.slice(1), on);
+  applyCues();
+  layout(true);   // the strip takes its height from the terminal, or gives it back
+}
+
+/** The strip's height under each open terminal, when it's on. */
+const stripH = () => (cues.strip ? STRIP_H : 0);
+
+/** Puts the session's colour on its tile (strip and border) and cursor, when it has changed. */
+function applySessionColor(s) {
+  const c = sessionColor(s);
+  if (s.shownColor === c) return;
+  s.shownColor = c;
+  if (c) s.tile.style.setProperty('--session', c); else s.tile.style.removeProperty('--session');
+  if (s.term) dressCursor(s);
+}
+
+/** The strip under an open terminal: its colour, name, project and branch, and, side by side, which one you're typing in. */
+function renderStrip(s) {
+  const p = projectOf(s), gs = gitSummary(s);
+  fill(s.strip,
+    h('span', { class: 'strip-dot' }),
+    h('span', { class: 'strip-name' }, s.name),
+    p && h('span', { class: 'strip-sub' }, p.name),
+    gs && h('span', { class: 'strip-sub' }, iconEl('branch'), gs.branch),
+    h('span', { class: 'strip-asking' }, 'needs your answer'),   // shown while it's asking (.tile.asking)
+    h('span', { class: 'strip-typing' }, 'typing here'),
+  );
+  s.strip.title = `${s.name}: right-click for its options, including its colour`;
+}
+
+/** Shows the session's name in its terminal for a moment: the keyboard has just moved to it. */
+function flashName(s) {
+  for (const el of document.querySelectorAll('.name-flash')) el.remove();   // only where the keyboard is now
+  const el = h('div', { class: 'name-flash' }, h('span', { class: 'strip-dot' }), s.name);
+  el.addEventListener('animationend', () => el.remove());
+  s.body.append(el);
+}
+
+/** Colour ▸ in a session's menu: its project's, a named colour, or one of your own (Edit session). */
+function sessionColorItem(s) {
+  const dot = (c) => h('span', { class: 'accent-dot', style: c ? `background:${c}` : 'background:var(--accent-strong)' });
+  const set = (color) => request('updateSession', { id: s.id, color }).catch((e) => toast(e.message, true));
+  const p = projectOf(s);
+  return {
+    label: 'Colour', icon: dot(sessionColor(s)), submenu: [
+      { icon: dot(p ? projectColor(p) : null), label: p ? `${p.name}’s (the project’s)` : 'None (the accent colour)', checked: !s.color, action: () => set('') },
+      '-',
+      ...PROJECT_COLORS.map((c, i) => ({ icon: dot(c), label: COLOR_NAMES[i], checked: s.color === c, action: () => set(c) })),
+      { label: 'Your own…', checked: !!s.color && !PROJECT_COLORS.includes(s.color), action: () => showEditDialog(s, 'color') },
+    ],
+  };
 }
 
 /**
@@ -881,44 +968,53 @@ function projectDialog(title, initial, okLabel, onOk) {
   const starts = h('select', {}, START_CHOICES.map(([value, label]) =>
     h('option', { value, selected: (initial.startWithApp || 'click') === value }, label)));
   const error = h('div', { class: 'form-error', hidden: true });
-  let color = initial.color ?? null;
-  const automatic = initial.id ? autoProjectColor(initial.id) : PROJECT_COLORS[0];
-
   const preview = h('span', { class: 'proj-tag' });
-  const custom = h('input', { type: 'color', class: 'swatch-custom-input', tabindex: '-1' });
-  const customBtn = h('button', { class: 'swatch swatch-custom', title: 'Custom colour…', onclick: () => custom.click() }, '…');
-  const autoBtn = h('button', { class: 'swatch-auto', title: 'Use the automatic colour', onclick: () => pick(null) }, 'Automatic');
-  const swatches = PROJECT_COLORS.map((c) => h('button', { class: 'swatch', style: `--swatch:${c}`, title: c, onclick: () => pick(c) }));
-  custom.addEventListener('input', () => pick(custom.value));
+  const colour = colourField(initial.color, initial.id ? autoProjectColor(initial.id) : PROJECT_COLORS[0], 'Automatic', 'Use the automatic colour',
+    (shown) => { preview.style.setProperty('--proj', shown); preview.textContent = name.value.trim() || 'Project'; });
+  colour.el.append(preview);
+  name.addEventListener('input', colour.refresh);
 
+  const ok = async () => {
+    if (!name.value.trim()) { error.hidden = false; error.textContent = 'Enter a name.'; return; }
+    const startWithApp = starts.value === 'click' ? '' : starts.value;
+    try { await onOk(name.value.trim(), colour.value(), startWithApp); closeModal(); } catch (e) { error.hidden = false; error.textContent = e.message; }
+  };
+  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok(); });
+  openModal(title, [
+    field('Name', name),
+    field('Colour', colour.el),
+    field('Its sessions start', comboSelect(starts),
+      'For its agent sessions on this computer, unless a session has its own (in New session, or its ⋯ menu › Rename / edit command…). ' + STARTS_HELP),
+    error,
+  ], [h('button', { class: 'btn', onclick: closeModal }, 'Cancel'), h('button', { class: 'btn primary', onclick: ok }, okLabel)]);
+}
+
+/**
+ * A row of colour swatches: `autoLabel` (null, `automatic` shown), the named colours, and one of your own. `initial` is
+ * the colour picked, or null for the automatic one; onShow(colour) is told the colour shown whenever it changes.
+ * value() is the pick, or null for the automatic one.
+ */
+function colourField(initial, automatic, autoLabel, autoTitle, onShow) {
+  let color = initial ?? null;
+  const custom = h('input', { type: 'color', class: 'swatch-custom-input', tabindex: '-1' });
+  const customBtn = h('button', { class: 'swatch swatch-custom', title: 'Your own colour…', onclick: () => custom.click() }, '…');
+  const autoBtn = h('button', { class: 'swatch-auto', title: autoTitle, onclick: () => pick(null) }, autoLabel);
+  const swatches = PROJECT_COLORS.map((c, i) => h('button', { class: 'swatch', style: `--swatch:${c}`, title: COLOR_NAMES[i], 'data-color': c, onclick: () => pick(c) }));
+  custom.addEventListener('input', () => pick(custom.value));
   function pick(c) {
     color = c;
     const shown = c ?? automatic;
-    for (const s of swatches) s.classList.toggle('selected', c !== null && s.title === c);
+    for (const s of swatches) s.classList.toggle('selected', c !== null && s.dataset.color === c);
     const isCustom = c !== null && !PROJECT_COLORS.includes(c);
     customBtn.classList.toggle('selected', isCustom);
     customBtn.style.setProperty('--swatch', isCustom ? c : 'transparent');
     autoBtn.classList.toggle('selected', c === null);
     custom.value = shown;
-    preview.style.setProperty('--proj', shown);
-    preview.textContent = name.value.trim() || 'Project';
+    onShow?.(shown);
   }
-  name.addEventListener('input', () => pick(color));
-
-  const ok = async () => {
-    if (!name.value.trim()) { error.hidden = false; error.textContent = 'Enter a name.'; return; }
-    const startWithApp = starts.value === 'click' ? '' : starts.value;
-    try { await onOk(name.value.trim(), color, startWithApp); closeModal(); } catch (e) { error.hidden = false; error.textContent = e.message; }
-  };
-  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok(); });
-  openModal(title, [
-    field('Name', name),
-    field('Colour', h('div', { class: 'swatch-row' }, autoBtn, swatches, customBtn, custom, preview)),
-    field('Its sessions start', comboSelect(starts),
-      'For its agent sessions on this computer, unless a session has its own (in New session, or its ⋯ menu › Rename / edit command…). ' + STARTS_HELP),
-    error,
-  ], [h('button', { class: 'btn', onclick: closeModal }, 'Cancel'), h('button', { class: 'btn primary', onclick: ok }, okLabel)]);
+  const el = h('div', { class: 'swatch-row' }, autoBtn, swatches, customBtn, custom);
   pick(color);
+  return { el, value: () => color, refresh: () => pick(color), openCustom: () => custom.click() };
 }
 
 function showNewProjectDialog() {
@@ -941,7 +1037,7 @@ function confirmDeleteProject(p) {
     'Delete', true, () => request('projects.remove', { id: p.id }).catch((e) => toast(e.message, true)));
 }
 
-const PAD = 8, GAP = 8, HEADER_H = 30;
+const PAD = 8, GAP = 8, HEADER_H = 30, STRIP_H = 22;   // STRIP_H: the name strip under an open terminal (.tile-strip)
 const RAIL_W = 16;   // the conversation rail's gutter at the right of each terminal
 const DEFAULT_COMMAND = 'claude';   // each new session gets a conversation of its own (the host gives it one)
 // The shells a session's command box suggests after the agents: Command Prompt on Windows, zsh (macOS's own) elsewhere,
@@ -1682,6 +1778,10 @@ function dressCursor(s) {
   const theme = { ...t };
   const look = themeLook();
   if (seeThrough(look)) theme.background = 'rgba(0, 0, 0, 0)';
+  // The cursor, where you type, in the session's colour: its own always, its project's unless the theme has a cursor
+  // colour of its own. Under it, a character in the terminal's background, so it reads.
+  const colour = s.color ?? (look?.terminal?.cursor ? null : sessionColor(s));
+  if (colour) { theme.cursor = colour; theme.cursorAccent = t.background; }
   if (s.cycle && cycleIsCursor()) theme.cursor = theme.cursorAccent = 'rgba(0, 0, 0, 0)';
   s.term.options.theme = theme;
   s.term.options.cursorStyle = s.cycle ? 'bar' : 'block';   // a bar beside the cycle (or hidden under it): the cell stays readable
@@ -1807,6 +1907,7 @@ function syncSessions(list, projects) {
       Object.assign(s, { name: info.name, directory: info.directory, command: info.command, conversation: info.conversation, server: info.server ?? null });
     }
     s.project = info.project || null;
+    s.color = cssColor(info.color);   // its own, or null for its project's (see sessionColor)
     s.startWithApp = info.startWithApp || null;   // see showEditDialog
     s.autoStart = !!info.autoStart;   // the app has just opened, and this session starts with it
     // Running already: it ran on in the session host while no window was open (its output follows as a replay).
@@ -1828,6 +1929,7 @@ function syncSessions(list, projects) {
     if (!seen.has(s.id)) disposeSession(s);
   }
   state.sessions = list.map((i) => state.byId.get(i.id));
+  for (const s of state.sessions) applySessionColor(s);   // its own colour, or its project's, which may have changed
   // Move only the tiles that are out of order: moving a tile takes the keyboard focus from its terminal, and the list
   // comes again whenever a session changes (the conversation Claude is in, say). If one has to move, focus goes back.
   const grid = $('#grid');
@@ -1904,7 +2006,11 @@ function createSession(info) {
   s.rail = h('div', { class: 'chat-rail' });
   attachRail(s.rail);
   s.veil = veilSlider();
-  s.tile = h('div', { class: 'tile', 'data-id': s.id }, s.header, h('div', { class: 'tile-body' }, s.surface, s.rail, s.cover, s.exitedBadge, s.veil));
+  s.body = h('div', { class: 'tile-body' }, s.surface, s.rail, s.cover, s.exitedBadge, s.veil);
+  s.strip = h('div', { class: 'tile-strip' });   // its name under the terminal, where you type (see renderStrip)
+  s.strip.addEventListener('click', () => { if (isOpen(s)) { focusPane(s.id); s.term.focus(); } });
+  s.strip.addEventListener('contextmenu', (e) => { e.preventDefault(); sessionMenu(s, e.clientX, e.clientY); });
+  s.tile = h('div', { class: 'tile', 'data-id': s.id }, s.header, s.body, s.strip);
 
   const term = new Terminal({
     fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, Menlo, "DejaVu Sans Mono", "Courier New", monospace',
@@ -2423,6 +2529,7 @@ function renderTileHeader(s) {
   s.exitedBadge.hidden = !away && (s.running || !(s.started || s.startsOnOpen));
   s.exitedBadge.textContent = away ? serverStateText(serverOf(s))
     : s.startsOnOpen ? 'Starts when you click it' : s.exitCode === null ? 'Not running' : `Exited (${s.exitCode})`;
+  renderStrip(s);
   renderTileState(s);
   syncControlStatus(s);
 }
@@ -2543,7 +2650,8 @@ async function loadConversationInfo(s) {
  */
 function sessionTab(s, i, marks = false) {
   return h('div', {
-    class: 'session-tab' + (state.expandedId === s.id ? ' active' : isOpen(s) ? ' in-pane' : '') + (['working', 'asking'].includes(statusClass(s)) ? ' ' + statusClass(s) : ''),
+    class: 'session-tab' + (state.expandedId === s.id ? ' active' : isOpen(s) ? ' in-pane' : '') + (['working', 'asking'].includes(statusClass(s)) ? ' ' + statusClass(s) : '') + ownColorClass(s),
+    style: ownColorStyle(s),
     'data-id': s.id,
     title: sessionTabTitle(s),
     onmouseenter: () => loadConversationInfo(s),
@@ -2675,7 +2783,7 @@ function renderSessionTabs() {
 // ------------------------------------------------------------------ layout
 
 /** The terminal's size inside a tile placed at `r` (its border, padding, header and rail taken off). */
-const surfaceFor = (r) => ({ w: Math.max(200, Math.floor(r.w - 2 - 8 - RAIL_W)), h: Math.max(100, Math.floor(r.h - HEADER_H - 2 - 4)) });
+const surfaceFor = (r) => ({ w: Math.max(200, Math.floor(r.w - 2 - 8 - RAIL_W)), h: Math.max(100, Math.floor(r.h - HEADER_H - stripH() - 2 - 4)) });
 
 /** The size of a terminal open on its own; every session not side by side keeps it, so its tile is a true preview. */
 function surfaceSize() {
@@ -2691,7 +2799,13 @@ function surfaceSize() {
 // open on its own. One open session is simply the case with one pane.
 
 /** A pane's narrowest width: MIN_PANE_COLS of the terminal's text, plus its rail and border. */
-const paneMinWidth = () => Math.ceil(MIN_PANE_COLS * state.fontSize * 0.6) + RAIL_W + 12;
+const paneMinWidth = () => Math.ceil(MIN_PANE_COLS * paneFontSize() * 0.6) + RAIL_W + 12;
+
+/** Side by side's text size: its own (Ctrl+= there), else the one sessions open on their own have. */
+const paneFontSize = () => state.paneFontSize ?? state.fontSize;
+
+/** The text size session `s`'s terminal wants: side by side's in a pane, else (on its own, filling the area, a tile) the usual. */
+const fontSizeFor = (s) => (sideBySide() && state.paneIds.includes(s.id) && state.paneZoom !== s.id ? paneFontSize() : state.fontSize);
 
 /**
  * The shapes n sessions can take side by side (Arrange): groups of indexes into paneIds, as rows of panes ('rows') or as
@@ -2919,6 +3033,8 @@ function layout(instant = false) {
   for (const s of state.sessions) {
     const r = state.paneRects.get(s.id), want = r ? surfaceFor(r) : sz;
     const w = want.w + 'px', hh = want.h + 'px';
+    const font = fontSizeFor(s);
+    if (s.term && s.term.options.fontSize !== font) { s.term.options.fontSize = font; resized = true; }
     if (s.surface.style.width !== w || s.surface.style.height !== hh) {
       s.surface.style.width = w;
       s.surface.style.height = hh;
@@ -2966,6 +3082,12 @@ function layout(instant = false) {
     s.surface.style.transform = `translate(${offX}px, 0) scale(${scale})`;
   });
   placePaneDoc();
+
+  // The keyboard moved from one open session to another (a click, Ctrl+Tab, a tab): its name shows for a moment.
+  // Opening one from the tiles doesn't: you've just picked it.
+  const was = state.keyboardId;
+  state.keyboardId = state.expandedId;
+  if (was && state.expandedId && was !== state.expandedId && cues.flash) flashName(state.byId.get(state.expandedId));
 
   if (instant) requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.remove('no-anim')));
 }
@@ -3328,7 +3450,7 @@ function viewTab(v, i, down) {
         // Across the top, one with no name of its own says how many sessions, its names in its tooltip.
         h('span', { class: 'view-title' }, down || v.name ? viewName(v) : `${members.length} sessions`),
         !open && h('span', { class: 'view-dots' }, members.map((x) => h('span', { class: 'view-member', 'data-sid': x.id }, dot(x))))),
-      open && h('span', { class: 'view-members' }, members.map((x) => h('span', { class: 'view-member', 'data-sid': x.id },
+      open && h('span', { class: 'view-members' }, members.map((x) => h('span', { class: 'view-member' + ownColorClass(x), style: ownColorStyle(x), 'data-sid': x.id },
         dot(x), h('span', { class: 'view-name' }, x.name)))))),
   h('button', { class: 'icon-btn small tab-close', title: 'Close the view (its sessions keep running)', onclick: () => closeView(v.id) }, iconEl('close')));
 }
@@ -3339,6 +3461,7 @@ function viewMenu(v, x, y) {
   showMenu(x, y, [
     showing ? { label: 'Back to all sessions', kbd: 'Shift+Esc', action: collapse } : { label: 'Show side by side', action: () => showView(v.id) },
     arrangeItem(v),   // showing or not: one in its tab takes the shape next time it shows
+    showing && paneFontItem(),
     '-',
     { label: 'Change sessions…', action: () => showSideBySideDialog(anyone, v.id) },
     { label: 'Rename…', action: () => renameView(v.id) },
@@ -3448,11 +3571,36 @@ function cycle(delta) {
   expand(next.id);
 }
 
-function setFontSize(size) {
-  state.fontSize = Math.max(8, Math.min(28, size));
-  store.set('fontSize', state.fontSize);
-  for (const s of state.sessions) s.term.options.fontSize = state.fontSize;
-  refit();
+/**
+ * Ctrl+= / Ctrl+- / Ctrl+0: the text size of what's showing. Side by side has its own, so panes can have larger text
+ * than a session on its own; `step` 0 puts it back (side by side's to the same as on its own, that one to 14).
+ */
+function stepFontSize(step) {
+  const clamp = (n) => Math.max(8, Math.min(28, n));
+  if (sideBySide()) {
+    state.paneFontSize = step ? clamp(paneFontSize() + step) : null;
+    if (state.paneFontSize === state.fontSize) state.paneFontSize = null;
+    store.set('paneFontSize', state.paneFontSize);
+    stepFontSize.toast?.remove();   // one at a time, however often the keys are pressed
+    stepFontSize.toast = toast(`Text side by side: ${paneFontSize()}${state.paneFontSize === null ? ', as on its own' : ''}`);
+  } else {
+    state.fontSize = step ? clamp(state.fontSize + step) : 14;
+    store.set('fontSize', state.fontSize);
+  }
+  layout();
+}
+
+/** Text size ▸ for the side by side menus. */
+function paneFontItem() {
+  const key = IS_MAC ? '⌘' : 'Ctrl';
+  return {
+    label: 'Text size', submenu: [
+      { header: `Side by side: ${paneFontSize()}${state.paneFontSize === null ? ' (as on its own)' : ''}` },
+      { label: 'Larger', kbd: `${key}+=`, action: () => stepFontSize(1) },
+      { label: 'Smaller', kbd: `${key}+-`, action: () => stepFontSize(-1) },
+      state.paneFontSize !== null && { label: 'Same as on its own', kbd: `${key}+0`, action: () => stepFontSize(0) },
+    ],
+  };
 }
 
 // ------------------------------------------------------------------ keyboard
@@ -3501,9 +3649,9 @@ function handleShortcut(e) {
   if (e.ctrlKey && k === 'Tab') { cycle(e.shiftKey ? -1 : 1); return true; }
   if (mod(e) && e.shiftKey && (k === 'G' || k === 'g')) { toggleGit(); return true; }
   if (mod(e) && e.shiftKey && (k === 'N' || k === 'n')) { showAddDialog(); return true; }
-  if (mod(e) && !e.shiftKey && (k === '=' || k === '+')) { setFontSize(state.fontSize + 1); return true; }
-  if (mod(e) && !e.shiftKey && k === '-') { setFontSize(state.fontSize - 1); return true; }
-  if (mod(e) && !e.shiftKey && k === '0') { setFontSize(14); return true; }
+  if (mod(e) && !e.shiftKey && (k === '=' || k === '+')) { stepFontSize(1); return true; }
+  if (mod(e) && !e.shiftKey && k === '-') { stepFontSize(-1); return true; }
+  if (mod(e) && !e.shiftKey && k === '0') { stepFontSize(0); return true; }
   return false;
 }
 
@@ -3778,6 +3926,8 @@ function sessionMenu(s, x, y, from = 'session') {
     visibleSessions().length > 1 && { label: 'Side by side…', action: () => showSideBySideDialog(s) },
     addToViewItem(s),
     isOpen(s) && sideBySide() && arrangeItem(),
+    isOpen(s) && sideBySide() && paneFontItem(),
+    sessionColorItem(s),
     '-',
     gitTabOn('changes') && { label: 'Show Git changes', action: () => showGit(s.id) },
     { label: 'Show conversation', action: () => openConversation(s) },
@@ -4184,6 +4334,11 @@ function showEditDialog(s, focus) {
       if (parent) folder.value = parent.replace(/[\\/]+$/, '') + pathSep(parent) + leafName(s.directory.replace(/[\\/]+$/, ''));
     },
   }, 'Browse…');
+  const p = projectOf(s);
+  const sample = h('span', { class: 'colour-sample' }, h('span', { class: 'strip-dot' }), s.name);
+  const colour = colourField(s.color, p ? projectColor(p) : cssColor(getComputedStyle(document.body).getPropertyValue('--accent-strong').trim()) || '#7160e8',
+    p ? 'Its project’s' : 'None', p ? `Use ${p.name}’s colour` : 'No colour: the accent colour', (shown) => sample.style.setProperty('--session', shown));
+  colour.el.append(sample);
   const error = h('div', { class: 'form-error', hidden: true });
   const save = async () => {
     let projectId;
@@ -4197,7 +4352,7 @@ function showEditDialog(s, focus) {
     const target = folder.value.trim();
     const moving = !s.server && target && normPath(target) !== normPath(s.directory);
     request('updateSession', {
-      id: s.id, name: name.value, command: command.value, project: projectId ?? '', ...(starts && { startWithApp: starts.select.value }),
+      id: s.id, name: name.value, command: command.value, project: projectId ?? '', color: colour.value() ?? '', ...(starts && { startWithApp: starts.select.value }),
     }).catch((e) => toast(e.message, true));
     closeModal();
     if (moving) confirmMoveFolder(s, target);
@@ -4210,6 +4365,7 @@ function showEditDialog(s, focus) {
     field('Command', h('div', { class: 'combo' }, command, commandSuggestions(command, undefined, () => !!(machine || s.server))),
       `For example: claude, claude --model opus, codex, or a shell such as ${shellsFor(machine || s.server).join(' or ')}`),
     project.el,
+    field('Colour', colour.el, 'On its name under the terminal, its cursor, and its border while you’re typing in it, so you can tell it from the others.'),
     field('Folder', s.server ? folder : h('div', { class: 'inline' }, folder, browse),
       !s.server && 'Change it to move the folder itself on disk, and the session with it (a worktree is moved with git). Its conversations go along.'),
     agent && field('Conversation',
@@ -4222,6 +4378,7 @@ function showEditDialog(s, focus) {
     error,
   ], [h('button', { class: 'btn', onclick: closeModal }, 'Cancel'), h('button', { class: 'btn primary', onclick: save }, 'Save')]);
   if (focus === 'project') setTimeout(() => project.select.focus(), 30);
+  if (focus === 'color') setTimeout(colour.openCustom, 30);
 }
 
 /** An agent's name as a tag, in its colour (AgentProfile.Color) when it has one; the stylesheet picks the theme's. */
@@ -11197,6 +11354,11 @@ function themeMenu(x, y) {
     { icon: h('span', { class: 'menu-dot', 'data-dots': shownDotStyle() }, h('span', { class: 'dot attention' })),   // the style in use, waiting for you
       label: shownDotStyle() === 'theme' ? `${themeLook().name}’s own` : DOT_STYLES.find((d) => d.id === dotStyle.id).name,
       kbd: 'Change…', action: showDotStyleDialog },
+    '-',
+    { header: 'Which terminal you’re typing in' },
+    { label: 'Name under each terminal', checked: cues.strip, action: () => setCue('strip', !cues.strip) },
+    { label: 'Dim the others side by side', checked: cues.dim, action: () => setCue('dim', !cues.dim) },
+    { label: 'Show the name when you switch', checked: cues.flash, action: () => setCue('flash', !cues.flash) },
     '-',
     ...navLayoutItems(),
     '-',
