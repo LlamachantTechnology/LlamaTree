@@ -852,6 +852,7 @@ internal sealed partial class AppHost
             directory = x.Info.Directory,
             command = x.Info.Command,
             project = x.Info.Project,
+            color = x.Info.Color,
             conversation = x.Info.Conversation,
             running = x.Item2,
             server = x.Info.Server,
@@ -1133,6 +1134,7 @@ internal sealed partial class AppHost
                     s.Info.Command = TerminalSession.StripContinue(s.Info.Command);
                 }
                 if (msg.TryGetProperty("project", out _)) s.Info.Project = ProjectId(msg);
+                if (msg.TryGetProperty("color", out _)) s.Info.Color = ProjectInfo.NormalizeColor(OptStr(msg, "color"));   // "" for its project's
                 if (msg.TryGetProperty("startWithApp", out _)) s.Info.StartWithApp = SessionInfo.StartWithAppValue(OptStr(msg, "startWithApp"));
                 SaveSessions();
                 Post(SessionList());

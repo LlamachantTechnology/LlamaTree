@@ -29,7 +29,7 @@ The keys and clicks that get you around LlamaTree. On macOS, <kbd>⌘</kbd> does
 | Copy / paste | <kbd>Ctrl</kbd>+<kbd>C</kbd> with a selection / <kbd>Ctrl</kbd>+<kbd>V</kbd>, or right-click. Files copied in Explorer paste as their paths |
 | Paste a screenshot | <kbd>Ctrl</kbd>+<kbd>V</kbd> with an image on the clipboard: it pastes the path of a PNG saved from it, which Claude Code and Codex attach |
 | Drop files on a terminal | Drag files from Explorer, Finder or the file manager onto a terminal (the open one or a tile) to paste their paths there; dropped text pastes as it is. On macOS and Linux, where the window isn't told where a dropped file is, a copy is saved (up to 25 MB each) and its path pasted |
-| Font size | <kbd>Ctrl</kbd>+<kbd>=</kbd> / <kbd>Ctrl</kbd>+<kbd>-</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd> |
+| Font size | <kbd>Ctrl</kbd>+<kbd>=</kbd> / <kbd>Ctrl</kbd>+<kbd>-</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd>. Side by side has its own size, so the panes can have larger text than a session on its own: the keys there change only it (<kbd>Ctrl</kbd>+<kbd>0</kbd> makes it the same again), as does right-click a header › *Text size* |
 | Terminals solid or see-through | The small slider in the terminal's bottom-right corner (on the open terminal; on a tile while the pointer is over it), under a theme that allows it, such as Matrix or Tron; remembered for the theme you're on |
 | Open a file or folder named in the output | Click its path (underlined on hover once it's found to exist); right-click for *Open containing folder* and *Copy path*. Files open to view or edit, never run |
 | Read back through the conversation | Hover the ticks at the right edge; click one (or right-click › *Show conversation*) to open the Conversation tab there |

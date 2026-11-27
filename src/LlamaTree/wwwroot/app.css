@@ -228,6 +228,9 @@ svg.ic { width: 16px; height: 16px; flex: none; display: block; }
 }
 .session-tab:hover { background: var(--hover); color: var(--text); }
 .session-tab.active { background: var(--panel-2); border-color: var(--border); color: var(--text); }
+/* A session with a colour of its own: a stripe in it at the left of its tab or row, as its name strip has (ownColorClass in app.js). */
+.session-tab.own-color { box-shadow: inset 3px 0 0 var(--own); }
+.view-member.own-color { box-shadow: inset 3px 0 0 var(--own); padding-left: 7px; border-radius: 2px; }
 /* The side-by-side view's tab, first among the session tabs (down the left, the top row of the list): its sessions'
    dots and names; lit while it's showing, pink-edged while one of them needs your answer. */
 .view-tab {
@@ -628,9 +631,66 @@ body.side-empty #splitter, body.side-empty #gitPanel { display: none; }   /* sid
 .tile.drop-over { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tile.expanded { z-index: 5; border-radius: 4px; }
 .tile.concealed { opacity: 0; pointer-events: none; }
-/* Side by side: each open session a working terminal in its pane, the one with the keyboard in the accent colour. */
-.tile.pane-focus { border-color: var(--accent-strong); box-shadow: 0 0 0 1px var(--accent-strong); }
-.tile.paired.asking:not(.pane-focus) { border-color: var(--asking); box-shadow: 0 0 0 1px var(--asking); }
+/* Side by side: each open session a working terminal in its pane, the one with the keyboard in its colour (its own or
+   its project's, --session; the accent colour for one with none). */
+.tile.pane-focus { border-color: var(--session, var(--accent-strong)); box-shadow: 0 0 0 1px var(--session, var(--accent-strong)); }
+/* …and, unless turned off (Theme menu), the others dimmed, so the one you're typing in stands out; less under the pointer. */
+.tile.paired .tile-body { transition: opacity .2s; }
+:root[data-dim-panes] .tile.paired:not(.pane-focus) .tile-body { opacity: .45; }
+:root[data-dim-panes] .tile.paired:not(.pane-focus):hover .tile-body { opacity: .7; }
+
+/* The name strip under an open terminal, where you type: its colour, name, project and branch (renderStrip in app.js).
+   Side by side, the one with the keyboard is filled in more and says so. */
+.tile-strip {
+  display: none; height: 22px;   /* STRIP_H in app.js */
+  flex: none; align-items: center; gap: 8px; padding: 0 10px; min-width: 0;
+  font-size: 12px; color: var(--text-dim); cursor: default; white-space: nowrap; overflow: hidden;
+  border-top: 1px solid var(--border-soft); box-shadow: inset 3px 0 0 var(--session, var(--text-faint));
+  background: color-mix(in srgb, var(--session, var(--accent-strong)) 10%, var(--panel));
+}
+:root[data-name-strip] .tile.expanded .tile-strip { display: flex; }
+.strip-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--session, var(--accent-strong)); }
+.strip-name { font-weight: 600; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; }
+.strip-sub { display: inline-flex; align-items: center; gap: 3px; overflow: hidden; text-overflow: ellipsis; }
+.strip-sub svg.ic { width: 11px; height: 11px; flex: none; }
+.strip-typing { display: none; margin-left: auto; font-size: 11px; color: var(--session, var(--accent-strong)); font-weight: 600; }
+.tile.pane-focus .tile-strip { background: color-mix(in srgb, var(--session, var(--accent-strong)) 24%, var(--panel)); }
+.tile.pane-focus .strip-typing { display: inline; }
+:root[data-dim-panes] .tile.paired:not(.pane-focus) .tile-strip > :not(.strip-asking) { opacity: .6; }   /* "needs your answer" stays bright */
+
+/* The keyboard has just moved to this session: its name for a couple of seconds, in the bottom-right corner just above
+   the strip, near where you type and clear of the conversation rail (flashName in app.js). */
+.name-flash {
+  position: absolute; right: 26px; bottom: 10px; z-index: 4; display: flex; align-items: center; gap: 8px; pointer-events: none;
+  padding: 6px 14px; border-radius: 8px; font-size: 16px; font-weight: 700; color: var(--text-strong); white-space: nowrap;
+  max-width: calc(100% - 40px); overflow: hidden; text-overflow: ellipsis;
+  background: color-mix(in srgb, var(--panel) 90%, transparent); border: 2px solid var(--session, var(--accent-strong));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .3); animation: name-flash 2.6s ease-out forwards;
+}
+.name-flash .strip-dot { width: 10px; height: 10px; }
+@keyframes name-flash {
+  0% { opacity: 0; transform: translateY(6px); }
+  8% { opacity: 1; transform: none; }
+  75% { opacity: 1; transform: none; }
+  100% { opacity: 0; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .name-flash { animation-name: name-flash-still; } }
+@keyframes name-flash-still { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
+/* Edit session's colour: how its strip will look. */
+.colour-sample { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; padding: 2px 10px; border-radius: 4px; font-size: 12px; font-weight: 600;
+  background: color-mix(in srgb, var(--session) 18%, var(--panel)); box-shadow: inset 3px 0 0 var(--session); }
+.colour-sample .strip-dot { background: var(--session); }
+/* Needing your answer: a thicker ring that pulses, so it can't be mistaken for a session whose own colour is pink (a
+   colour is always still); the strip says so too, even on the pane you're typing in. */
+.tile.paired.asking:not(.pane-focus), .tile.asking:not(.expanded) { border-color: var(--asking); animation: asking-ring 1.6s ease-in-out infinite; }
+@keyframes asking-ring {
+  0%, 100% { box-shadow: 0 0 0 2px var(--asking); }
+  50% { box-shadow: 0 0 0 2px var(--asking), 0 0 14px 3px color-mix(in srgb, var(--asking) 55%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) { .tile.paired.asking:not(.pane-focus), .tile.asking:not(.expanded) { animation: none; box-shadow: 0 0 0 3px var(--asking); } }
+.strip-asking { display: none; margin-left: auto; padding: 0 7px; border-radius: 8px; font-size: 11px; font-weight: 700; color: #fff; background: var(--asking); }
+.tile.asking .strip-asking { display: inline; }
+.tile.asking .strip-typing { margin-left: 8px; }
 .tile.paired:not(.pane-focus) .tile-header { cursor: pointer; }
 .tile.paired .tile-header > .icon-btn { flex: none; }   /* a narrow pane's chips give way, never its buttons */
 .tile.paired .tile-header > .chip { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
