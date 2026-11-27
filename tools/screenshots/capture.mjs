@@ -154,6 +154,32 @@ await js(`state.repoView = 'inflight'; store.set('repoView', 'inflight'); render
 await shot('in-flight');
 await js(`state.repoView = 'graph'; store.set('repoView', 'graph'); renderGit();`);
 
+// 4c. A review of feature/stripe-webhooks against main: one file ticked off and a comment waiting to be sent on
+// orders.ts, with the Reviews tab beside it (cart-redesign's review started too, so it lists more than one).
+await js(`${reset} expand('checkout');
+  const wait = async (ok) => { for (let i = 0; i < 50 && !ok(); i++) await new Promise((r) => setTimeout(r, 200)); };
+  const s = state.byId.get('checkout');
+  state.gitWidth = 440; applyGitVisibility(); layout(true);
+  await request('git.reviewUpdate', { id: 'frontend', ref: 'refs/heads/feature/cart-redesign', op: 'start' });
+  openReview(s, 'refs/heads/feature/stripe-webhooks', 'feature/stripe-webhooks');
+  const tab = docs.tabs.find(isReviewTab);
+  await wait(() => tab.data);
+  const env = tab.data.files.find((f) => f.path === '.env.example');
+  if (env) setViewed(tab, env, true);
+  tab.file = 'src/orders.ts'; renderReview(tab);
+  const model = () => review.editor?.getModel()?.modified;
+  await wait(() => model()?.getValue().includes('markOrderPaid'));
+  const line = model().getLinesContent().findIndex((l) => l.includes('function markOrderPaid')) + 1;
+  tab.draft = { path: 'src/orders.ts', line, text: 'This can run twice if Stripe retries the webhook. Ignore an order that is already paid.' };
+  await addComment(tab);
+  review.editor.revealLineInCenter(line);
+  activateTab(dock.groups[0], 'reviews');
+  await loadAllReviews(true);
+  await new Promise((r) => setTimeout(r, 1500));`);
+await shot('review');
+if (siteDir) await shot('review', { dir: siteDir });
+await js(`for (const t of docs.tabs.filter(isReviewTab)) closeDoc(t.key); activateTab(dock.groups[0], 'changes');`);
+
 // 5. Resuming a saved conversation (fake conversations from the demo's CLAUDE_CONFIG_DIR).
 await js(`${reset} showGit('checkout');
   showAddDialog('resume');

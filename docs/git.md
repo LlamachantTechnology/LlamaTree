@@ -114,6 +114,8 @@ Conflicts are checked with a merge done in memory, which never touches a worktre
 
 Reviews are in beta, marked *(Beta)* on their tab.
 
+![A review of feature/stripe-webhooks: its files riskiest first with one ticked off, orders.ts's diff with a comment waiting to be sent, and the Reviews tab listing two reviews](images/review.png)
+
 Start a review with **Review this branch** in Git Changes (for the branch you're on), **Review** on any branch's card in *In flight*, or from the **Reviews** tab.
 
 The **Reviews** tab, in the side panel beside Git Changes and Git Repository, lists every review under way in every repository your sessions are in, with a count of those waiting on you. **By status** puts what needs you first: *Your turn* (new commits since your review, or comments not sent yet), *Waiting for changes*, *Approved* and *Done* (merged, or the branch deleted: **Forget** clears it). **By repository** lists each repository with its reviews. Below them, **Start a review** offers each repository's branches with work main doesn't have and no review yet. Like the Git tabs, it can be turned off from the ▾ beside the side panel button.
